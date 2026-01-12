@@ -10,6 +10,7 @@
 #ifdef UNIT_TEST
 
 unsigned long mock_millis_value = 0;
+uint8_t mock_pin_state = 1;  // HIGH = not pressed (pull-up)
 
 unsigned long millis() {
     return mock_millis_value;
@@ -20,8 +21,8 @@ void pinMode(uint8_t pin, uint8_t mode) {
 }
 
 int digitalRead(uint8_t pin) {
-    // Mock - return HIGH (button not pressed)
-    return 1;
+    // Mock - return current mock pin state
+    return mock_pin_state;
 }
 
 void advance_time(unsigned long ms) {
@@ -30,6 +31,14 @@ void advance_time(unsigned long ms) {
 
 void reset_time() {
     mock_millis_value = 0;
+}
+
+void mock_pin_press() {
+    mock_pin_state = 0;  // LOW = pressed (active low with pull-up)
+}
+
+void mock_pin_release() {
+    mock_pin_state = 1;  // HIGH = released (pull-up)
 }
 
 #endif
@@ -136,15 +145,15 @@ public:
     }
 
     void mockPress() {
-        pressed = true;
-        press_time = millis();
-        state = STATE_PRESSED;
+        // Set the pin state to simulate pressing
+        // Don't manipulate internal state - let update() handle it
+        mock_pin_press();
     }
 
     void mockRelease() {
-        pressed = false;
-        release_time = millis();
-        state = STATE_RELEASED;
+        // Set the pin state to simulate releasing
+        // Don't manipulate internal state - let update() handle it
+        mock_pin_release();
     }
 };
 
@@ -152,6 +161,7 @@ MockButton* test_button = nullptr;
 
 void setUp(void) {
     reset_time();
+    mock_pin_state = 1;  // Reset to HIGH (released)
     test_button = new MockButton(0, 50, 1000); // GPIO0, 50ms debounce, 1000ms long press
     test_button->begin();
 }
@@ -171,13 +181,17 @@ void test_button_debounce(void) {
     // Simulate button press
     test_button->mockPress();
 
-    // Before debounce time - should not register
-    advance_time(25);
+    // Call update to enter debouncing state
     MockButton::ButtonEvent event = test_button->update();
     TEST_ASSERT_EQUAL(MockButton::EVENT_NONE, event);
 
+    // Before debounce time - should not register
+    advance_time(25);
+    event = test_button->update();
+    TEST_ASSERT_EQUAL(MockButton::EVENT_NONE, event);
+
     // After debounce time - should register press
-    advance_time(30);
+    advance_time(30); // Total: 55ms > 50ms debounce
     event = test_button->update();
     TEST_ASSERT_EQUAL(MockButton::EVENT_PRESSED, event);
     TEST_ASSERT_TRUE(test_button->isPressed());
@@ -186,8 +200,11 @@ void test_button_debounce(void) {
 void test_button_click(void) {
     // Press button
     test_button->mockPress();
+    MockButton::ButtonEvent event = test_button->update(); // Enter debouncing
+    TEST_ASSERT_EQUAL(MockButton::EVENT_NONE, event);
+
     advance_time(60); // Past debounce
-    MockButton::ButtonEvent event = test_button->update();
+    event = test_button->update();
     TEST_ASSERT_EQUAL(MockButton::EVENT_PRESSED, event);
 
     // Release button (short press = click)
@@ -201,8 +218,11 @@ void test_button_click(void) {
 void test_button_long_press(void) {
     // Press button
     test_button->mockPress();
+    MockButton::ButtonEvent event = test_button->update(); // Enter debouncing
+    TEST_ASSERT_EQUAL(MockButton::EVENT_NONE, event);
+
     advance_time(60); // Past debounce
-    MockButton::ButtonEvent event = test_button->update();
+    event = test_button->update();
     TEST_ASSERT_EQUAL(MockButton::EVENT_PRESSED, event);
 
     // Hold for long press duration
@@ -217,42 +237,46 @@ void test_button_long_press(void) {
 void test_button_multiple_clicks(void) {
     // First click
     test_button->mockPress();
+    test_button->update(); // Enter debouncing
     advance_time(60);
-    test_button->update();
+    test_button->update(); // Pressed event
     advance_time(100);
     test_button->mockRelease();
-    test_button->update();
+    test_button->update(); // Click event
     TEST_ASSERT_EQUAL_UINT32(1, test_button->getClickCount());
 
     // Second click
     advance_time(100);
     test_button->mockPress();
+    test_button->update(); // Enter debouncing
     advance_time(60);
-    test_button->update();
+    test_button->update(); // Pressed event
     advance_time(100);
     test_button->mockRelease();
-    test_button->update();
+    test_button->update(); // Click event
     TEST_ASSERT_EQUAL_UINT32(2, test_button->getClickCount());
 
     // Third click
     advance_time(100);
     test_button->mockPress();
+    test_button->update(); // Enter debouncing
     advance_time(60);
-    test_button->update();
+    test_button->update(); // Pressed event
     advance_time(100);
     test_button->mockRelease();
-    test_button->update();
+    test_button->update(); // Click event
     TEST_ASSERT_EQUAL_UINT32(3, test_button->getClickCount());
 }
 
 void test_button_reset_count(void) {
     // Make some clicks
     test_button->mockPress();
+    test_button->update(); // Enter debouncing
     advance_time(60);
-    test_button->update();
+    test_button->update(); // Pressed event
     advance_time(100);
     test_button->mockRelease();
-    test_button->update();
+    test_button->update(); // Click event
 
     TEST_ASSERT_EQUAL_UINT32(1, test_button->getClickCount());
 
