@@ -1,0 +1,42 @@
+{
+    // Python configuration
+    "python.defaultInterpreterPath": "${workspaceFolder}/venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+
+    // Auto-activate venv when opening integrated terminal
+    "terminal.integrated.env.windows": {
+        "VIRTUAL_ENV": "${workspaceFolder}\\venv"
+    },
+
+    // PlatformIO configuration
+    "platformio-ide.activateOnlyOnPlatformIOProject": true,
+    "platformio-ide.useBuiltinPIOCore": false,
+    "platformio-ide.customPATH": "${workspaceFolder}/venv/Scripts",
+
+    // Python testing
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": false,
+
+    // File associations
+    "files.associations": {
+        "*.ino": "cpp",
+        "platformio.ini": "ini"
+    },
+
+    // Exclude patterns for file explorer
+    "files.exclude": {
+        "**/.git": true,
+        "**/.pio/build": true,
+        "**/.pio/libdeps": true,
+        "**/venv": true,
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    },
+
+    // Editor settings for embedded C++
+    "editor.formatOnSave": false,
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.default.compilerPath": "",
+    "C_Cpp.default.configurationProvider": "platformio-ide"
+}
