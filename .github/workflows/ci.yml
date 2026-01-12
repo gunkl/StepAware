@@ -1,0 +1,131 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run Python logic tests
+      run: python test/test_logic.py
+
+    - name: Run LED bug regression tests
+      run: python test/test_bug_led_blinking.py
+
+    - name: Run display alignment tests
+      run: python test/test_display_alignment.py
+
+    - name: Run LED timing tests
+      run: python test/test_hal_led_timing.py
+
+    - name: Run button debouncing tests
+      run: python test/test_hal_button_debounce.py
+
+    - name: Run state transition tests
+      run: python test/test_state_transitions.py
+
+  cpp-build-and-test:
+    name: C++ Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Cache PlatformIO
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.platformio/.cache
+          ~/.platformio/packages
+          ~/.platformio/platforms
+        key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
+        restore-keys: |
+          ${{ runner.os }}-pio-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: |
+        python -m pip install --upgrade pip
+        pip install platformio
+
+    - name: Build ESP32 firmware
+      run: pio run -e esp32-devkitlipo
+
+    - name: Run native C++ tests
+      run: pio test -e native -v
+
+    - name: Upload firmware artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware
+        path: .pio/build/esp32-devkitlipo/firmware.bin
+        retention-days: 30
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: .pio/test/
+        retention-days: 30
+
+  lint:
+    name: Code Linting
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: |
+        python -m pip install --upgrade pip
+        pip install platformio
+
+    - name: Check code formatting (C++)
+      run: pio check --skip-packages --pattern="src/*.cpp" --pattern="include/*.h" --flags="--severity=medium" || true
+      continue-on-error: true
+
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [python-tests, cpp-build-and-test]
+    if: always()
+
+    steps:
+    - name: Check build status
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- Python Tests: ${{ needs.python-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- C++ Build & Test: ${{ needs.cpp-build-and-test.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ needs.python-tests.result }}" == "success" ] && [ "${{ needs.cpp-build-and-test.result }}" == "success" ]; then
+          echo "✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Some checks failed" >> $GITHUB_STEP_SUMMARY
+        fi
