@@ -11,18 +11,24 @@ This guide explains how to set up and use a Python virtual environment for StepA
 
 ## Quick Setup
 
-### Windows (PowerShell)
-
-```powershell
-# Run the setup script
-.\setup_venv.ps1
-```
-
-### Windows (CMD)
+### Windows (Recommended: CMD)
 
 ```cmd
-# Run the setup script
+# Run the setup script (works without changing security settings)
 setup_venv.bat
+```
+
+### Windows (PowerShell - requires execution policy)
+
+If you get "running scripts is disabled" error, use CMD instead (above).
+
+Alternatively, if you want to use PowerShell:
+```powershell
+# Option 1: Bypass for this session only (no system changes)
+powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
+
+# Option 2: Use CMD to activate instead
+venv\Scripts\activate.bat
 ```
 
 ### Manual Setup
@@ -62,14 +68,22 @@ If VS Code doesn't auto-detect:
 
 ### Activate
 
+**Recommended: Use CMD** (no execution policy issues)
+```cmd
+venv\Scripts\activate.bat
+```
+
+**Alternative: PowerShell** (if execution policy allows)
 ```powershell
-# PowerShell
+# If you get "running scripts is disabled", use CMD instead
 .\venv\Scripts\Activate.ps1
 
-# CMD
-venv\Scripts\activate.bat
+# Or bypass for single command:
+powershell -ExecutionPolicy Bypass -File .\venv\Scripts\Activate.ps1
+```
 
-# Git Bash / WSL
+**Git Bash / WSL**
+```bash
 source venv/Scripts/activate
 ```
 
@@ -116,12 +130,15 @@ pip freeze > requirements-lock.txt
 
 ### "cannot be loaded because running scripts is disabled"
 
-PowerShell execution policy needs to be set:
+This is a PowerShell security feature. **DO NOT change system execution policies.**
 
-```powershell
-# Run as Administrator
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+**Solution: Use CMD instead:**
+```cmd
+# Use the CMD activation script instead
+venv\Scripts\activate.bat
 ```
+
+This works without any security policy changes and is the recommended approach.
 
 ### VS Code Not Using venv
 

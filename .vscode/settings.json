@@ -4,6 +4,9 @@
     "python.terminal.activateEnvironment": true,
     "python.terminal.activateEnvInCurrentTerminal": true,
 
+    // Use CMD for Python activation (avoids PowerShell execution policy issues)
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+
     // PlatformIO configuration
     // Let PlatformIO IDE use its built-in core - it handles installation automatically
     "platformio-ide.activateOnlyOnPlatformIOProject": true,
