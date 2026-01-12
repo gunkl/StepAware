@@ -1,0 +1,237 @@
+#ifndef STEPAWARE_CONFIG_H
+#define STEPAWARE_CONFIG_H
+
+// ============================================================================
+// StepAware Configuration File
+// ============================================================================
+// This file contains all system-wide configuration constants, pin definitions,
+// and compile-time settings for the StepAware hazard detection system.
+//
+// Project: StepAware - ESP32-C3 Motion-Activated Hazard Warning System
+// Board: Olimex ESP32-C3-DevKit-Lipo
+// Sensor: AM312 PIR Motion Sensor
+// ============================================================================
+
+// ============================================================================
+// Hardware Pin Assignments (ESP32-C3)
+// ============================================================================
+
+// Input Pins
+#define PIN_BUTTON          0    // Mode button (GPIO0, boot button, pull-up)
+#define PIN_PIR_SENSOR      1    // AM312 PIR motion sensor output (GPIO1)
+#define PIN_LIGHT_SENSOR    4    // Photoresistor for ambient light sensing (GPIO4, ADC1_CH0)
+#define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
+
+// Output Pins
+#define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
+#define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
+
+// Reserved Pins
+#define PIN_RESERVED_1      8    // Reserved for future expansion
+#define PIN_RESERVED_2      9    // Reserved for future expansion
+
+// ============================================================================
+// System Constants
+// ============================================================================
+
+// Version Information
+#define FIRMWARE_VERSION    "0.1.0"
+#define FIRMWARE_NAME       "StepAware"
+#define BUILD_DATE          __DATE__
+#define BUILD_TIME          __TIME__
+
+// Serial Communication
+#define SERIAL_BAUD_RATE    115200
+
+// ============================================================================
+// Timing Constants (milliseconds)
+// ============================================================================
+
+// Motion Detection
+#define MOTION_WARNING_DURATION_MS    15000   // 15 seconds LED warning
+#define PIR_WARMUP_TIME_MS            60000   // 1 minute PIR sensor warm-up
+#define PIR_OUTPUT_DELAY_MS           2300    // AM312 output timing delay
+
+// Button Debouncing
+#define BUTTON_DEBOUNCE_MS            50      // 50ms debounce time
+
+// LED Patterns
+#define LED_BLINK_FAST_MS             250     // Fast blink (250ms on/off)
+#define LED_BLINK_SLOW_MS             1000    // Slow blink (1s on/off)
+#define LED_BLINK_WARNING_MS          500     // Warning blink (500ms on/off)
+
+// ============================================================================
+// LED PWM Configuration
+// ============================================================================
+
+#define LED_PWM_FREQUENCY    5000      // 5 kHz PWM frequency
+#define LED_PWM_RESOLUTION   8         // 8-bit resolution (0-255)
+#define LED_PWM_CHANNEL      0         // PWM channel 0
+
+// LED Brightness Levels (0-255)
+#define LED_BRIGHTNESS_OFF         0
+#define LED_BRIGHTNESS_DIM         20    // Night light mode
+#define LED_BRIGHTNESS_MEDIUM      128   // Status indication
+#define LED_BRIGHTNESS_FULL        255   // Hazard warning (full brightness)
+
+// ============================================================================
+// Battery Management
+// ============================================================================
+
+// Battery Voltage Thresholds (in millivolts)
+#define BATTERY_VOLTAGE_FULL       4200    // 4.2V - Fully charged LiPo
+#define BATTERY_VOLTAGE_NOMINAL    3700    // 3.7V - Nominal voltage
+#define BATTERY_VOLTAGE_LOW        3300    // 3.3V - Low battery (25%)
+#define BATTERY_VOLTAGE_CRITICAL   3000    // 3.0V - Critical (shutdown)
+
+// ADC Configuration
+#define ADC_RESOLUTION         12         // 12-bit ADC
+#define ADC_MAX_VALUE          4095       // Maximum ADC reading (2^12 - 1)
+#define ADC_REFERENCE_VOLTAGE  3300       // 3.3V reference (in millivolts)
+#define ADC_SAMPLES_AVERAGE    10         // Number of samples to average
+
+// Battery voltage divider ratio (adjust based on actual circuit)
+#define BATTERY_DIVIDER_RATIO  2.0        // Voltage divider: R1=R2 -> ratio=2
+
+// ============================================================================
+// Light Sensor Configuration
+// ============================================================================
+
+// Light Level Thresholds (ADC values, 0-4095)
+#define LIGHT_THRESHOLD_DARK      500     // Below this = dark
+#define LIGHT_THRESHOLD_BRIGHT    2000    // Above this = bright
+#define LIGHT_HYSTERESIS          100     // Hysteresis to prevent flicker
+
+// ============================================================================
+// Power Management
+// ============================================================================
+
+// Power Modes
+#define POWER_MODE_ACTIVE      0    // Full power, all features active
+#define POWER_MODE_IDLE        1    // Reduced power, waiting for events
+#define POWER_MODE_LIGHT_SLEEP 2    // Light sleep, quick wake-up
+#define POWER_MODE_DEEP_SLEEP  3    // Deep sleep, button wake only
+
+// Power Consumption Targets (milliamps)
+#define POWER_TARGET_ACTIVE    220
+#define POWER_TARGET_IDLE      37
+#define POWER_TARGET_SLEEP     3
+#define POWER_TARGET_OFF       0.02
+
+// ============================================================================
+// Logging Configuration
+// ============================================================================
+
+// Log Levels
+#define LOG_LEVEL_DEBUG    0
+#define LOG_LEVEL_INFO     1
+#define LOG_LEVEL_WARN     2
+#define LOG_LEVEL_ERROR    3
+#define LOG_LEVEL_NONE     4
+
+// Default Log Level (set to LOG_LEVEL_DEBUG for development)
+#ifndef LOG_LEVEL
+#define LOG_LEVEL LOG_LEVEL_DEBUG
+#endif
+
+// Circular Buffer Size (number of log entries)
+#define LOG_BUFFER_SIZE    256
+
+// Log File Configuration
+#define LOG_MAX_FILE_SIZE   20480      // 20KB per log file
+#define LOG_MAX_FILES       5          // Max 5 log files (100KB total)
+#define LOG_FLUSH_INTERVAL  60000      // Flush to flash every 60 seconds
+
+// ============================================================================
+// WiFi Configuration (Phase 2)
+// ============================================================================
+
+// Access Point Settings
+#define WIFI_AP_SSID_PREFIX     "StepAware-"
+#define WIFI_AP_PASSWORD        ""              // Open AP for first setup
+#define WIFI_AP_CHANNEL         6
+#define WIFI_AP_MAX_CONNECTIONS 4
+#define WIFI_AP_TIMEOUT_MS      600000          // 10 minutes idle timeout
+
+// WiFi Connection
+#define WIFI_CONNECT_TIMEOUT_MS 10000           // 10 seconds connection timeout
+#define WIFI_RECONNECT_DELAY_MS 5000            // 5 seconds between retries
+#define WIFI_MAX_RECONNECT_ATTEMPTS 5
+
+// ============================================================================
+// Web Server Configuration (Phase 2)
+// ============================================================================
+
+#define WEB_SERVER_PORT         80              // HTTP port
+#define WEB_SERVER_PORT_HTTPS   443             // HTTPS port
+
+// API Endpoints
+#define API_ENDPOINT_STATUS         "/api/status"
+#define API_ENDPOINT_CONFIG         "/api/config"
+#define API_ENDPOINT_HISTORY        "/api/history"
+#define API_ENDPOINT_VERSION        "/api/version"
+#define API_ENDPOINT_AUTH_LOGIN     "/api/auth/login"
+#define API_ENDPOINT_AUTH_PASSWORD  "/api/auth/change-password"
+#define API_ENDPOINT_EVENTS         "/events"
+
+// ============================================================================
+// Testing Configuration (Phase 3)
+// ============================================================================
+
+// Test Database
+#define TEST_DB_PATH            "/test_results.db"
+#define TEST_DB_MAX_RUNS        100             // Keep last 100 test runs
+
+// ============================================================================
+// Feature Flags
+// ============================================================================
+
+// Enable/disable features at compile time
+#define FEATURE_WIFI_ENABLED         1    // WiFi and web interface
+#define FEATURE_LIGHT_SENSOR_ENABLED 1    // Ambient light sensing
+#define FEATURE_BATTERY_MONITOR      1    // Battery voltage monitoring
+#define FEATURE_POWER_MANAGEMENT     1    // Power saving features
+#define FEATURE_TESTING_FRAMEWORK    1    // Testing infrastructure
+
+// Mock Hardware (set to 1 for development without physical hardware)
+#ifndef MOCK_HARDWARE
+#define MOCK_HARDWARE                1    // 0 = real hardware, 1 = mock
+#endif
+
+// ============================================================================
+// Debug Helpers
+// ============================================================================
+
+// Debug macros (only active when LOG_LEVEL <= LOG_LEVEL_DEBUG)
+#if LOG_LEVEL <= LOG_LEVEL_DEBUG
+    #define DEBUG_PRINT(x)      Serial.print(x)
+    #define DEBUG_PRINTLN(x)    Serial.println(x)
+    #define DEBUG_PRINTF(...)   Serial.printf(__VA_ARGS__)
+#else
+    #define DEBUG_PRINT(x)
+    #define DEBUG_PRINTLN(x)
+    #define DEBUG_PRINTF(...)
+#endif
+
+// ============================================================================
+// Compile-Time Checks
+// ============================================================================
+
+// Ensure sensible configuration
+#if MOTION_WARNING_DURATION_MS < 1000
+    #error "MOTION_WARNING_DURATION_MS must be at least 1000ms (1 second)"
+#endif
+
+#if LED_PWM_RESOLUTION < 8 || LED_PWM_RESOLUTION > 16
+    #error "LED_PWM_RESOLUTION must be between 8 and 16 bits"
+#endif
+
+#if LOG_BUFFER_SIZE < 64
+    #error "LOG_BUFFER_SIZE must be at least 64 entries"
+#endif
+
+// ============================================================================
+// End of Configuration
+// ============================================================================
+
+#endif // STEPAWARE_CONFIG_H

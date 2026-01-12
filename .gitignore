@@ -1,0 +1,48 @@
+# Datasheets
+datasheets/
+
+# Build outputs
+build/
+dist/
+*.bin
+*.elf
+*.map
+
+# Dependencies
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# Logs
+*.log
+
+# PlatformIO setup helpers (user-specific paths)
+setup_pio_path.sh
+setup_pio_path.bat
+setup_pio_path.ps1
+pio
+
+# Docker
+.dockerignore
+
+# Test artifacts
+test/test_results.db
+test/report_*.html

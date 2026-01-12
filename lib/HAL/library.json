@@ -1,0 +1,22 @@
+{
+  "name": "HAL",
+  "version": "0.1.0",
+  "description": "Hardware Abstraction Layer for StepAware",
+  "keywords": "esp32, hal, hardware, abstraction",
+  "authors": {
+    "name": "StepAware Project"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "includeDir": ".",
+    "srcDir": ".",
+    "flags": [
+      "-I../../include"
+    ]
+  }
+}
