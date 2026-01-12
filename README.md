@@ -84,32 +84,42 @@ See [docs/hardware/wiring_diagram.png](docs/hardware/) for complete wiring schem
 
 ### Prerequisites
 
-- [PlatformIO](https://platformio.org/) installed
+**Development Tools (All Installed ✅):**
+- Docker Desktop 29.1.3 - For containerized development
+- GitHub CLI 2.83.2 - For GitHub operations
+- PlatformIO 6.1.18 (via Docker) - For building firmware
+- GCC/G++ 14.2.0 (via Docker) - For native testing
+
+**Hardware (Optional for testing):**
 - ESP32-C3-DevKit-Lipo board
 - USB-C cable for programming
 
+**Note:** You can develop and test using Docker without the physical hardware. See [DOCKER_GUIDE.md](DOCKER_GUIDE.md) for details.
+
 ### Installation
 
-1. **Clone the repository**:
+1. **Clone the repository** (Already done ✅)
+
+2. **Build using Docker** (Recommended):
    ```bash
-   git clone https://github.com/yourusername/StepAware.git
-   cd StepAware
+   # Build the firmware
+   docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo
+
+   # Run native tests
+   docker-compose run --rm stepaware-dev pio test -e native
    ```
 
-2. **Build the project**:
+3. **Upload to ESP32** (when hardware is connected):
    ```bash
-   pio run
-   ```
-
-3. **Upload to ESP32**:
-   ```bash
-   pio run --target upload
+   docker-compose run --rm stepaware-dev pio run --target upload
    ```
 
 4. **Monitor serial output**:
    ```bash
-   pio device monitor
+   docker-compose run --rm stepaware-dev pio device monitor
    ```
+
+See [DOCKER_GUIDE.md](DOCKER_GUIDE.md) for detailed Docker usage and [SETUP_PLATFORMIO.md](SETUP_PLATFORMIO.md) for native PlatformIO installation.
 
 ### First-Time Setup
 
