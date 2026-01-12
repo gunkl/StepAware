@@ -412,7 +412,7 @@ bool WiFiManager::shouldReconnect() {
 uint32_t WiFiManager::getReconnectDelay() {
     // Exponential backoff: 5s, 10s, 20s, 40s, 60s (max)
     uint32_t delay = m_config.reconnectDelayMs << m_status.failureCount;
-    return min(delay, 60000UL);  // Cap at 60 seconds
+    return (delay > 60000U) ? 60000U : delay;  // Cap at 60 seconds
 }
 
 String WiFiManager::generateAPSSID() {
