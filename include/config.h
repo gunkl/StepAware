@@ -21,6 +21,7 @@
 #define PIN_PIR_SENSOR      1    // AM312 PIR motion sensor output (GPIO1)
 #define PIN_LIGHT_SENSOR    4    // Photoresistor for ambient light sensing (GPIO4, ADC1_CH0)
 #define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
+#define PIN_VBUS_DETECT     6    // USB VBUS detection (GPIO6)
 
 // Output Pins
 #define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
@@ -92,6 +93,15 @@
 
 // Battery voltage divider ratio (adjust based on actual circuit)
 #define BATTERY_DIVIDER_RATIO  2.0        // Voltage divider: R1=R2 -> ratio=2
+
+// ADC Channel Mappings (ESP32-C3)
+#define BATTERY_ADC_CHANNEL    ADC1_CHANNEL_4  // GPIO5 = ADC1_CH4
+#define LIGHT_ADC_CHANNEL      ADC1_CHANNEL_3  // GPIO4 = ADC1_CH3
+
+// Pin Aliases for Power Manager
+#define VBUS_DETECT_PIN        PIN_VBUS_DETECT
+#define PIR_SENSOR_PIN         PIN_PIR_SENSOR
+#define BUTTON_PIN             PIN_BUTTON
 
 // ============================================================================
 // Light Sensor Configuration
