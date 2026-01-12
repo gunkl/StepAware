@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio run:*)",
+      "Bash(where:*)",
+      "Bash(pip install:*)",
+      "Bash(export PATH=\"$PATH:/c/Users/David/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0/LocalCache/local-packages/Python310/Scripts\")",
+      "Bash(pio --version:*)",
+      "Bash(./pio:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker --version:*)"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  stepaware-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stepaware-dev
+    volumes:
+      # Mount project directory
+      - .:/workspace
+      # Persist PlatformIO cache
+      - platformio-cache:/root/.platformio
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    # Uncomment to access USB devices (for real hardware)
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    # privileged: true
+    command: /bin/bash
+
+volumes:
+  platformio-cache:
