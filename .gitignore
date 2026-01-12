@@ -51,5 +51,4 @@ pio
 .dockerignore
 
 # Test artifacts
-test/test_results.db
-test/report_*.html
+test/reports/
