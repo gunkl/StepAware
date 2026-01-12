@@ -1,10 +1,16 @@
 #include "web_api.h"
+#include "wifi_manager.h"
+#include "power_manager.h"
+#include "watchdog_manager.h"
 #include <ArduinoJson.h>
 
 WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager* config)
     : m_server(server)
     , m_stateMachine(stateMachine)
     , m_config(config)
+    , m_wifi(nullptr)
+    , m_power(nullptr)
+    , m_watchdog(nullptr)
     , m_corsEnabled(true)
 {
 }
@@ -84,26 +90,73 @@ void WebAPI::setCORSEnabled(bool enabled) {
     m_corsEnabled = enabled;
 }
 
+void WebAPI::setWiFiManager(WiFiManager* wifi) {
+    m_wifi = wifi;
+}
+
+void WebAPI::setPowerManager(PowerManager* power) {
+    m_power = power;
+}
+
+void WebAPI::setWatchdogManager(WatchdogManager* watchdog) {
+    m_watchdog = watchdog;
+}
+
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<2048> doc;
 
     // System info
     doc["uptime"] = millis();
     doc["freeHeap"] = ESP.getFreeHeap();
 
-    // Operating mode
-    doc["mode"] = m_stateMachine->getMode();
-    doc["modeName"] = StateMachine::getModeName(m_stateMachine->getMode());
+    // State Machine
+    JsonObject stateMachineObj = doc.createNestedObject("stateMachine");
+    stateMachineObj["mode"] = m_stateMachine->getMode();
+    stateMachineObj["modeName"] = StateMachine::getModeName(m_stateMachine->getMode());
+    stateMachineObj["warningActive"] = m_stateMachine->isWarningActive();
+    stateMachineObj["motionEvents"] = m_stateMachine->getMotionEventCount();
+    stateMachineObj["modeChanges"] = m_stateMachine->getModeChangeCount();
 
-    // Warning status
-    doc["warningActive"] = m_stateMachine->isWarningActive();
+    // WiFi Manager (if available)
+    if (m_wifi) {
+        JsonObject wifiObj = doc.createNestedObject("wifi");
+        wifiObj["state"] = m_wifi->getState();
+        wifiObj["stateName"] = WiFiManager::getStateName(m_wifi->getState());
+        wifiObj["rssi"] = m_wifi->getRSSI();
 
-    // Statistics
-    doc["motionEvents"] = m_stateMachine->getMotionEventCount();
-    doc["modeChanges"] = m_stateMachine->getModeChangeCount();
+        const WiFiManager::Status& wifiStatus = m_wifi->getStatus();
+        wifiObj["ssid"] = wifiStatus.ssid;
+        wifiObj["ipAddress"] = wifiStatus.ip.toString();
+        wifiObj["failures"] = wifiStatus.failureCount;
+        wifiObj["reconnects"] = wifiStatus.reconnectCount;
+        wifiObj["uptime"] = wifiStatus.connectionUptime;
+    }
 
-    // PIR sensor (if accessible)
-    // doc["pirReady"] = pirSensor.isReady();
+    // Power Manager (if available)
+    if (m_power) {
+        JsonObject powerObj = doc.createNestedObject("power");
+        powerObj["state"] = m_power->getState();
+        powerObj["stateName"] = PowerManager::getStateName(m_power->getState());
+
+        const PowerManager::BatteryStatus& battery = m_power->getBatteryStatus();
+        powerObj["batteryVoltage"] = battery.voltage;
+        powerObj["batteryPercent"] = battery.percentage;
+        powerObj["charging"] = battery.charging;
+        powerObj["low"] = battery.low;
+        powerObj["critical"] = battery.critical;
+
+        const PowerManager::PowerStats& powerStats = m_power->getStats();
+        powerObj["activeTime"] = powerStats.activeTime;
+        powerObj["sleepTime"] = powerStats.sleepTime;
+        powerObj["wakeCount"] = powerStats.wakeCount;
+    }
+
+    // Watchdog Manager (if available)
+    if (m_watchdog) {
+        JsonObject watchdogObj = doc.createNestedObject("watchdog");
+        watchdogObj["systemHealth"] = m_watchdog->getSystemHealth();
+        watchdogObj["healthName"] = WatchdogManager::getHealthStatusName(m_watchdog->getSystemHealth());
+    }
 
     // Serialize to string
     String json;
