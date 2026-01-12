@@ -133,13 +133,6 @@ private:
      * @param message Error message
      */
     void sendError(AsyncWebServerRequest* request, int code, const char* message);
-
-    /**
-     * @brief Add CORS headers to response
-     *
-     * @param request HTTP request
-     */
-    void addCORSHeaders(AsyncWebServerRequest* request);
 };
 
 #endif // STEPAWARE_WEB_API_H

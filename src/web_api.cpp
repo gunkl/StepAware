@@ -281,13 +281,21 @@ void WebAPI::handleGetVersion(AsyncWebServerRequest* request) {
 
 void WebAPI::handleOptions(AsyncWebServerRequest* request) {
     AsyncWebServerResponse* response = request->beginResponse(200);
-    addCORSHeaders(request);
+    if (m_corsEnabled) {
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
     request->send(response);
 }
 
 void WebAPI::sendJSON(AsyncWebServerRequest* request, int code, const char* json) {
     AsyncWebServerResponse* response = request->beginResponse(code, "application/json", json);
-    addCORSHeaders(request);
+    if (m_corsEnabled) {
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
     request->send(response);
 }
 
@@ -300,17 +308,4 @@ void WebAPI::sendError(AsyncWebServerRequest* request, int code, const char* mes
     serializeJson(doc, json);
 
     sendJSON(request, code, json.c_str());
-}
-
-void WebAPI::addCORSHeaders(AsyncWebServerRequest* request) {
-    if (!m_corsEnabled) {
-        return;
-    }
-
-    AsyncWebServerResponse* response = request->response();
-    if (response) {
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-    }
 }
