@@ -3,18 +3,24 @@
 #include "config_manager.h"
 #include "logger.h"
 #include "web_api.h"
+#include "wifi_manager.h"
 #include <Arduino.h>
+
+#ifndef MOCK_MODE
+#include <SPIFFS.h>
+#endif
 
 // External references to global instances
 extern StateMachine g_stateMachine;
 extern ConfigManager g_config;
 extern Logger g_logger;
+extern WiFiManager g_wifi;
 
 // Module-specific state tracking
 namespace {
     uint32_t g_lastStateMachineUpdate = 0;
-    StateMachine::State g_lastState = StateMachine::STATE_OFF;
-    uint32_t g_stateEnterTime = 0;
+    StateMachine::OperatingMode g_lastMode = StateMachine::OFF;
+    uint32_t g_modeEnterTime = 0;
 }
 
 /**
@@ -43,7 +49,7 @@ WatchdogManager::HealthStatus checkMemoryHealth(const char** message) {
  */
 WatchdogManager::HealthStatus checkStateMachineHealth(const char** message) {
     uint32_t now = millis();
-    StateMachine::State currentState = g_stateMachine.getState();
+    StateMachine::OperatingMode currentMode = g_stateMachine.getMode();
 
     // Check if state machine is being updated
     uint32_t timeSinceUpdate = now - g_lastStateMachineUpdate;
@@ -52,43 +58,10 @@ WatchdogManager::HealthStatus checkStateMachineHealth(const char** message) {
         return WatchdogManager::HEALTH_FAILED;
     }
 
-    // Track state changes
-    if (currentState != g_lastState) {
-        g_lastState = currentState;
-        g_stateEnterTime = now;
-    }
-
-    // Check if stuck in a state too long
-    uint32_t timeInState = now - g_stateEnterTime;
-
-    // Different states have different acceptable durations
-    switch (currentState) {
-        case StateMachine::STATE_OFF:
-            // OFF state can be indefinite
-            break;
-
-        case StateMachine::STATE_MOTION_DETECTED:
-            // Should transition after warning duration (typically 15s)
-            if (timeInState > 300000) {  // 5 minutes
-                if (message) *message = "Stuck in MOTION_DETECTED";
-                return WatchdogManager::HEALTH_WARNING;
-            }
-            break;
-
-        case StateMachine::STATE_WARNING_ACTIVE:
-            // Should transition after warning expires
-            if (timeInState > 300000) {  // 5 minutes
-                if (message) *message = "Stuck in WARNING_ACTIVE";
-                return WatchdogManager::HEALTH_WARNING;
-            }
-            break;
-
-        case StateMachine::STATE_CONTINUOUS_ON:
-            // CONTINUOUS_ON can be indefinite
-            break;
-
-        default:
-            break;
+    // Track mode changes
+    if (currentMode != g_lastMode) {
+        g_lastMode = currentMode;
+        g_modeEnterTime = now;
     }
 
     // Update last check time
@@ -184,6 +157,65 @@ WatchdogManager::HealthStatus checkWebServerHealth(const char** message) {
 }
 
 /**
+ * @brief Check WiFi manager health
+ */
+WatchdogManager::HealthStatus checkWiFiHealth(const char** message) {
+    WiFiManager::State state = g_wifi.getState();
+
+    switch (state) {
+        case WiFiManager::STATE_CONNECTED:
+            // Check signal strength
+            if (g_wifi.getRSSI() < -85) {
+                if (message) *message = "Weak signal";
+                return WatchdogManager::HEALTH_WARNING;
+            }
+            return WatchdogManager::HEALTH_OK;
+
+        case WiFiManager::STATE_CONNECTING:
+            return WatchdogManager::HEALTH_OK;  // Normal transitional state
+
+        case WiFiManager::STATE_DISCONNECTED:
+            if (message) *message = "Disconnected, will retry";
+            return WatchdogManager::HEALTH_WARNING;
+
+        case WiFiManager::STATE_FAILED:
+            if (message) *message = "Connection failed";
+            return WatchdogManager::HEALTH_CRITICAL;
+
+        case WiFiManager::STATE_AP_MODE:
+            return WatchdogManager::HEALTH_OK;  // Normal for setup
+
+        case WiFiManager::STATE_DISABLED:
+            return WatchdogManager::HEALTH_OK;  // Intentional
+
+        default:
+            return WatchdogManager::HEALTH_FAILED;
+    }
+}
+
+/**
+ * @brief WiFi manager recovery function
+ */
+bool recoverWiFi(WatchdogManager::RecoveryAction action) {
+    switch (action) {
+        case WatchdogManager::RECOVERY_SOFT:
+            // Try reconnecting
+            LOG_INFO("Watchdog: Attempting WiFi soft recovery");
+            return g_wifi.reconnect();
+
+        case WatchdogManager::RECOVERY_MODULE_RESTART:
+            // Restart WiFi subsystem
+            LOG_INFO("Watchdog: Attempting WiFi restart");
+            g_wifi.disconnect();
+            delay(1000);
+            return g_wifi.connect();
+
+        default:
+            return false;
+    }
+}
+
+/**
  * @brief Memory recovery function
  */
 bool recoverMemory(WatchdogManager::RecoveryAction action) {
@@ -214,17 +246,17 @@ bool recoverStateMachine(WatchdogManager::RecoveryAction action) {
         case WatchdogManager::RECOVERY_SOFT:
             LOG_INFO("Watchdog: Attempting state machine soft recovery");
             // Reset to known good state
-            g_stateMachine.setState(StateMachine::STATE_OFF);
-            g_stateEnterTime = millis();
-            g_lastState = StateMachine::STATE_OFF;
+            g_stateMachine.setMode(StateMachine::OFF);
+            g_modeEnterTime = millis();
+            g_lastMode = StateMachine::OFF;
             return true;
 
         case WatchdogManager::RECOVERY_MODULE_RESTART:
             LOG_INFO("Watchdog: Attempting state machine restart");
             // Reinitialize state machine
             g_stateMachine.begin();
-            g_stateEnterTime = millis();
-            g_lastState = g_stateMachine.getState();
+            g_modeEnterTime = millis();
+            g_lastMode = g_stateMachine.getMode();
             return true;
 
         default:
@@ -326,6 +358,12 @@ void registerWatchdogHealthChecks() {
         WatchdogManager::MODULE_WEB_SERVER,
         checkWebServerHealth,
         nullptr
+    );
+
+    g_watchdog.registerModule(
+        WatchdogManager::MODULE_WIFI_MANAGER,
+        checkWiFiHealth,
+        recoverWiFi
     );
 
     LOG_INFO("Watchdog: All health checks registered");

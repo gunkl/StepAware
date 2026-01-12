@@ -31,7 +31,10 @@
       "Bash(then mv test/test_results.db test/reports/)",
       "Bash(else echo \"No existing test_results.db found\")",
       "Bash(fi)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(platformio run:*)",
+      "Bash(cmd.exe /c \"pio run -e esp32-devkitlipo\")",
+      "Bash(where pio:*)"
     ]
   }
 }

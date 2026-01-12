@@ -18,6 +18,7 @@ WatchdogManager::WatchdogManager()
     m_config.configCheckIntervalMs = 60000;
     m_config.loggerCheckIntervalMs = 10000;
     m_config.webServerCheckIntervalMs = 30000;
+    m_config.wifiCheckIntervalMs = 15000;
 
     m_config.softRecoveryThreshold = 2;
     m_config.moduleRestartThreshold = 5;
@@ -32,6 +33,7 @@ WatchdogManager::WatchdogManager()
     m_config.enableConfigCheck = true;
     m_config.enableLoggerCheck = true;
     m_config.enableWebServerCheck = true;
+    m_config.enableWiFiCheck = true;
 
     // Initialize module array
     for (int i = 0; i < MODULE_COUNT; i++) {
@@ -204,6 +206,7 @@ const char* WatchdogManager::getModuleName(ModuleID id) {
         case MODULE_HAL_LED: return "HAL_LED";
         case MODULE_HAL_PIR: return "HAL_PIR";
         case MODULE_WEB_SERVER: return "WEB_SERVER";
+        case MODULE_WIFI_MANAGER: return "WIFI_MANAGER";
         case MODULE_MEMORY: return "MEMORY";
         default: return "UNKNOWN";
     }
@@ -389,6 +392,7 @@ uint32_t WatchdogManager::getCheckInterval(ModuleID id) const {
         case MODULE_CONFIG_MANAGER: return m_config.configCheckIntervalMs;
         case MODULE_LOGGER: return m_config.loggerCheckIntervalMs;
         case MODULE_WEB_SERVER: return m_config.webServerCheckIntervalMs;
+        case MODULE_WIFI_MANAGER: return m_config.wifiCheckIntervalMs;
         default: return 10000;  // Default: 10 seconds
     }
 }
@@ -403,6 +407,7 @@ bool WatchdogManager::isModuleEnabled(ModuleID id) const {
         case MODULE_CONFIG_MANAGER: return m_config.enableConfigCheck;
         case MODULE_LOGGER: return m_config.enableLoggerCheck;
         case MODULE_WEB_SERVER: return m_config.enableWebServerCheck;
+        case MODULE_WIFI_MANAGER: return m_config.enableWiFiCheck;
         default: return true;
     }
 }
