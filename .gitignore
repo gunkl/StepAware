@@ -8,6 +8,10 @@ dist/
 *.elf
 *.map
 
+# PlatformIO build artifacts
+.pio/build/
+.pio/libdeps/
+
 # Dependencies
 node_modules/
 
@@ -21,6 +25,7 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Python
 __pycache__/
