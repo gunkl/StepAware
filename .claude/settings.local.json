@@ -20,7 +20,18 @@
       "Bash(git commit:*)",
       "Bash(gh auth status:*)",
       "Bash(gh issue create --title \"Bug: MockButton Test Failures Due to State Machine Bypass\" --body \"$\\(cat <<''EOF''\n**Status**: ✅ RESOLVED in commit 076c682\n\n## Issue Summary\n\nThree unit tests in `test/test_hal_button/test_button.cpp` were consistently failing:\n\n1. `test_button_debounce`: Expected `EVENT_NONE \\(0\\)` but got `EVENT_CLICK \\(3\\)`\n2. `test_button_click`: Expected `EVENT_PRESSED \\(1\\)` but got `EVENT_CLICK \\(3\\)`\n3. `test_button_long_press`: Expected `EVENT_PRESSED \\(1\\)` but got `EVENT_CLICK \\(3\\)`\n\n## Test Output\n\n```\ntest/test_hal_button/test_button.cpp:177:test_button_debounce:FAIL: Expected 0 Was 3\ntest/test_hal_button/test_button.cpp:191:test_button_click:FAIL: Expected 1 Was 3\ntest/test_hal_button/test_button.cpp:206:test_button_long_press:FAIL: Expected 1 Was 3\n\n6 Tests 3 Failures 0 Ignored\n```\n\n## Root Cause Analysis\n\nThe `MockButton` class in the test file had a critical design flaw in the `mockPress\\(\\)` and `mockRelease\\(\\)` methods:\n\n```cpp\nvoid mockPress\\(\\) {\n    pressed = true;\n    press_time = millis\\(\\);\n    state = STATE_PRESSED;  // ← Bypasses state machine!\n}\n\nvoid mockRelease\\(\\) {\n    pressed = false;\n    release_time = millis\\(\\);\n    state = STATE_RELEASED;  // ← Bypasses state machine!\n}\n```\n\n**The Problem:**\n\n1. `mockPress\\(\\)` directly set `state = STATE_PRESSED`, bypassing the debouncing logic\n2. When `update\\(\\)` was called, it read `digitalRead\\(pin\\)` which always returned `HIGH` \\(not pressed\\)\n3. The state machine saw: internal state says PRESSED, but pin reads as RELEASED\n4. This triggered an immediate release event with a click, before the test expected it\n\n## Solution Implemented\n\nAdded a global mock pin state variable that `digitalRead\\(\\)` reads:\n\n```cpp\nuint8_t mock_pin_state = HIGH;\n\nint digitalRead\\(uint8_t pin\\) {\n    return mock_pin_state;  // Read from mock state\n}\n\nvoid mockPress\\(\\) {\n    mock_pin_state = LOW;  // Set pin LOW \\(pressed with pull-up\\)\n    // Let update\\(\\) handle state transitions\n}\n\nvoid mockRelease\\(\\) {\n    mock_pin_state = HIGH;  // Set pin HIGH \\(released\\)\n    // Let update\\(\\) handle state transitions\n}\n```\n\n## Fix Details\n\n- **Commit**: 076c682b34d0448b66e800e2dd1e4de079f1071f\n- **Files Modified**: `test/test_hal_button/test_button.cpp`, `BUG_REPORT.md`\n- **Result**: All 16 tests now passing \\(100% success rate\\)\n\n## Impact\n\n- **Severity**: Medium - Tests were failing but actual HAL implementation was correct\n- **Scope**: Test infrastructure only, not production code\n- **Tests Affected**: 3 out of 6 button tests \\(50% failure rate\\)\n\n---\n\nThis issue is created for historical documentation purposes. The bug has been resolved.\nEOF\n\\)\")",
-      "Bash(gh issue close:*)"
+      "Bash(gh issue close:*)",
+      "Bash(docker:*)",
+      "Bash(pio:*)",
+      "Bash(gh:*)",
+      "Bash(platformio:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(git config:*)",
+      "Bash(gh api:*)",
+      "Bash(git push)",
+      "Bash(git restore:*)",
+      "Bash(git rm:*)"
     ]
   }
 }
