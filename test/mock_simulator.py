@@ -55,12 +55,12 @@ class MockStepAware:
         print()
 
     def print_help(self):
-        print("\n╔══════════════════════════════════════════════════════════════╗")
-        print("║                    StepAware Commands                        ║")
-        print("╠══════════════════════════════════════════════════════════════╣")
-        print("║  s - Status    m - Motion    b - Button    r - Reset        ║")
-        print("║  0 - OFF       1 - CONT_ON   2 - MOTION    q - Quit          ║")
-        print("╚══════════════════════════════════════════════════════════════╝\n")
+        print("\n╔════════════════════════════════════════════════════════╗")
+        print("║               StepAware Commands                       ║")
+        print("╠════════════════════════════════════════════════════════╣")
+        print("║  s - Status  m - Motion  b - Button  r - Reset        ║")
+        print("║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit        ║")
+        print("╚════════════════════════════════════════════════════════╝\n")
 
     def print_status(self):
         mode_names = {
@@ -74,23 +74,23 @@ class MockStepAware:
         hazard_led = '●' if (self.led_on or self.led_warning_active) else '○'
         status_led = '◐' if self.mode != OperatingMode.OFF else '○'
 
-        # Warning indicator
+        # Warning indicator - avoid emoji for alignment issues
         warning_str = ""
         if self.led_warning_active:
             remaining = max(0, int(self.warning_end_time - time.time()))
-            warning_str = f"  ⚠️  WARN: {remaining:2}s"
+            warning_str = f"  WARN: {remaining:2}s left"
 
-        # Build status lines with exact width
-        line1 = f"  Mode: {mode_name:<10} PIR: {pir_status:<6} LED: {hazard_led}  Status: {status_led}  "
-        line2 = f"  Motion: {self.motion_events:<4} Modes: {self.mode_changes:<4} Clicks: {self.button_clicks:<4}{warning_str:<17}"
+        # Build status lines with exact width (56 chars inside)
+        line1 = f"  Mode: {mode_name:<8} PIR: {pir_status:<5} LED: {hazard_led} Stat: {status_led} "
+        line2 = f"  Mot: {self.motion_events:<3} Modes: {self.mode_changes:<3} Clicks: {self.button_clicks:<3}{warning_str:<18}"
 
-        print(f"\n╔══════════════════════════════════════════════════════════════╗")
-        print(f"║{line1:<62}║")
-        print(f"║{line2:<62}║")
-        print(f"╠══════════════════════════════════════════════════════════════╣")
-        print(f"║  s - Status    m - Motion    b - Button    r - Reset        ║")
-        print(f"║  0 - OFF       1 - CONT_ON   2 - MOTION    q - Quit          ║")
-        print(f"╚══════════════════════════════════════════════════════════════╝\n")
+        print(f"\n╔════════════════════════════════════════════════════════╗")
+        print(f"║{line1:<56}║")
+        print(f"║{line2:<56}║")
+        print(f"╠════════════════════════════════════════════════════════╣")
+        print(f"║  s - Status  m - Motion  b - Button  r - Reset        ║")
+        print(f"║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit        ║")
+        print(f"╚════════════════════════════════════════════════════════╝\n")
 
     def cycle_mode(self):
         mode_sequence = [OperatingMode.OFF, OperatingMode.CONTINUOUS_ON, OperatingMode.MOTION_DETECT]
