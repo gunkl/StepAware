@@ -225,14 +225,14 @@ def analyze_test_database(db_path):
 
 def main():
     script_dir = Path(__file__).parent
-    db_path = script_dir / "test_results.db"
+    db_path = script_dir / "reports" / "test_results.db"
 
     analyze_test_database(db_path)
 
     # Summary recommendation
     print("\n💡 Recommendations:")
     print("  • Run tests regularly: python3 test/run_tests.py")
-    print("  • View HTML reports: test/report_latest.html")
+    print("  • View HTML reports: test/reports/report_latest.html")
     print("  • Check trends to catch regressions early")
     print("  • Investigate any failing tests immediately")
     print()

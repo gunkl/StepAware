@@ -4,50 +4,219 @@ This repository expects any automation agent (Codex CLI, LLM assistants, scripte
 
 ## Mission & Mindset
 
-- The mission of this project is to use the ESP32 development board to develop and build a first of its kind electronic device.  
-- PRIMARY USE CASE: Detect a human entering a specific area (ie hallway) and notify them of a hazard (a step down) that they might not see or might forget exists, avoiding them from tripping or worse, falling after missing the hazard or step.
-- FEATURE: Use a motion sensor(s) to detect movement and then notify the moving person of the hazard ahead.
-- FEATURE: Blink an LED brightly, visibily and repeatedly as a notification of the hazard exists.
-- FEATURE: The notification methods should act for at least 15 seconds.
-- FEATURE: When the battery is low (below 25%) we should provide the user with a notification to prompt them to recharge the battery.  Initially this could be by blinking with a different pattern when motion is detected.  We do not want to add additional battery usage in order to notify them.
-- FEATURE: Provide an indication of battery charging and charge state.  This can be done with the device LED.
-- FEATURE: Provide an input method using the device to allow the user to switch between OFF, Continuous ON, and Motion detection operational modes.  When the device is OFF it should still allow a button press to be switched between modes, but save the maximum possible power.   When the device is Continous ON, it will always flash the LED indicating a hazard.  When the device is in Motion detection mode, only when motion is detected will it flash the LED.
-- FEATURE: If possible, add an additional set of operational mode(s) that is Motion and Light sensing mode.  This will make use of an ambient light sensor to detect if dark or light, and make the system only operate when darkness exists.  Multiple modes could exist within, for example, instead of flashing the LED, it could act as a low brightness night light, which still serves the purpose of warning of the hazard without flashing, both with and without motion sensing enabled (ie, without motion sensing enabled, it would always be on, but at a reduced power level, and with motion sensing enabled it would be on at a reduced level only when detecting motion).  It could be configured to be steady or flashing in any of these modes.
-- FEATURE: If the device supports wifi, it can be configured by the user to connect to wifi.  We would want to have a simple web server on the device that allows easy configuration.  We would also want to provide a view that has device status and activity history.
-- FEATURE: If a web server or ssh server are made available to the user, it must have authentication methods.  The user could configure these authentication methods at first use (first use, open access) or via configuration file.
-- FEATURE: If possible the device should create proper security keys to allow full secured https/ssh access.
-- CONFIGURABILITY: To the best of our ability we want all settings and operational modes to be phyiscally configurable on the device without programming the device remotely.  In addition the user should be able to easily modify simple configuration file(s) on the device to configure it.  In addition the user should be able to use a web browser to configure the device.
-- TESTING: Create as much automated testing of all project features and workflows as possible.  If not possible to fully automate, also create an assisted test case that can guide the user through the various use cases and verification.  Create a markup report with the test cases and test output.  Create a lightweight database and record all testing, allowing the user to diagnose changes through different versions of the project and see a list of all prior test runs, allowing them to select a test run and regenerate the report for that test run as needed.
-- VERSIONING: Create a versioning schema and maintain updated versioning of the project by component and subcomponent as necessary.  Versions can be updated whenever a new test run, build, or execution is run, it is not necessary to update versions on every single code change.
-- BUG PROCESS: Follow a full systematic bug handling process; when bugs are found, investigate, then submit the bug to the repository, then resolve, fix, validate, test, close bug.
+**Project Overview**: StepAware is an ESP32-C3 based motion-activated hazard warning system. See [README.md](README.md) for complete feature descriptions and user-facing documentation.
 
-- Ensure all user inputs are debounced, all physical and virtual inputs. Virtual includes web server submissions, etc.
-- Default to reusable, normalized outputs. Suggest harmonized report layouts across plugins and only diverge when the operator explicitly requests it.
-- Close the loop: help the operator investigate, scaffold solutions, run them, validate results, and capture lessons so future automation can move faster.
-- Whenever there is a bad run or the user indicates a run failed, always investigate using the logs from agent runs to see if more information can be gathered to troubleshoot and diagnose the problem more accurately.
+**Agent Mission**: Help developers build, test, and deploy this IoT safety device while maintaining code quality, security, and proper documentation.
 
-## Global Guardrails
+## Project Structure
 
-- **Safety:** Never log or commit credentials, API tokens, or customer data. If sensitive information appears in logs or artifacts, redact it and alert the operator.
-- **Logging of program results:** Make sure that we log as much as possible, even if the user cancels the app/closes mid-run with control-c the logs should exist, we should not wait to write out the log information, do it as promptly as possible.
-- **Always create limits:** Do not allow logs to exceed allowable usage or expand infinitely, always provide guidance to set sain limits.
+```
+StepAware/
+├── src/                  # Main source files
+├── include/              # Public headers
+├── lib/                  # Custom libraries (HAL, etc.)
+│   ├── HAL/             # Hardware Abstraction Layer
+│   └── StateMachine/    # State machine implementation
+├── test/                 # Test framework
+│   ├── test_*/          # Test suites
+│   ├── reports/         # Test output (not committed)
+│   └── analyze_results.py # Test analysis tools
+├── data/                 # Web files, config templates
+├── docs/                 # Documentation
+│   ├── hardware/        # Wiring diagrams, schematics
+│   ├── architecture/    # Flow charts, diagrams
+│   └── api/             # API specifications
+├── scripts/              # Utility scripts
+├── datasheets/           # Hardware datasheets (not in git)
+├── platformio.ini        # PlatformIO configuration
+├── docker-compose.yml    # Docker development environment
+└── Dockerfile            # Container build definition
+```
 
-## Documentation Map
+## Development Workflow
 
-- `AGENTS.md` (this file) — global principles for every automation agent touching the repo.
-- Additional folders can include their own `AGENTS.md` when specialized instructions emerge.
-- Datasheets for devices to be used will be stored in the datasheets/ folder, which is not stored in github.  This can be read to obtain specifications, details, and help with the design and implementation of the project.
-- Create schematic diagrams of wiring of the various project physical hardware components.
-- Create flow chart diagrams representing the program flow.
-- Create architectural diagrams of the program.
+### Building and Testing
 
-## Working With Operators
+**Using Docker (Recommended):**
+```bash
+# Build firmware
+docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo
 
-- Keep README and `docs/` focused on human workflows; when you need deeper guidance, check the relevant `AGENTS.md`.
-- When adding features, functions, and capabilities, update both this document (if the guidance is project-wide) and the relevant subfolder’s AGENT guide to avoid stale instructions, and especially update the README to keep the project tuned to where a new developer or user knows what it does and how it works.
+# Run C++ Unity tests (output to console)
+docker-compose run --rm stepaware-dev pio test -e native
 
-## When in Doubt
+# Run Python logic tests with HTML reports (files appear in test/reports/ directory)
+docker-compose run --rm stepaware-dev python3 test/run_tests.py
 
-1. Read this document to confirm the requested behavior aligns with global guardrails.
-2. Drill into the folder-specific `AGENTS.md` for implementation details.
-3. Ask clarifying questions if the request conflicts with these guardrails; never guess when safety or data integrity is at stake.
+# Analyze test results from database
+docker-compose run --rm stepaware-dev python3 test/analyze_results.py
+
+# Upload to device (requires hardware connected)
+docker-compose run --rm stepaware-dev pio run --target upload
+
+# Monitor serial output
+docker-compose run --rm stepaware-dev pio device monitor
+```
+
+**Note:** Docker volume mount (`.:/workspace`) ensures all test artifacts generated inside the container are immediately accessible in your local `test/reports/` directory. The container writes to `/workspace/test/reports/` which maps directly to your local filesystem.
+
+**Native PlatformIO:**
+```bash
+# Build firmware
+pio run -e esp32-devkitlipo
+
+# Run C++ Unity tests
+pio test -e native
+
+# Run specific test suite
+pio test -f test_state_machine
+
+# Run Python tests with reports
+python3 test/run_tests.py
+
+# Analyze test history
+python3 test/analyze_results.py
+
+# Build with mock hardware
+pio run -D MOCK_HARDWARE=1
+```
+
+### Implementation Phases
+
+The project follows a 6-phase development plan:
+
+1. **Phase 1**: MVP - Core motion detection ✅ (Current)
+2. **Phase 2**: WiFi & Web interface
+3. **Phase 3**: Testing infrastructure
+4. **Phase 4**: Documentation & versioning
+5. **Phase 5**: Power management
+6. **Phase 6**: Advanced features (light sensing)
+
+When implementing features, always check which phase they belong to and ensure prerequisites are met.
+
+## Core Development Principles
+
+### Code Quality
+- **TESTING**: Create comprehensive automated tests for all features and workflows
+  - Unit tests for individual components
+  - Integration tests for subsystems
+  - Assisted tests for hardware-dependent features
+  - Mock hardware implementations for development without physical devices
+- **CONFIGURABILITY**: All settings must be configurable via:
+  1. Physical device controls (buttons)
+  2. Configuration files on device
+  3. Web interface (when WiFi enabled)
+- **VERSIONING**: Maintain semantic versioning by component
+  - Update versions on test runs, builds, or releases
+  - Track version history in documentation
+- **BUG PROCESS**: Follow systematic bug handling:
+  1. Investigate and document the issue
+  2. Create GitHub issue with analysis
+  3. Implement fix with tests
+  4. Validate fix passes all tests
+  5. Close issue with commit reference
+
+### Testing Infrastructure
+- **TEST REPORTING**: All test outputs are accessible locally after Docker runs
+  - Test artifacts stored in `test/reports/` directory:
+    - `test_results.db` - SQLite database tracking all test runs
+    - `report_*.html` - HTML reports with visual results
+    - `report_latest.html` - Symlink to most recent report
+  - The entire `test/reports/` directory is excluded from git via `.gitignore`
+  - Docker volume mount (`.:/workspace`) ensures files appear in local filesystem
+- **Automated Testing**: Maximize test automation coverage
+  - Python logic tests via `test/run_tests.py`
+  - C++ Unity tests via PlatformIO (`pio test -e native`)
+  - Mock simulator for interactive testing (`test/mock_simulator.py`)
+  - Prefer unit tests over manual verification
+  - Use mocks/stubs for hardware dependencies
+  - Maintain >80% code coverage where practical
+
+
+### Input Handling
+- **Debouncing**: All user inputs must be debounced
+  - Physical inputs: buttons, sensors
+  - Virtual inputs: web server submissions, API calls
+  - Use consistent debounce timing across the codebase
+
+### Logging and Diagnostics
+- **Robust Logging**: Logs must persist even if process is interrupted
+  - Write logs promptly, don't buffer excessively
+  - Support Ctrl+C graceful shutdown
+  - Include timestamps and severity levels
+- **Log Limits**: Prevent unbounded log growth
+  - Implement rotation or size limits
+  - Provide configuration for log verbosity
+- **Failure Investigation**: When runs fail, always:
+  1. Check relevant log files
+  2. Look for error patterns
+  3. Provide actionable diagnostics
+  4. Suggest fixes when possible
+
+## Security & Safety Guardrails
+
+- **Credential Protection**: NEVER log or commit sensitive data
+  - No credentials, API tokens, passwords in logs
+  - No customer/user data in version control
+  - Redact sensitive info if it appears in output
+  - Alert developer if sensitive data detected
+- **Authentication**: All remote access must be authenticated
+  - WiFi web interface requires auth
+  - SSH/HTTPS must use proper credentials
+  - Support first-run setup or config file auth
+  - Generate proper security keys for TLS/SSH
+
+## Documentation Standards
+
+### Documentation Hierarchy
+- **README.md**: User-facing documentation
+  - Project overview and features
+  - Hardware setup and requirements
+  - Quick start guides
+  - Troubleshooting
+  - API reference
+- **AGENTS.md** (this file): Developer/agent guidance
+  - Development workflows
+  - Build and test procedures
+  - Code quality standards
+  - Agent-specific instructions
+- **docs/**: Detailed technical documentation
+  - Hardware schematics and wiring diagrams
+  - Software architecture and flow charts
+  - API specifications
+  - Test plans and reports
+- **datasheets/**: Reference materials (not in git)
+  - Component datasheets
+  - Specifications
+  - Vendor documentation
+
+### Keeping Documentation Current
+- When adding features, update:
+  1. README.md with user-facing details
+  2. This AGENTS.md if workflow changes
+  3. Relevant docs/ files for technical details
+  4. Code comments for complex logic
+- Create diagrams for:
+  - Hardware wiring (schematic diagrams)
+  - Program flow (flow charts)
+  - System architecture (architectural diagrams)
+- Update version numbers when shipping features
+
+## Agent Workflow Guidelines
+
+### When in Doubt
+1. Read this document to confirm behavior aligns with guardrails
+2. Check folder-specific `AGENTS.md` for specialized instructions
+3. Review README.md for user requirements
+4. Ask clarifying questions if conflicts arise
+5. Never guess when safety or data integrity is at stake
+
+### Collaboration with Developers
+- Provide normalized, reusable outputs
+- Use harmonized report layouts across tools
+- Close the feedback loop:
+  1. Investigate issues thoroughly
+  2. Scaffold solutions with proper structure
+  3. Run and validate results
+  4. Capture lessons learned for future automation
+- Suggest improvements when patterns emerge

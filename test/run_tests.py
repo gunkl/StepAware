@@ -23,7 +23,9 @@ if sys.platform == 'win32':
 class TestRunner:
     def __init__(self, project_root):
         self.project_root = Path(project_root)
-        self.db_path = self.project_root / "test" / "test_results.db"
+        self.reports_dir = self.project_root / "test" / "reports"
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.reports_dir / "test_results.db"
         self.test_output = []
         self.init_database()
 
@@ -460,11 +462,11 @@ class TestRunner:
 '''
 
         # Save report
-        report_path = self.project_root / "test" / f"report_{run_id}.html"
+        report_path = self.reports_dir / f"report_{run_id}.html"
         report_path.write_text(html, encoding='utf-8')
 
         # Create latest.html symlink/copy
-        latest_path = self.project_root / "test" / "report_latest.html"
+        latest_path = self.reports_dir / "report_latest.html"
         latest_path.write_text(html, encoding='utf-8')
 
         conn.close()

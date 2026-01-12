@@ -10,15 +10,39 @@
 
 StepAware is an intelligent IoT device designed to prevent accidents by detecting human motion and warning of hazards (such as a step-down in a hallway) that might be missed or forgotten. The system uses a PIR motion sensor to detect movement and provides bright LED warnings to alert people of the hazard ahead.
 
+### Primary Use Case
+
+Detect a human entering a specific area (e.g., hallway) and notify them of a hazard (a step down) that they might not see or might forget exists, preventing trips and falls.
+
 ### Key Features
 
+#### Core Functionality
 - **Motion Detection**: AM312 PIR sensor with 12m range and 65° detection angle
-- **LED Warning**: Bright 15+ second hazard notification
+- **LED Warning**: Bright, visible, repeated blinking for 15+ seconds when motion detected
 - **Multiple Operating Modes**: OFF, Continuous ON, Motion Detection, Night Light modes
-- **Battery Powered**: LiPo battery with built-in charging and monitoring
-- **WiFi Configuration**: Web-based configuration interface
-- **Remote Monitoring**: Real-time status and activity history via web dashboard
+  - **OFF Mode**: Deep sleep with button wake capability (maximum power savings)
+  - **Continuous ON**: Always flashing hazard warning
+  - **Motion Detection**: LED activates only when motion detected (default)
+  - **Motion + Light Sensing**: Activate only in darkness using ambient light sensor
+  - **Night Light Mode**: Low brightness steady/flashing glow (with or without motion sensing)
+
+#### Power Management
+- **Battery Powered**: 1000mAh LiPo battery with built-in charging and monitoring
+- **Low Battery Notification**: Distinctive blink pattern when battery below 25%
+- **Charge Indication**: LED patterns indicate charging status and charge level
 - **Power Efficient**: Up to 11 days battery life in motion detection mode
+
+#### Configuration & Control
+- **Physical Controls**: Mode button for cycling through operational modes
+- **WiFi Configuration**: Web-based configuration interface with authentication
+- **Configuration Files**: Simple JSON files editable on device
+- **Remote Monitoring**: Real-time status and activity history via web dashboard
+- **Secure Access**: HTTPS/SSH support with proper security keys
+
+#### User Input Methods
+- **Mode Button**: Physical button to switch between operational modes
+- **Web Interface**: Browser-based configuration and monitoring
+- **Config Files**: Direct file editing for advanced users
 
 ## Hardware Requirements
 
@@ -191,55 +215,26 @@ See [docs/api/web_api_spec.md](docs/api/) for complete API reference.
 
 ## Development
 
-### Project Structure
+### For Developers
 
-```
-StepAware/
-├── src/                  # Main source files
-├── include/              # Public headers
-├── lib/                  # Custom libraries (HAL, etc.)
-├── test/                 # Test framework
-├── data/                 # Web files, config templates
-├── docs/                 # Documentation
-├── scripts/              # Utility scripts
-└── datasheets/           # Hardware datasheets (not in git)
-```
+This project uses PlatformIO for building and testing. You can develop natively or using Docker.
 
-### Building with Mock Hardware
-
-For development without physical hardware:
-
+**Quick Commands:**
 ```bash
-pio run -D MOCK_HARDWARE=1
+# Build firmware (Docker)
+docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo
+
+# Run tests (Docker)
+docker-compose run --rm stepaware-dev pio test -e native
+
+# Build firmware (Native)
+pio run -e esp32-devkitlipo
+
+# Run tests (Native)
+pio test -e native
 ```
 
-This enables mock implementations of all hardware interfaces.
-
-### Running Tests
-
-```bash
-# Run all automated tests
-pio test
-
-# Run specific test suite
-pio test -f test_state_machine
-
-# Run assisted tests (requires hardware)
-python scripts/test_runner.py --assisted
-```
-
-### Implementation Phases
-
-The project is developed in 6 phases:
-
-1. **Phase 1**: MVP - Core motion detection ✅ (Current)
-2. **Phase 2**: WiFi & Web interface
-3. **Phase 3**: Testing infrastructure
-4. **Phase 4**: Documentation & versioning
-5. **Phase 5**: Power management
-6. **Phase 6**: Advanced features (light sensing)
-
-See [implementation plan](https://github.com/anthropics/claude-code/plans/pure-sprouting-dream.md) for details.
+See [AGENTS.md](AGENTS.md) for complete development workflows, build procedures, and code quality standards.
 
 ## Power Consumption
 
@@ -282,30 +277,54 @@ Contributions are welcome! Please follow these guidelines:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Run tests and ensure they pass
+3. Run tests and ensure they pass (`pio test -e native`)
 4. Commit changes (`git commit -m 'Add AmazingFeature'`)
 5. Push to branch (`git push origin feature/AmazingFeature`)
 6. Open a Pull Request
 
-See [AGENTS.md](AGENTS.md) for AI development workflow and [ai-workflow-guide.md](ai-workflow-guide.md) for best practices.
+For AI-assisted development, see [AGENTS.md](AGENTS.md) for development workflows and code quality standards.
 
 ## Testing
 
-The project includes comprehensive testing infrastructure:
+The project includes comprehensive testing infrastructure with automated and assisted tests:
 
-- **Automated Tests**: Unit and integration tests run via PlatformIO
-- **Assisted Tests**: Interactive hardware verification
-- **Test Database**: SQLite storage of all test runs
-- **Test Reports**: Markdown and HTML reports with historical comparison
+- **Python Logic Tests**: Fast unit tests via `test/run_tests.py`
+- **C++ Unity Tests**: Native tests via PlatformIO (`pio test -e native`)
+- **Mock Simulator**: Interactive testing tool (`test/mock_simulator.py`)
+- **Test Database**: SQLite storage of all test runs with historical tracking
+- **Test Reports**: HTML reports with visual results
+- **Test Analysis**: Detailed analytics via `test/analyze_results.py`
+
+### Running Tests
+
+```bash
+# Run Python logic tests (generates HTML report in test/reports/)
+python3 test/run_tests.py
+
+# Run C++ Unity tests
+pio test -e native
+
+# View test analysis
+python3 test/analyze_results.py
+
+# Interactive mock simulator
+python3 test/mock_simulator.py
+```
+
+All test outputs are stored in `test/reports/` and excluded from git. When using Docker, the volume mount ensures all test artifacts are immediately accessible in your local filesystem.
 
 ## Documentation
 
-- [Hardware Wiring Diagram](docs/hardware/wiring_diagram.png)
-- [State Machine Flowchart](docs/architecture/state_machine_diagram.png)
-- [API Specification](docs/api/web_api_spec.md)
-- [Test Plan](docs/testing/test_plan.md)
-- [AI Agent Guide](AGENTS.md)
-- [Development Workflow](ai-workflow-guide.md)
+### User Documentation
+- [Hardware Wiring Diagram](docs/hardware/wiring_diagram.png) - Physical component connections
+- [API Specification](docs/api/web_api_spec.md) - REST API reference
+- [Docker Guide](DOCKER_GUIDE.md) - Docker-based development
+- [PlatformIO Setup](SETUP_PLATFORMIO.md) - Native PlatformIO installation
+
+### Developer Documentation
+- [AGENTS.md](AGENTS.md) - AI agent development workflows and standards
+- [State Machine Flowchart](docs/architecture/state_machine_diagram.png) - Program flow diagrams
+- [Test Plan](docs/testing/test_plan.md) - Testing strategies and procedures
 
 ## License
 

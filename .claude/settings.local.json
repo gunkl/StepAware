@@ -32,7 +32,11 @@
       "Bash(git push)",
       "Bash(git restore:*)",
       "Bash(git rm:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nUpdate Python setup to respect PowerShell execution policies\n\n- Change documentation to recommend CMD over PowerShell\n- Configure VS Code to use CMD as default terminal\n- Update troubleshooting to NOT advise changing execution policies\n- Add SETUP.md with clear, security-conscious instructions\n\nChanges:\n- PYTHON_SETUP.md: Recommend setup_venv.bat \\(CMD\\) as primary method\n- PYTHON_SETUP.md: Remove advice to change execution policies\n- .vscode/settings.json: Set CMD as default terminal profile\n- SETUP.md: New quick start guide emphasizing CMD approach\n\nThis respects Windows security settings while providing a working solution.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nUpdate Python setup to respect PowerShell execution policies\n\n- Change documentation to recommend CMD over PowerShell\n- Configure VS Code to use CMD as default terminal\n- Update troubleshooting to NOT advise changing execution policies\n- Add SETUP.md with clear, security-conscious instructions\n\nChanges:\n- PYTHON_SETUP.md: Recommend setup_venv.bat \\(CMD\\) as primary method\n- PYTHON_SETUP.md: Remove advice to change execution policies\n- .vscode/settings.json: Set CMD as default terminal profile\n- SETUP.md: New quick start guide emphasizing CMD approach\n\nThis respects Windows security settings while providing a working solution.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(if [ -f test/test_results.db ])",
+      "Bash(then mv test/test_results.db test/reports/)",
+      "Bash(else echo \"No existing test_results.db found\")",
+      "Bash(fi)"
     ]
   }
 }
