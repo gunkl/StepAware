@@ -74,11 +74,7 @@ jobs:
       - name: Install GCC
         run: sudo apt-get update && sudo apt-get install -y build-essential
 
-      - name: Run native tests
-        run: pio test -e native
-
-      - name: Generate test report
-        if: always()
+      - name: Run native tests and generate report
         run: python3 test/run_tests.py
 
       - name: Upload test report
@@ -88,6 +84,7 @@ jobs:
           name: test-report
           path: test/report_latest.html
           retention-days: 30
+          if-no-files-found: warn
 
   docker-test:
     name: Docker Environment Test
@@ -101,13 +98,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        run: docker-compose build
+        run: docker compose build
 
       - name: Run tests in Docker
-        run: docker-compose run --rm stepaware-dev pio test -e native
+        run: docker compose run --rm stepaware-dev pio test -e native
 
       - name: Build firmware in Docker
-        run: docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo
+        run: docker compose run --rm stepaware-dev pio run -e esp32-devkitlipo
 
   lint:
     name: Code Linting
