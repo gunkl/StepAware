@@ -55,63 +55,42 @@ class MockStepAware:
         print()
 
     def print_help(self):
-        print("\n========================================")
-        print("StepAware - Serial Commands")
-        print("========================================")
-        print()
-        print("Status & Info:")
-        print("  h - Show this help menu")
-        print("  s - Print system status")
-        print()
-        print("Mock Hardware Commands:")
-        print("  m - Trigger motion detection")
-        print("  b - Simulate button press")
-        print()
-        print("Mode Control:")
-        print("  0 - Set mode to OFF")
-        print("  1 - Set mode to CONTINUOUS_ON")
-        print("  2 - Set mode to MOTION_DETECT")
-        print()
-        print("Utilities:")
-        print("  r - Reset statistics")
-        print("  q - Quit simulator")
-        print()
-        print("========================================\n")
+        print("\n╔══════════════════════════════════════════════════════════════╗")
+        print("║                    StepAware Commands                        ║")
+        print("╠══════════════════════════════════════════════════════════════╣")
+        print("║  s - Status    m - Motion    b - Button    r - Reset        ║")
+        print("║  0 - OFF       1 - CONT_ON   2 - MOTION    q - Quit          ║")
+        print("╚══════════════════════════════════════════════════════════════╝\n")
 
     def print_status(self):
-        print("\n========================================")
-        print("System Status")
-        print("========================================")
-        print()
-
         mode_names = {
             OperatingMode.OFF: "OFF",
-            OperatingMode.CONTINUOUS_ON: "CONTINUOUS_ON",
-            OperatingMode.MOTION_DETECT: "MOTION_DETECT"
+            OperatingMode.CONTINUOUS_ON: "CONT_ON",
+            OperatingMode.MOTION_DETECT: "MOTION"
         }
 
-        print(f"Operating Mode: {mode_names[self.mode]}")
-        print()
+        mode_name = mode_names[self.mode]
+        pir_status = 'READY' if self.mode != OperatingMode.OFF else 'IDLE '
+        hazard_led = '●' if (self.led_on or self.led_warning_active) else '○'
+        status_led = '◐' if self.mode != OperatingMode.OFF else '○'
 
-        print("Hardware Status:")
-        print(f"  PIR Sensor: {'READY' if self.mode != OperatingMode.OFF else 'IDLE'} (mock)")
-        print(f"  Hazard LED: {'ON' if self.led_on or self.led_warning_active else 'OFF'} (mock)")
-        print(f"  Status LED: {'BLINKING' if self.mode != OperatingMode.OFF else 'OFF'} (mock)")
-        print()
-
+        # Warning indicator
+        warning_str = ""
         if self.led_warning_active:
             remaining = max(0, int(self.warning_end_time - time.time()))
-            print(f"  ⚠️  WARNING ACTIVE: {remaining}s remaining")
-        print()
+            warning_str = f"  ⚠️  WARN: {remaining:2}s"
 
-        print(f"  Motion Events: {self.motion_events}")
-        print()
+        # Build status lines with exact width
+        line1 = f"  Mode: {mode_name:<10} PIR: {pir_status:<6} LED: {hazard_led}  Status: {status_led}  "
+        line2 = f"  Motion: {self.motion_events:<4} Modes: {self.mode_changes:<4} Clicks: {self.button_clicks:<4}{warning_str:<17}"
 
-        print(f"Mode Changes: {self.mode_changes}")
-        print(f"Button Clicks: {self.button_clicks}")
-        print()
-
-        print("========================================\n")
+        print(f"\n╔══════════════════════════════════════════════════════════════╗")
+        print(f"║{line1:<62}║")
+        print(f"║{line2:<62}║")
+        print(f"╠══════════════════════════════════════════════════════════════╣")
+        print(f"║  s - Status    m - Motion    b - Button    r - Reset        ║")
+        print(f"║  0 - OFF       1 - CONT_ON   2 - MOTION    q - Quit          ║")
+        print(f"╚══════════════════════════════════════════════════════════════╝\n")
 
     def cycle_mode(self):
         mode_sequence = [OperatingMode.OFF, OperatingMode.CONTINUOUS_ON, OperatingMode.MOTION_DETECT]
