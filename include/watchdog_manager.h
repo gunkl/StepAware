@@ -43,6 +43,7 @@ public:
         MODULE_HAL_LED,
         MODULE_HAL_PIR,
         MODULE_WEB_SERVER,
+        MODULE_WIFI_MANAGER,
         MODULE_MEMORY,
         MODULE_COUNT  // Must be last
     };
@@ -111,6 +112,7 @@ public:
         uint32_t configCheckIntervalMs;       ///< Config check interval (default: 60000ms)
         uint32_t loggerCheckIntervalMs;       ///< Logger check interval (default: 10000ms)
         uint32_t webServerCheckIntervalMs;    ///< Web server check interval (default: 30000ms)
+        uint32_t wifiCheckIntervalMs;         ///< WiFi manager check interval (default: 15000ms)
 
         uint8_t softRecoveryThreshold;        ///< Failures before soft recovery (default: 2)
         uint8_t moduleRestartThreshold;       ///< Failures before module restart (default: 5)
@@ -125,6 +127,7 @@ public:
         bool enableConfigCheck;               ///< Enable config check (default: true)
         bool enableLoggerCheck;               ///< Enable logger check (default: true)
         bool enableWebServerCheck;            ///< Enable web server check (default: true)
+        bool enableWiFiCheck;                 ///< Enable WiFi check (default: true)
     };
 
     /**

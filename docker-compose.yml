@@ -34,5 +34,18 @@ services:
       - "8080:8080"
     command: python test/mock_web_server.py
 
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stepaware-test
+    volumes:
+      # Mount project directory
+      - .:/workspace
+      # Persist PlatformIO cache
+      - platformio-cache:/root/.platformio
+    working_dir: /workspace
+    command: pio test -e native -v
+
 volumes:
   platformio-cache:
