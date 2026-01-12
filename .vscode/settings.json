@@ -4,15 +4,10 @@
     "python.terminal.activateEnvironment": true,
     "python.terminal.activateEnvInCurrentTerminal": true,
 
-    // Auto-activate venv when opening integrated terminal
-    "terminal.integrated.env.windows": {
-        "VIRTUAL_ENV": "${workspaceFolder}\\venv"
-    },
-
     // PlatformIO configuration
+    // Let PlatformIO IDE use its built-in core - it handles installation automatically
     "platformio-ide.activateOnlyOnPlatformIOProject": true,
-    "platformio-ide.useBuiltinPIOCore": false,
-    "platformio-ide.customPATH": "${workspaceFolder}/venv/Scripts",
+    "platformio-ide.useBuiltinPIOCore": true,
 
     // Python testing
     "python.testing.unittestEnabled": false,
