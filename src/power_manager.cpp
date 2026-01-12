@@ -96,7 +96,7 @@ bool PowerManager::begin(const Config* config) {
 #ifndef MOCK_MODE
     // Configure ADC for battery voltage reading
     adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(BATTERY_ADC_CHANNEL, ADC_ATTEN_DB_11);
+    adc1_config_channel_atten(BATTERY_ADC_CHANNEL, ADC_ATTEN_DB_12);
 #endif
 
     m_startTime = millis();
