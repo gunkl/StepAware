@@ -58,7 +58,46 @@ pio run --target upload
 pio device monitor
 ```
 
+## Available Services
+
+StepAware provides two Docker services:
+
+1. **`stepaware-dev`** - Development container with PlatformIO and build tools
+2. **`mock-server`** - Web server for testing the dashboard without ESP32 hardware
+
 ## Common Workflows
+
+### Mock Web Server (Test Dashboard)
+
+Test the complete web interface without ESP32 hardware:
+
+```bash
+# Start mock server (foreground)
+docker-compose up mock-server
+
+# Start in background
+docker-compose up -d mock-server
+
+# View logs
+docker-compose logs -f mock-server
+
+# Stop server
+docker-compose down
+```
+
+Then open **http://localhost:8080** in your browser.
+
+**Features:**
+- ✅ Complete web dashboard UI
+- ✅ All 8 REST API endpoints functional
+- ✅ Real-time status updates every 2 seconds
+- ✅ Mode switching (OFF, CONTINUOUS, MOTION)
+- ✅ Configuration editor with live save
+- ✅ Log viewer with simulated events
+- ✅ Factory reset functionality
+- ✅ Simulated motion detection
+
+See [test/MOCK_SERVER.md](test/MOCK_SERVER.md) for detailed mock server documentation.
 
 ### Build and Test (Mock Hardware)
 
@@ -231,6 +270,38 @@ jobs:
 
 ## Next Steps
 
-1. Try building: `docker-compose run --rm stepaware-dev pio run`
-2. Run native tests: `docker-compose run --rm stepaware-dev pio test -e native`
-3. Run Python simulator: `docker-compose run --rm stepaware-dev python3 test/mock_simulator.py`
+1. **Test the web dashboard**: `docker-compose up mock-server` → Open http://localhost:8080
+2. **Build firmware**: `docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo`
+3. **Run C++ tests**: `docker-compose run --rm stepaware-dev pio test -e native`
+4. **Run Python tests**: `docker-compose run --rm stepaware-dev python test/test_logic.py`
+
+## Complete Testing Workflow (No Hardware Required)
+
+```bash
+# 1. Start mock web server
+docker-compose up -d mock-server
+
+# 2. Open browser and test dashboard
+# Visit: http://localhost:8080
+# Test: mode switching, config changes, logs
+
+# 3. Build firmware in parallel
+docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo
+
+# 4. Run C++ tests
+docker-compose run --rm stepaware-dev pio test -e native
+
+# 5. Run Python tests
+docker-compose run --rm stepaware-dev python test/test_logic.py
+docker-compose run --rm stepaware-dev python test/test_config_manager.py
+docker-compose run --rm stepaware-dev python test/test_logger.py
+docker-compose run --rm stepaware-dev python test/test_web_api.py
+
+# 6. View mock server logs
+docker-compose logs -f mock-server
+
+# 7. Stop everything
+docker-compose down
+```
+
+This workflow tests **everything** (firmware build, C++ tests, Python tests, web UI) without any physical hardware!

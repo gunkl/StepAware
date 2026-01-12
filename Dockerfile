@@ -14,8 +14,11 @@ RUN apt-get update && apt-get install -y \
     usbutils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PlatformIO
-RUN pip install --no-cache-dir platformio
+# Install PlatformIO and web server dependencies
+RUN pip install --no-cache-dir \
+    platformio \
+    flask \
+    flask-cors
 
 # Create working directory
 WORKDIR /workspace

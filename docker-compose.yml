@@ -20,5 +20,19 @@ services:
     # privileged: true
     command: /bin/bash
 
+  mock-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stepaware-mock-server
+    volumes:
+      # Mount project directory
+      - .:/workspace
+    working_dir: /workspace
+    ports:
+      # Expose web server on port 8080
+      - "8080:8080"
+    command: python test/mock_web_server.py
+
 volumes:
   platformio-cache:
