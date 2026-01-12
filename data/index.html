@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StepAware Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <h1>🚶 StepAware</h1>
+                <p class="subtitle">Motion-Activated Hazard Warning System</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary" onclick="refreshAll()">
+                    <span class="icon">🔄</span> Refresh
+                </button>
+            </div>
+        </header>
+
+        <!-- Status Cards -->
+        <section class="status-section">
+            <div class="card status-card">
+                <div class="card-header">
+                    <h3>System Status</h3>
+                    <span class="status-indicator" id="connection-status">●</span>
+                </div>
+                <div class="card-body">
+                    <div class="stat-grid">
+                        <div class="stat">
+                            <span class="stat-label">Uptime</span>
+                            <span class="stat-value" id="uptime">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Free Memory</span>
+                            <span class="stat-value" id="memory">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Motion Events</span>
+                            <span class="stat-value" id="motion-events">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Mode Changes</span>
+                            <span class="stat-value" id="mode-changes">--</span>
+                        </div>
+                    </div>
+                    <div class="warning-status" id="warning-status" style="display: none;">
+                        <span class="warning-icon">⚠️</span>
+                        <span>Warning Active!</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mode-card">
+                <div class="card-header">
+                    <h3>Operating Mode</h3>
+                </div>
+                <div class="card-body">
+                    <div class="mode-selector">
+                        <button class="mode-btn" data-mode="0" onclick="setMode(0)">
+                            <span class="mode-icon">⭕</span>
+                            <span class="mode-name">OFF</span>
+                            <span class="mode-desc">System disabled</span>
+                        </button>
+                        <button class="mode-btn" data-mode="1" onclick="setMode(1)">
+                            <span class="mode-icon">💡</span>
+                            <span class="mode-name">CONTINUOUS</span>
+                            <span class="mode-desc">Always blinking</span>
+                        </button>
+                        <button class="mode-btn active" data-mode="2" onclick="setMode(2)">
+                            <span class="mode-icon">👁️</span>
+                            <span class="mode-name">MOTION</span>
+                            <span class="mode-desc">Blink on motion</span>
+                        </button>
+                    </div>
+                    <div class="current-mode">
+                        <span>Current Mode:</span>
+                        <span id="current-mode-name" class="mode-badge">MOTION_DETECT</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Configuration Section -->
+        <section class="config-section">
+            <div class="card">
+                <div class="card-header">
+                    <h3>Configuration</h3>
+                    <button class="btn btn-small" onclick="toggleConfig()">
+                        <span id="config-toggle-icon">▼</span>
+                    </button>
+                </div>
+                <div class="card-body config-body" id="config-body" style="display: none;">
+                    <div class="config-tabs">
+                        <button class="tab-btn active" onclick="showConfigTab('motion')">Motion</button>
+                        <button class="tab-btn" onclick="showConfigTab('led')">LED</button>
+                        <button class="tab-btn" onclick="showConfigTab('button')">Button</button>
+                        <button class="tab-btn" onclick="showConfigTab('power')">Power</button>
+                        <button class="tab-btn" onclick="showConfigTab('wifi')">WiFi</button>
+                    </div>
+
+                    <div class="config-content">
+                        <!-- Motion Tab -->
+                        <div class="config-tab" id="tab-motion">
+                            <div class="form-group">
+                                <label for="warning-duration">Warning Duration (ms)</label>
+                                <input type="number" id="warning-duration" min="1000" max="300000" step="1000">
+                                <small>Duration LED blinks when motion detected (1-300 seconds)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="pir-warmup">PIR Warmup Time (ms)</label>
+                                <input type="number" id="pir-warmup" min="10000" max="120000" step="1000">
+                                <small>Sensor warmup period (10-120 seconds)</small>
+                            </div>
+                        </div>
+
+                        <!-- LED Tab -->
+                        <div class="config-tab" id="tab-led" style="display: none;">
+                            <div class="form-group">
+                                <label for="led-brightness-full">Full Brightness</label>
+                                <input type="range" id="led-brightness-full" min="0" max="255" value="255">
+                                <span id="led-brightness-full-value">255</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="led-brightness-medium">Medium Brightness</label>
+                                <input type="range" id="led-brightness-medium" min="0" max="255" value="128">
+                                <span id="led-brightness-medium-value">128</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="led-brightness-dim">Dim Brightness</label>
+                                <input type="range" id="led-brightness-dim" min="0" max="255" value="20">
+                                <span id="led-brightness-dim-value">20</span>
+                            </div>
+                        </div>
+
+                        <!-- Button Tab -->
+                        <div class="config-tab" id="tab-button" style="display: none;">
+                            <div class="form-group">
+                                <label for="button-debounce">Debounce Time (ms)</label>
+                                <input type="number" id="button-debounce" min="10" max="500" step="5">
+                                <small>Button debounce delay (10-500ms)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="button-long-press">Long Press Duration (ms)</label>
+                                <input type="number" id="button-long-press" min="500" max="10000" step="100">
+                                <small>Long press threshold (500-10000ms)</small>
+                            </div>
+                        </div>
+
+                        <!-- Power Tab -->
+                        <div class="config-tab" id="tab-power" style="display: none;">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="power-saving-enabled">
+                                    Enable Power Saving
+                                </label>
+                                <small>Reduce power consumption when idle</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="deep-sleep-after">Deep Sleep After (minutes)</label>
+                                <input type="number" id="deep-sleep-after" min="1" max="1440" step="1">
+                                <small>Minutes of inactivity before deep sleep</small>
+                            </div>
+                        </div>
+
+                        <!-- WiFi Tab -->
+                        <div class="config-tab" id="tab-wifi" style="display: none;">
+                            <div class="form-group">
+                                <label for="wifi-ssid">WiFi SSID</label>
+                                <input type="text" id="wifi-ssid" maxlength="63">
+                            </div>
+                            <div class="form-group">
+                                <label for="wifi-password">WiFi Password</label>
+                                <input type="password" id="wifi-password" maxlength="63">
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="wifi-enabled">
+                                    WiFi Enabled
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-actions">
+                        <button class="btn btn-primary" onclick="saveConfig()">
+                            <span class="icon">💾</span> Save Configuration
+                        </button>
+                        <button class="btn btn-danger" onclick="factoryReset()">
+                            <span class="icon">⚠️</span> Factory Reset
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Logs Section -->
+        <section class="logs-section">
+            <div class="card">
+                <div class="card-header">
+                    <h3>Recent Logs</h3>
+                    <button class="btn btn-small" onclick="refreshLogs()">
+                        <span class="icon">🔄</span> Refresh
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="logs-container" id="logs-container">
+                        <p class="logs-empty">No logs available</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <span>StepAware v<span id="firmware-version">0.1.0</span></span>
+                <span>Built: <span id="build-date">--</span></span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
