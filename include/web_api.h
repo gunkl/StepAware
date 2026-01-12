@@ -41,6 +41,27 @@ public:
     WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager* config);
 
     /**
+     * @brief Set WiFi Manager reference (optional)
+     *
+     * @param wifi WiFi Manager instance
+     */
+    void setWiFiManager(class WiFiManager* wifi);
+
+    /**
+     * @brief Set Power Manager reference (optional)
+     *
+     * @param power Power Manager instance
+     */
+    void setPowerManager(class PowerManager* power);
+
+    /**
+     * @brief Set Watchdog Manager reference (optional)
+     *
+     * @param watchdog Watchdog Manager instance
+     */
+    void setWatchdogManager(class WatchdogManager* watchdog);
+
+    /**
      * @brief Destructor
      */
     ~WebAPI();
@@ -65,6 +86,9 @@ private:
     AsyncWebServer* m_server;              ///< Web server instance
     StateMachine* m_stateMachine;          ///< State machine reference
     ConfigManager* m_config;               ///< Config manager reference
+    class WiFiManager* m_wifi;             ///< WiFi Manager reference (optional)
+    class PowerManager* m_power;           ///< Power Manager reference (optional)
+    class WatchdogManager* m_watchdog;     ///< Watchdog Manager reference (optional)
     bool m_corsEnabled;                    ///< CORS enabled flag
 
     // Endpoint handlers

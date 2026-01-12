@@ -215,22 +215,28 @@ void HAL_LED::processPattern() {
             break;
 
         case PATTERN_PULSE:
-            // Future: Implement smooth PWM fading
-            // For now, treat as slow blink
+            // Smooth PWM fade in/out
             {
-                uint32_t interval = LED_BLINK_SLOW_MS;
-                if (now - m_lastToggleTime >= interval) {
-                    m_patternState = !m_patternState;
+                uint32_t pulseInterval = LED_BLINK_SLOW_MS * 2;  // 2 seconds for full pulse cycle
+                uint32_t elapsed = (now - m_patternStartTime) % pulseInterval;
+
+                // Calculate brightness using sine wave approximation
+                // First half: fade in (0 -> 255)
+                // Second half: fade out (255 -> 0)
+                if (elapsed < pulseInterval / 2) {
+                    // Fade in
+                    m_brightness = (elapsed * 255) / (pulseInterval / 2);
+                } else {
+                    // Fade out
+                    uint32_t fadeOutElapsed = elapsed - (pulseInterval / 2);
+                    m_brightness = 255 - ((fadeOutElapsed * 255) / (pulseInterval / 2));
+                }
+
+                m_isOn = (m_brightness > 0);
+
+                // Update LED more frequently for smooth fading (every 20ms)
+                if (now - m_lastToggleTime >= 20) {
                     m_lastToggleTime = now;
-
-                    if (m_patternState) {
-                        m_brightness = LED_BRIGHTNESS_FULL;
-                        m_isOn = true;
-                    } else {
-                        m_brightness = 0;
-                        m_isOn = false;
-                    }
-
                     applyBrightness();
                 }
             }
