@@ -147,22 +147,38 @@ class TestRunner:
         current_suite = None
 
         for line in output.split('\n'):
-            # Detect test suite
-            if 'Testing' in line and environment in line:
-                parts = line.split('test_')
-                if len(parts) > 1:
-                    current_suite = 'test_' + parts[1].split()[0].strip('>')
+            # Detect test suite from "Processing test_X in native environment" line
+            if 'Processing' in line and environment in line:
+                parts = line.split()
+                for i, part in enumerate(parts):
+                    if part.startswith('test_'):
+                        current_suite = part
+                        break
 
-            # Parse Unity test results
-            if line.startswith('test_'):
+            # Parse Unity test results - handles both formats:
+            # 1. test_button.cpp:291:test_button_initialization:PASS
+            # 2. test_button_initialization:PASS
+            if ':PASS' in line or ':FAIL' in line:
+                # Split by colons
                 parts = line.split(':')
                 if len(parts) >= 2:
-                    test_name = parts[0].strip()
-                    status = 'PASS' if 'PASS' in line else 'FAIL'
+                    # Find the test name (last part before PASS/FAIL)
+                    status_part = parts[-1].strip()
+                    test_name_part = parts[-2].strip()
+
+                    # Handle file path format: test/test_hal_button/test_button.cpp:291:test_button_initialization:PASS
+                    if '/' in test_name_part or '\\' in test_name_part or test_name_part.isdigit():
+                        # Previous part is line number, actual test name is before that
+                        if len(parts) >= 3:
+                            test_name = parts[-2].strip()
+                    else:
+                        test_name = test_name_part
+
+                    status = 'PASS' if 'PASS' in status_part else 'FAIL'
 
                     error_msg = None
-                    if status == 'FAIL' and len(parts) > 2:
-                        error_msg = ':'.join(parts[2:]).strip()
+                    if status == 'FAIL' and len(parts) > 3:
+                        error_msg = ':'.join(parts[3:]).strip()
 
                     results.append({
                         'suite': current_suite or 'unknown',
