@@ -37,7 +37,7 @@ class MockStepAware:
         print("║                                        ║")
         print("║          S T E P A W A R E             ║")
         print("║                                        ║")
-        print("║   Motion-Activated Hazard Warning     ║")
+        print("║   Motion-Activated Hazard Warning      ║")
         print("║                                        ║")
         print("╚════════════════════════════════════════╝")
         print()
@@ -58,8 +58,8 @@ class MockStepAware:
         print("\n╔════════════════════════════════════════════════════════╗")
         print("║               StepAware Commands                       ║")
         print("╠════════════════════════════════════════════════════════╣")
-        print("║  s - Status  m - Motion  b - Button  r - Reset        ║")
-        print("║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit        ║")
+        print("║  s - Status  m - Motion  b - Button  r - Reset         ║")
+        print("║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit         ║")
         print("╚════════════════════════════════════════════════════════╝\n")
 
     def print_status(self):
@@ -88,8 +88,8 @@ class MockStepAware:
         print(f"║{line1:<56}║")
         print(f"║{line2:<56}║")
         print(f"╠════════════════════════════════════════════════════════╣")
-        print(f"║  s - Status  m - Motion  b - Button  r - Reset        ║")
-        print(f"║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit        ║")
+        print(f"║  s - Status  m - Motion  b - Button  r - Reset         ║")
+        print(f"║  0 - OFF     1 - CONT_ON  2 - MOTION  q - Quit         ║")
         print(f"╚════════════════════════════════════════════════════════╝\n")
 
     def cycle_mode(self):
