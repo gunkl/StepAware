@@ -1,0 +1,8 @@
+# StepAware Python Dependencies
+
+# PlatformIO for firmware development and testing
+platformio>=6.1.0
+
+# Note: All test scripts use only Python standard library
+# (subprocess, sqlite3, datetime, pathlib, argparse, json)
+# No additional dependencies required for testing
