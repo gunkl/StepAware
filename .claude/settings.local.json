@@ -36,7 +36,8 @@
       "Bash(if [ -f test/test_results.db ])",
       "Bash(then mv test/test_results.db test/reports/)",
       "Bash(else echo \"No existing test_results.db found\")",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(dir:*)"
     ]
   }
 }
