@@ -6,7 +6,7 @@
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 ![Build](https://github.com/yourusername/StepAware/workflows/CI%2FCD%20Pipeline/badge.svg)
-![Tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
 
 ## Overview
 
@@ -105,6 +105,33 @@ See [docs/hardware/wiring_diagram.png](docs/hardware/) for complete wiring schem
 │ Config Mgr │ Logger   │ Web Server │
 └────────────┴──────────┴────────────┘
 ```
+
+### Major Subsystems
+
+#### WiFi Manager
+Robust WiFi connectivity with automatic reconnection and exponential backoff:
+- **Access Point (AP) Mode**: Captive portal for initial setup
+- **Station Mode**: Connects to existing WiFi networks
+- **Auto-Reconnection**: Exponential backoff (1s → 2s → 4s → 8s → max 60s)
+- **Signal Monitoring**: RSSI tracking and connection quality metrics
+- **Status Reporting**: Connection uptime, failure counts, reconnection attempts
+
+#### Power Manager
+Intelligent battery management with multiple power states:
+- **Battery Monitoring**: Voltage reading with 10-sample moving average filter
+- **State Management**: Active, Light Sleep, Deep Sleep, Low Battery, Critical Battery, Charging
+- **Smart Sleep**: Automatic sleep based on inactivity timeout
+- **Wake Events**: Button, PIR motion, timer-based wake
+- **Power Statistics**: Active time, sleep time, wake count tracking
+- **Battery Percentage**: Non-linear voltage-to-percentage conversion (3.0V-4.2V range)
+
+#### Watchdog Manager
+Comprehensive system health monitoring with automatic recovery:
+- **9 Health Check Modules**: Memory, State Machine, Config Manager, Logger, HAL Button, HAL LED, HAL PIR, Web Server, WiFi Manager
+- **5 Recovery Functions**: Memory cleanup, State Machine reset, Config Manager reload, Logger reset, WiFi reconnection
+- **Health Status Levels**: OK, Warning, Critical, Failed
+- **Automatic Recovery**: Attempts recovery when modules report Warning/Critical status
+- **Periodic Checks**: Configurable health check interval (default: 30 seconds)
 
 ## Quick Start
 
@@ -249,29 +276,20 @@ See [AGENTS.md](AGENTS.md) for complete development workflows, build procedures,
 
 ## Troubleshooting
 
-### Device won't boot
-- Check battery charge level
-- Verify USB-C connection
-- Press reset button
-- Check serial output for errors
+For common issues and solutions, see the comprehensive [Troubleshooting Guide](TROUBLESHOOTING.md).
 
-### Motion not detected
-- Wait 1 minute for PIR warm-up
-- Check sensor wiring (GPIO1)
-- Verify mode is set to MOTION_DETECT
-- Test sensor range (within 12m, 65° angle)
+**Quick Reference:**
 
-### WiFi connection fails
-- Verify credentials in configuration
-- Check WiFi signal strength
-- Try factory reset (hold button 10s)
-- Check router allows 2.4GHz connections
+| Issue | Quick Fix |
+|-------|-----------|
+| Device won't boot | Check battery charge, try different USB cable |
+| Motion not detected | Wait 60s PIR warm-up, verify GPIO1 connection |
+| WiFi won't connect | Check 2.4GHz network, verify credentials |
+| Battery drains quickly | Use MOTION_DETECT mode, reduce WiFi usage |
+| Can't access web UI | Verify IP address from serial console |
+| LED not working | Check polarity (long leg = anode), verify 220Ω resistor |
 
-### Battery drains quickly
-- Check operating mode (continuous ON uses more power)
-- Verify no WiFi reconnection loops
-- Check for excessive motion events
-- Consider deep sleep mode when not in use
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed diagnostic procedures and recovery options.
 
 ## Contributing
 
@@ -288,11 +306,25 @@ For AI-assisted development, see [AGENTS.md](AGENTS.md) for development workflow
 
 ## Testing
 
-The project includes comprehensive testing infrastructure with automated and assisted tests:
+The project includes comprehensive testing infrastructure with **85 tests** across 7 test suites:
 
-- **Python Logic Tests**: Fast unit tests via `test/run_tests.py`
+### Test Suite Breakdown
+
+| Test Suite | Tests | Coverage |
+|------------|-------|----------|
+| **HAL Button** | 6 | Button debouncing, state changes, press detection |
+| **HAL LED** | 14 | LED patterns, brightness, PWM control, smooth pulsing |
+| **Integration** | 14 | Multi-component interaction, system scenarios |
+| **Power Manager** | 20 | Battery monitoring, power states, sleep modes, filtering |
+| **State Machine** | 10 | Mode transitions, motion detection, warning behavior |
+| **Web API** | 12 | Component integration, status reporting, mock components |
+| **WiFi Manager** | 11 | Connection states, reconnection, RSSI monitoring |
+
+### Testing Infrastructure
+
 - **C++ Unity Tests**: Native tests via PlatformIO (`pio test -e native`)
-- **Mock Simulator**: Interactive testing tool (`test/mock_simulator.py`)
+- **Mock-Based Testing**: Hardware abstraction allows testing without physical components
+- **Docker Support**: Containerized test environment for consistency
 - **Test Database**: SQLite storage of all test runs with historical tracking
 - **Test Reports**: HTML reports with visual results
 - **Test Analysis**: Detailed analytics via `test/analyze_results.py`
@@ -300,17 +332,17 @@ The project includes comprehensive testing infrastructure with automated and ass
 ### Running Tests
 
 ```bash
-# Run Python logic tests (generates HTML report in test/reports/)
-python3 test/run_tests.py
+# Run all C++ Unity tests (Docker)
+docker-compose run --rm stepaware-dev pio test -e native
 
-# Run C++ Unity tests
+# Run all C++ Unity tests (Native)
 pio test -e native
+
+# Run specific test suite
+pio test -e native -f test_power_manager
 
 # View test analysis
 python3 test/analyze_results.py
-
-# Interactive mock simulator
-python3 test/mock_simulator.py
 ```
 
 All test outputs are stored in `test/reports/` and excluded from git. When using Docker, the volume mount ensures all test artifacts are immediately accessible in your local filesystem.
@@ -318,14 +350,17 @@ All test outputs are stored in `test/reports/` and excluded from git. When using
 ## Documentation
 
 ### User Documentation
-- [Hardware Wiring Diagram](docs/hardware/wiring_diagram.png) - Physical component connections
-- [API Specification](docs/api/web_api_spec.md) - REST API reference
-- [Docker Guide](DOCKER_GUIDE.md) - Docker-based development
+- **[Hardware Assembly Guide](docs/hardware/HARDWARE_ASSEMBLY.md)** - Step-by-step assembly instructions with wiring diagrams
+- **[Troubleshooting Guide](TROUBLESHOOTING.md)** - Common issues, diagnostic procedures, and recovery options
+- **[API Reference](docs/api/API.md)** - Complete REST API documentation with examples
+- [Docker Guide](DOCKER_GUIDE.md) - Docker-based development environment
 - [PlatformIO Setup](SETUP_PLATFORMIO.md) - Native PlatformIO installation
 
 ### Developer Documentation
 - [AGENTS.md](AGENTS.md) - AI agent development workflows and standards
-- [State Machine Flowchart](docs/architecture/state_machine_diagram.png) - Program flow diagrams
+- [WiFi Manager Design](docs/WIFI_MANAGER_DESIGN.md) - WiFi connectivity architecture
+- [Power Manager Design](docs/POWER_MANAGER_DESIGN.md) - Battery and power management
+- [Watchdog System Design](docs/WATCHDOG_DESIGN.md) - Health monitoring and recovery
 - [Test Plan](docs/testing/test_plan.md) - Testing strategies and procedures
 
 ## License
