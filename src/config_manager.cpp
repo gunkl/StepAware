@@ -459,3 +459,30 @@ bool ConfigManager::validateParameters() {
 void ConfigManager::setError(const char* error) {
     strlcpy(m_lastError, error, sizeof(m_lastError));
 }
+
+bool ConfigManager::setWiFiCredentials(const char* ssid, const char* password) {
+    if (!m_initialized) {
+        setError("Config manager not initialized");
+        return false;
+    }
+
+    // Update WiFi SSID
+    if (ssid) {
+        strlcpy(m_config.wifiSSID, ssid, sizeof(m_config.wifiSSID));
+    } else {
+        m_config.wifiSSID[0] = '\0';
+    }
+
+    // Update WiFi password
+    if (password) {
+        strlcpy(m_config.wifiPassword, password, sizeof(m_config.wifiPassword));
+    } else {
+        m_config.wifiPassword[0] = '\0';
+    }
+
+    // Update metadata
+    m_config.lastModified = millis();
+
+    // Save to SPIFFS
+    return save();
+}

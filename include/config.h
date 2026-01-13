@@ -55,6 +55,9 @@
 
 // Button Debouncing
 #define BUTTON_DEBOUNCE_MS            50      // 50ms debounce time
+#define BUTTON_LONG_PRESS_MS          3000    // 3 seconds for long press
+#define BUTTON_WIFI_RESET_MS          15000   // 15 seconds for WiFi credential reset
+#define BUTTON_FACTORY_RESET_MS       30000   // 30 seconds for full factory reset
 
 // LED Patterns
 #define LED_BLINK_FAST_MS             250     // Fast blink (250ms on/off)

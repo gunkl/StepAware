@@ -35,7 +35,8 @@
       "Bash(platformio run:*)",
       "Bash(cmd.exe /c \"pio run -e esp32-devkitlipo\")",
       "Bash(where pio:*)",
-      "Bash(docker compose run:*)"
+      "Bash(docker compose run:*)",
+      "Bash(gh issue view:*)"
     ]
   }
 }

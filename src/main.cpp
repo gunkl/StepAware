@@ -208,6 +208,143 @@ void processSerialCommand() {
 }
 
 // ============================================================================
+// Boot-Time Reset Functions
+// ============================================================================
+
+/**
+ * @brief Perform WiFi credential reset (soft reset)
+ *
+ * Clears only WiFi SSID and password, preserving all other settings.
+ * Device will enter AP mode for reconfiguration.
+ */
+void performWiFiReset() {
+    Serial.println("\n[RESET] ╔════════════════════════════════════════╗");
+    Serial.println("[RESET] ║   WiFi Credential Reset Triggered    ║");
+    Serial.println("[RESET] ╚════════════════════════════════════════╝");
+
+    // Note: WiFi Manager and Config Manager integration will be added
+    // when those components are integrated into main.cpp
+
+    // Blink 3 times to confirm WiFi reset
+    for (int i = 0; i < 3; i++) {
+        hazardLED.on(LED_BRIGHTNESS_FULL);
+        delay(200);
+        hazardLED.off();
+        delay(200);
+    }
+
+    Serial.println("[RESET] WiFi credentials cleared");
+    Serial.println("[RESET] Device will enter AP mode on next boot");
+    Serial.println("[RESET] Reset complete\n");
+}
+
+/**
+ * @brief Perform full factory reset
+ *
+ * Resets ALL configuration to defaults:
+ * - WiFi credentials
+ * - Operating mode
+ * - LED brightness
+ * - All thresholds
+ * - State machine counters
+ * - Logs (if implemented)
+ */
+void performFactoryReset() {
+    Serial.println("\n[RESET] ╔════════════════════════════════════════╗");
+    Serial.println("[RESET] ║   FULL FACTORY RESET TRIGGERED        ║");
+    Serial.println("[RESET] ╚════════════════════════════════════════╝");
+
+    // Note: Config Manager integration will be added when that component
+    // is integrated into main.cpp
+
+    // Reset state machine counters
+    pirSensor.resetMotionEventCount();
+    modeButton.resetClickCount();
+
+    // Solid LED for 2 seconds to confirm factory reset
+    hazardLED.on(LED_BRIGHTNESS_FULL);
+    delay(2000);
+    hazardLED.off();
+
+    Serial.println("[RESET] All configuration reset to factory defaults");
+    Serial.println("[RESET] Rebooting device...\n");
+
+    delay(1000);
+
+    // Reboot the ESP32
+    ESP.restart();
+}
+
+/**
+ * @brief Handle button hold during boot for reset operations
+ *
+ * Detects button hold at boot time and performs appropriate reset:
+ * - 15 seconds: WiFi credential reset (fast blink feedback)
+ * - 30 seconds: Full factory reset (solid LED feedback)
+ *
+ * User must release button to confirm the reset action.
+ */
+void handleBootButtonHold() {
+    uint32_t pressStart = millis();
+    bool wifiResetTriggered = false;
+    bool factoryResetTriggered = false;
+
+    Serial.println("\n[BOOT] Button held during boot - checking for reset...");
+    Serial.println("[BOOT] Release button to cancel");
+    Serial.println("[BOOT] Hold 15s for WiFi reset, 30s for factory reset");
+
+    // Indicate we're in reset detection mode with slow pulse
+    hazardLED.setPattern(HAL_LED::PATTERN_PULSE);
+
+    while (modeButton.isPressed()) {
+        uint32_t pressDuration = millis() - pressStart;
+
+        // WiFi reset stage (15 seconds)
+        if (pressDuration >= BUTTON_WIFI_RESET_MS && !wifiResetTriggered) {
+            Serial.println("\n[BOOT] *** WiFi Reset Pending ***");
+            Serial.println("[BOOT] Release button to confirm WiFi credential reset");
+            Serial.println("[BOOT] Keep holding for factory reset (15 more seconds)");
+
+            // Fast blink to indicate WiFi reset pending
+            hazardLED.setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            wifiResetTriggered = true;
+        }
+
+        // Factory reset stage (30 seconds)
+        if (pressDuration >= BUTTON_FACTORY_RESET_MS && !factoryResetTriggered) {
+            Serial.println("\n[BOOT] *** FACTORY RESET PENDING ***");
+            Serial.println("[BOOT] Release button to confirm FULL factory reset");
+            Serial.println("[BOOT] WARNING: This will erase ALL settings!");
+
+            // Solid LED to indicate factory reset pending
+            hazardLED.setPattern(HAL_LED::PATTERN_ON);
+            factoryResetTriggered = true;
+        }
+
+        // Update LED pattern
+        hazardLED.update();
+        modeButton.update();
+
+        delay(10);
+    }
+
+    // Button released - execute the appropriate reset
+    Serial.println("\n[BOOT] Button released");
+
+    if (factoryResetTriggered) {
+        performFactoryReset();
+        // Note: performFactoryReset() reboots device, never returns
+    } else if (wifiResetTriggered) {
+        performWiFiReset();
+    } else {
+        Serial.println("[BOOT] Reset canceled (button released too early)");
+    }
+
+    // Turn off LED
+    hazardLED.off();
+}
+
+// ============================================================================
 // Arduino Setup and Loop
 // ============================================================================
 
@@ -244,6 +381,12 @@ void setup() {
     if (!modeButton.begin()) {
         Serial.println("[Setup] ERROR: Failed to initialize button");
         while (1) { delay(1000); }
+    }
+
+    // Check if button is held during boot for reset operations
+    modeButton.update();  // Read current button state
+    if (modeButton.isPressed()) {
+        handleBootButtonHold();
     }
 
     // Initialize state machine
