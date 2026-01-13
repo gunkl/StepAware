@@ -46,14 +46,15 @@ PowerManager::PowerManager()
     , m_onWake(nullptr)
 {
     // Initialize default configuration
-    m_config.lightSleepTimeout = 30000;      // 30 seconds
-    m_config.deepSleepTimeout = 300000;      // 5 minutes
-    m_config.lowBatteryThreshold = 3.4f;     // 3.4V (~20%)
-    m_config.criticalBatteryThreshold = 3.2f;// 3.2V (~5%)
-    m_config.batteryCheckInterval = 10000;   // 10 seconds
+    m_config.idleToLightSleepMs = 180000;       // 3 minutes (user configurable: 1-10 min)
+    m_config.lightSleepToDeepSleepMs = 60000;   // 1 minute from light sleep (0 = skip light sleep)
+    m_config.lowBatteryThreshold = 3.4f;        // 3.4V (~20%)
+    m_config.criticalBatteryThreshold = 3.2f;   // 3.2V (~5%)
+    m_config.batteryCheckInterval = 10000;      // 10 seconds
     m_config.enableAutoSleep = true;
     m_config.enableDeepSleep = true;
     m_config.voltageCalibrationOffset = 0.0f;
+    m_config.lowBatteryLEDBrightness = 128;     // 50% brightness when low battery
 
     // Initialize battery status
     m_batteryStatus.voltage = 0.0f;
@@ -120,6 +121,28 @@ bool PowerManager::begin(const Config* config) {
 
     LOG_INFO("Power: Initialized (battery: %.2fV, %u%%)",
              m_batteryStatus.voltage, m_batteryStatus.percentage);
+
+    // Critical battery boot protection
+    // If battery is critical and not charging, show warning and shutdown
+    if (m_batteryStatus.critical && !m_batteryStatus.charging) {
+        LOG_ERROR("Power: Critical battery detected on boot (%.2fV), shutting down", m_batteryStatus.voltage);
+
+        #ifndef MOCK_MODE
+        // Flash LED 3 times as shutdown warning
+        pinMode(PIN_HAZARD_LED, OUTPUT);
+        for (int i = 0; i < 3; i++) {
+            // Use raw GPIO to avoid dependency on LED HAL
+            digitalWrite(PIN_HAZARD_LED, HIGH);
+            delay(200);
+            digitalWrite(PIN_HAZARD_LED, LOW);
+            delay(200);
+        }
+        #endif
+
+        // Enter deep sleep immediately (device will not wake until charged)
+        enterDeepSleep();
+        // Never returns
+    }
 
     return true;
 }
@@ -276,6 +299,7 @@ bool PowerManager::isCharging() {
 void PowerManager::handlePowerState() {
     switch (m_state) {
         case STATE_ACTIVE:
+        case STATE_MOTION_ALERT:
             // Check for battery issues
             if (m_batteryStatus.critical && !m_batteryStatus.charging) {
                 setState(STATE_CRITICAL_BATTERY);
@@ -284,13 +308,23 @@ void PowerManager::handlePowerState() {
             } else if (m_batteryStatus.charging) {
                 setState(STATE_CHARGING);
             } else if (m_config.enableAutoSleep && shouldEnterSleep()) {
-                // Enter light sleep if idle
-                enterLightSleep(m_config.lightSleepTimeout);
+                // Check if we should skip light sleep (go straight to deep sleep)
+                if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs == 0) {
+                    enterDeepSleep();
+                } else {
+                    enterLightSleep();
+                }
             }
             break;
 
         case STATE_LIGHT_SLEEP:
-            // Handled by sleep wake-up
+            // Check if should transition to deep sleep
+            if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs > 0) {
+                uint32_t timeInLightSleep = millis() - m_stateEnterTime;
+                if (timeInLightSleep >= m_config.lightSleepToDeepSleepMs) {
+                    enterDeepSleep();
+                }
+            }
             break;
 
         case STATE_DEEP_SLEEP:
@@ -346,8 +380,8 @@ void PowerManager::setState(PowerState newState) {
 bool PowerManager::shouldEnterSleep() {
     uint32_t idleTime = millis() - m_lastActivity;
 
-    // Check light sleep timeout
-    if (m_config.enableAutoSleep && idleTime >= m_config.lightSleepTimeout) {
+    // Check idle to light sleep timeout
+    if (m_config.enableAutoSleep && idleTime >= m_config.idleToLightSleepMs) {
         return true;
     }
 
@@ -415,7 +449,37 @@ void PowerManager::wakeUp() {
     m_stats.wakeCount++;
     m_lastActivity = millis();
 
+    #ifndef MOCK_MODE
+    // Detect wake source
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+
+    switch (wakeup_reason) {
+        case ESP_SLEEP_WAKEUP_EXT0:  // PIR sensor wake
+            LOG_INFO("Power: Wake source = PIR motion");
+            // PIR wake → Motion alert state (WiFi off, save battery)
+            setState(STATE_MOTION_ALERT);
+            break;
+
+        case ESP_SLEEP_WAKEUP_EXT1:  // Button wake
+            LOG_INFO("Power: Wake source = Button press");
+            // Button wake → Full active state (WiFi on)
+            setState(STATE_ACTIVE);
+            break;
+
+        case ESP_SLEEP_WAKEUP_TIMER:  // Timer wake
+            LOG_INFO("Power: Wake source = Timer");
+            setState(STATE_ACTIVE);
+            break;
+
+        default:  // Unknown wake or normal boot
+            LOG_INFO("Power: Wake source = Normal boot");
+            setState(STATE_ACTIVE);
+            break;
+    }
+    #else
+    // Mock mode: default to active
     setState(STATE_ACTIVE);
+    #endif
 
     if (m_onWake) {
         m_onWake();
@@ -518,6 +582,7 @@ void PowerManager::resetStats() {
 const char* PowerManager::getStateName(PowerState state) {
     switch (state) {
         case STATE_ACTIVE: return "ACTIVE";
+        case STATE_MOTION_ALERT: return "MOTION_ALERT";
         case STATE_LIGHT_SLEEP: return "LIGHT_SLEEP";
         case STATE_DEEP_SLEEP: return "DEEP_SLEEP";
         case STATE_LOW_BATTERY: return "LOW_BATTERY";

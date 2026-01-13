@@ -36,7 +36,8 @@ public:
      * @brief Power states
      */
     enum PowerState {
-        STATE_ACTIVE,          ///< Full power, all features enabled
+        STATE_ACTIVE,          ///< Full power, WiFi enabled, all features
+        STATE_MOTION_ALERT,    ///< Motion response only, WiFi off (battery saving)
         STATE_LIGHT_SLEEP,     ///< WiFi off, CPU 80MHz, quick wake
         STATE_DEEP_SLEEP,      ///< Deep sleep, wake on motion/button
         STATE_LOW_BATTERY,     ///< Battery < 20%, reduced features
@@ -72,14 +73,15 @@ public:
      * @brief Configuration
      */
     struct Config {
-        uint32_t lightSleepTimeout;       ///< Idle time before light sleep (ms, default: 30000)
-        uint32_t deepSleepTimeout;        ///< Idle time before deep sleep (ms, default: 300000)
-        float lowBatteryThreshold;        ///< Low battery voltage (V, default: 3.4V)
-        float criticalBatteryThreshold;   ///< Critical battery voltage (V, default: 3.2V)
-        uint32_t batteryCheckInterval;    ///< Battery check interval (ms, default: 10000)
-        bool enableAutoSleep;             ///< Enable automatic sleep (default: true)
-        bool enableDeepSleep;             ///< Enable deep sleep mode (default: true)
-        float voltageCalibrationOffset;   ///< Voltage calibration offset (V, default: 0.0)
+        uint32_t idleToLightSleepMs;         ///< Idle time before light sleep (ms, default: 180000 = 3min, range: 60000-600000)
+        uint32_t lightSleepToDeepSleepMs;    ///< Time in light sleep before deep sleep (ms, default: 60000 = 1min, 0 = skip light sleep)
+        float lowBatteryThreshold;           ///< Low battery voltage (V, default: 3.4V ~20%)
+        float criticalBatteryThreshold;      ///< Critical battery voltage (V, default: 3.2V ~5%)
+        uint32_t batteryCheckInterval;       ///< Battery check interval (ms, default: 10000)
+        bool enableAutoSleep;                ///< Enable automatic sleep (default: true)
+        bool enableDeepSleep;                ///< Enable deep sleep mode (default: true)
+        float voltageCalibrationOffset;      ///< Voltage calibration offset (V, default: 0.0)
+        uint8_t lowBatteryLEDBrightness;     ///< LED brightness when low battery (0-255, default: 128 = 50%)
     };
 
     /**
