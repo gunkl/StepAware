@@ -40,9 +40,14 @@ The WiFi Manager handles all WiFi connectivity for StepAware, including initial 
 2. Device detects disconnection
 3. Waits 5 seconds, attempts reconnect
 4. If fails, waits 10 seconds, tries again
-5. Exponential backoff up to 60 seconds
-6. After 10 failed attempts → Enter AP mode for reconfiguration
+5. Exponential backoff up to 60 seconds (max)
+6. Continues retrying indefinitely with 60s backoff
+7. Manual intervention required to reconfigure WiFi:
+   - Power cycle with 15-second button hold → WiFi reset
+   - Or use web API: POST /api/config (if reachable)
 ```
+
+**Note:** Automatic AP mode fallback is disabled by default to prevent unintended configuration loss during extended WiFi outages. The device will keep retrying with exponential backoff (capped at 60 seconds) until connectivity is restored or the user manually triggers a WiFi reset.
 
 ### Use Case 4: WiFi Disabled
 ```
@@ -285,10 +290,19 @@ bool WiFiManager::shouldReconnect() {
         return false;
     }
 
-    // Check if max attempts reached
-    if (m_status.failureCount >= m_config.maxReconnectAttempts) {
-        LOG_ERROR("WiFi: Max reconnect attempts reached, entering AP mode");
-        return false;  // Will trigger AP mode
+    // If AP mode on failure is disabled, allow infinite retries
+    if (!m_config.apModeOnFailure) {
+        // Cap failure count to prevent overflow
+        if (m_status.failureCount > m_config.maxReconnectAttempts) {
+            m_status.failureCount = m_config.maxReconnectAttempts;
+        }
+    } else {
+        // Check if max attempts reached (legacy behavior)
+        if (m_status.failureCount >= m_config.maxReconnectAttempts) {
+            LOG_ERROR("WiFi: Max reconnect attempts reached, entering AP mode");
+            setState(STATE_FAILED);
+            return false;
+        }
     }
 
     // Check if enough time has passed

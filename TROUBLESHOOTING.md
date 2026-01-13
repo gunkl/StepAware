@@ -824,13 +824,68 @@ curl -X POST http://<device-ip>/api/reset
 - Logs (cleared separately)
 - Hardware calibration
 
-### Factory Reset (Via Button)
+### WiFi Credential Reset (Via Button Hold at Boot)
 
-1. **Power on device**
-2. **Hold BOOT button for 10 seconds**
-3. **Serial shows:** `[Config] Factory reset requested`
-4. **Release button**
-5. **Device resets and reboots**
+If you need to reconfigure WiFi without losing other settings:
+
+1. **Power off device** (disconnect USB and battery)
+2. **Press and hold BOOT button** (GPIO0)
+3. **Power on device** (while holding button)
+4. **Keep holding for 15 seconds**
+   - LED will pulse slowly at first
+   - At 15 seconds, LED starts **fast blinking** (WiFi reset pending)
+5. **Release button to confirm WiFi reset**
+   - LED blinks 3 times (confirmation)
+   - Serial shows: `[RESET] WiFi credentials cleared`
+6. **Device enters AP mode** on next boot for reconfiguration
+
+**What Gets Reset:**
+- WiFi SSID (cleared)
+- WiFi password (cleared)
+
+**What Doesn't Change:**
+- Operating mode
+- LED brightness
+- All other settings
+- Logs
+- State machine counters
+
+### Full Factory Reset (Via Button Hold at Boot)
+
+If you need to completely reset the device to defaults:
+
+1. **Power off device** (disconnect USB and battery)
+2. **Press and hold BOOT button** (GPIO0)
+3. **Power on device** (while holding button)
+4. **Keep holding for 30 seconds**
+   - LED pulses slowly at first
+   - At 15 seconds: LED fast blinks (WiFi reset pending)
+   - At 30 seconds: LED goes **solid on** (Factory reset pending)
+5. **Release button to confirm factory reset**
+   - LED stays solid for 2 seconds (confirmation)
+   - Serial shows: `[RESET] FULL FACTORY RESET TRIGGERED`
+   - **Device reboots automatically**
+6. **All settings reset to defaults**
+
+**What Gets Reset:**
+- WiFi credentials (cleared)
+- Operating mode → MOTION_DETECT
+- LED brightness → 255 (full)
+- All thresholds → defaults
+- State machine counters → 0
+- All configuration → factory defaults
+
+**What Doesn't Change:**
+- Firmware version
+- Hardware calibration
+
+**⚠️ Warning:** Full factory reset cannot be undone. All custom configuration will be lost.
+
+**Visual Feedback Summary:**
+- **0-15s**: Slow pulse (detecting)
+- **15s**: Fast blink (WiFi reset ready)
+- **30s**: Solid on (Factory reset ready)
+- **After release**: 3 blinks (WiFi) or 2s solid (Factory) = Confirmed
 
 ### Firmware Recovery (Full Reflash)
 

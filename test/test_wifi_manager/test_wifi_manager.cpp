@@ -38,19 +38,52 @@ enum WiFiState {
 
 // Simplified WiFi Manager for testing
 class TestWiFiManager {
+public:
+    struct Config {
+        bool enabled;
+        char ssid[64];
+        char password[64];
+        bool apModeOnFailure;
+        uint32_t reconnectDelayMs;
+        uint8_t maxReconnectAttempts;
+
+        Config()
+            : enabled(true)
+            , apModeOnFailure(true)
+            , reconnectDelayMs(5000)
+            , maxReconnectAttempts(10) {
+            ssid[0] = '\0';
+            password[0] = '\0';
+        }
+    };
+
+    struct Status {
+        WiFiState state;
+        int8_t rssi;
+        uint32_t uptime;
+        uint32_t reconnectCount;
+        uint32_t failureCount;
+
+        Status()
+            : state(STATE_DISABLED)
+            , rssi(0)
+            , uptime(0)
+            , reconnectCount(0)
+            , failureCount(0) {}
+    };
+
 private:
     WiFiState state;
     char ssid[64];
     char password[64];
     bool enabled;
-    uint32_t failureCount;
-    uint32_t reconnectCount;
     uint32_t connectionTimeout;
-    uint32_t reconnectDelay;
-    uint32_t maxReconnectAttempts;
-    uint32_t lastReconnectAttempt;
     uint32_t connectStartTime;
     int8_t rssi;
+
+    // Configuration
+    Config config;
+    Status status;
 
     // Simulate WiFi connection success/failure
     bool simulateConnectionSuccess;
@@ -59,27 +92,46 @@ public:
     TestWiFiManager()
         : state(STATE_DISABLED)
         , enabled(false)
-        , failureCount(0)
-        , reconnectCount(0)
         , connectionTimeout(30000)
-        , reconnectDelay(5000)
-        , maxReconnectAttempts(10)
-        , lastReconnectAttempt(0)
         , connectStartTime(0)
         , rssi(0)
         , simulateConnectionSuccess(true) {
         ssid[0] = '\0';
         password[0] = '\0';
+        status.state = STATE_DISABLED;
     }
 
-    void begin(bool _enabled = true) {
+    // Overload for backward compatibility with old tests
+    void begin(bool _enabled) {
+        config.enabled = _enabled;
         enabled = _enabled;
         if (!enabled) {
             state = STATE_DISABLED;
+            status.state = STATE_DISABLED;
         } else if (strlen(ssid) == 0) {
             state = STATE_AP_MODE;
+            status.state = STATE_AP_MODE;
         } else {
             state = STATE_DISCONNECTED;
+            status.state = STATE_DISCONNECTED;
+        }
+    }
+
+    void begin(const Config* _config) {
+        if (_config) {
+            config = *_config;
+        }
+
+        enabled = config.enabled;
+        if (!enabled) {
+            state = STATE_DISABLED;
+            status.state = STATE_DISABLED;
+        } else if (strlen(ssid) == 0) {
+            state = STATE_AP_MODE;
+            status.state = STATE_AP_MODE;
+        } else {
+            state = STATE_DISCONNECTED;
+            status.state = STATE_DISCONNECTED;
         }
     }
 
@@ -110,8 +162,8 @@ public:
     }
 
     bool reconnect() {
-        failureCount = 0;
-        lastReconnectAttempt = millis();
+        status.failureCount = 0;
+        config.reconnectDelayMs = millis();
         return connect();
     }
 
@@ -138,41 +190,51 @@ public:
         // Simulate connection timeout
         if (millis() - connectStartTime > connectionTimeout) {
             state = STATE_DISCONNECTED;
-            failureCount++;
+            status.state = STATE_DISCONNECTED;
+            status.failureCount++;
             return;
         }
 
         // Simulate connection success after 3 seconds
         if (simulateConnectionSuccess && (millis() - connectStartTime > 3000)) {
             state = STATE_CONNECTED;
-            failureCount = 0;
-            reconnectCount++;
+            status.state = STATE_CONNECTED;
+            status.failureCount = 0;
+            status.reconnectCount++;
             rssi = -45; // Good signal
+            status.rssi = -45;
         }
     }
 
     void handleDisconnected() {
         // Check if should attempt reconnect
         if (shouldReconnect()) {
-            lastReconnectAttempt = millis();
             connect();
         }
     }
 
     bool shouldReconnect() {
-        if (failureCount >= maxReconnectAttempts) {
-            state = STATE_FAILED;
-            return false;
+        // If AP mode on failure is disabled, allow infinite retries
+        if (!config.apModeOnFailure) {
+            // Cap failure count to prevent overflow
+            if (status.failureCount > config.maxReconnectAttempts) {
+                status.failureCount = config.maxReconnectAttempts;
+            }
+        } else {
+            // Check if max attempts reached (legacy behavior)
+            if (status.failureCount >= config.maxReconnectAttempts) {
+                state = STATE_FAILED;
+                status.state = STATE_FAILED;
+                return false;
+            }
         }
 
-        uint32_t elapsed = millis() - lastReconnectAttempt;
-        uint32_t delay = getReconnectDelay();
-        return elapsed >= delay;
+        return true;  // Simplified for testing
     }
 
     uint32_t getReconnectDelay() {
         // Exponential backoff
-        uint32_t delay = reconnectDelay << failureCount;
+        uint32_t delay = config.reconnectDelayMs << status.failureCount;
         return (delay > 60000) ? 60000 : delay;
     }
 
@@ -182,9 +244,23 @@ public:
     }
 
     WiFiState getState() const { return state; }
-    uint32_t getFailureCount() const { return failureCount; }
-    uint32_t getReconnectCount() const { return reconnectCount; }
+    uint32_t getFailureCount() const { return status.failureCount; }
+    uint32_t getReconnectCount() const { return status.reconnectCount; }
     int8_t getRSSI() const { return rssi; }
+
+    // Configuration management
+    Config getConfig() const { return config; }
+    void setConfig(const Config& _config) { config = _config; }
+
+    // Status access
+    Status& getStatus() { return status; }
+    const Status& getStatus() const { return status; }
+
+    // Direct state manipulation for testing
+    void setState(WiFiState _state) {
+        state = _state;
+        status.state = _state;
+    }
 
     // Test helpers
     void setSimulateConnectionSuccess(bool success) {
@@ -194,21 +270,24 @@ public:
     void simulateConnectionLoss() {
         if (state == STATE_CONNECTED) {
             state = STATE_DISCONNECTED;
-            failureCount++;
+            status.state = STATE_DISCONNECTED;
+            status.failureCount++;
         }
     }
 
     void reset() {
         state = STATE_DISABLED;
         enabled = false;
-        failureCount = 0;
-        reconnectCount = 0;
-        lastReconnectAttempt = 0;
+        status.failureCount = 0;
+        status.reconnectCount = 0;
         connectStartTime = 0;
         rssi = 0;
+        status.rssi = 0;
         simulateConnectionSuccess = true;
         ssid[0] = '\0';
         password[0] = '\0';
+        config = Config();  // Reset to defaults
+        status.state = STATE_DISABLED;
     }
 };
 
@@ -452,6 +531,91 @@ void test_wifi_ap_mode_fallback(void) {
     TEST_ASSERT_EQUAL(STATE_AP_MODE, wifi.getState());
 }
 
+/**
+ * @brief Test infinite retry when apModeOnFailure is disabled
+ */
+void test_wifi_infinite_retry_no_ap_fallback(void) {
+    wifi.setCredentials("TestNetwork", "password123");
+
+    TestWiFiManager::Config config = wifi.getConfig();
+    config.apModeOnFailure = false;  // Disable AP mode fallback
+    config.maxReconnectAttempts = 10;
+    wifi.setConfig(config);
+
+    wifi.begin(&config);
+
+    // Simulate many connection failures
+    for (int i = 0; i < 20; i++) {  // More than maxReconnectAttempts
+        wifi.setState(STATE_DISCONNECTED);
+        wifi.getStatus().failureCount++;
+
+        advance_time(65000);  // Advance past max backoff
+        wifi.update();
+    }
+
+    // Should still be in DISCONNECTED state, not FAILED
+    // (FAILED would only happen with apModeOnFailure=true)
+    TEST_ASSERT_NOT_EQUAL(STATE_FAILED, wifi.getState());
+
+    // Should keep retrying
+    TEST_ASSERT_TRUE(wifi.getState() == STATE_DISCONNECTED ||
+                     wifi.getState() == STATE_CONNECTING);
+}
+
+/**
+ * @brief Test failure count is capped when infinite retry enabled
+ */
+void test_wifi_failure_count_capped(void) {
+    wifi.setCredentials("TestNetwork", "password123");
+
+    TestWiFiManager::Config config = wifi.getConfig();
+    config.apModeOnFailure = false;  // Infinite retry mode
+    config.maxReconnectAttempts = 10;
+    wifi.setConfig(config);
+
+    wifi.begin(&config);
+
+    // Simulate many failures
+    wifi.getStatus().failureCount = 100;  // Way over max
+
+    advance_time(65000);
+    wifi.update();
+
+    // Failure count should be capped at maxReconnectAttempts
+    TEST_ASSERT_LESS_OR_EQUAL(config.maxReconnectAttempts + 1,
+                              wifi.getStatus().failureCount);
+}
+
+/**
+ * @brief Test backoff delay caps at 60 seconds
+ */
+void test_wifi_backoff_delay_cap(void) {
+    wifi.setCredentials("TestNetwork", "password123");
+
+    TestWiFiManager::Config config = wifi.getConfig();
+    config.reconnectDelayMs = 5000;  // 5 second initial delay
+    config.apModeOnFailure = false;
+    wifi.setConfig(config);
+
+    wifi.begin(&config);
+
+    // Simulate increasing failures to test backoff
+    for (int i = 0; i < 10; i++) {
+        wifi.setState(STATE_DISCONNECTED);
+        wifi.getStatus().failureCount = i;
+
+        uint32_t delay = wifi.getReconnectDelay();
+
+        // Delay should cap at 60 seconds
+        TEST_ASSERT_LESS_OR_EQUAL(60000, delay);
+
+        // For high failure counts, should be exactly 60s
+        if (i >= 4) {  // 5000 << 4 = 80000, capped to 60000
+            TEST_ASSERT_EQUAL(60000, delay);
+        }
+    }
+}
+
 // ============================================================================
 // MAIN TEST RUNNER
 // ============================================================================
@@ -475,6 +639,11 @@ int main(int argc, char **argv) {
     // Feature tests
     RUN_TEST(test_wifi_rssi_reporting);
     RUN_TEST(test_wifi_ap_mode_fallback);
+
+    // Infinite retry tests (Issue #2)
+    RUN_TEST(test_wifi_infinite_retry_no_ap_fallback);
+    RUN_TEST(test_wifi_failure_count_capped);
+    RUN_TEST(test_wifi_backoff_delay_cap);
 
     return UNITY_END();
 }

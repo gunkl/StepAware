@@ -167,6 +167,18 @@ public:
      */
     const char* getLastError() const;
 
+    /**
+     * @brief Set WiFi credentials only (preserves other settings)
+     *
+     * Updates only the WiFi SSID and password fields, leaving all other
+     * configuration unchanged. Useful for WiFi-only resets.
+     *
+     * @param ssid WiFi SSID (empty string to clear)
+     * @param password WiFi password (empty string to clear)
+     * @return true if credentials updated successfully
+     */
+    bool setWiFiCredentials(const char* ssid, const char* password);
+
 private:
     Config m_config;                       ///< Current configuration
     bool m_initialized;                    ///< Initialization complete
