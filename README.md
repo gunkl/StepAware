@@ -6,7 +6,7 @@
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 ![Build](https://github.com/yourusername/StepAware/workflows/CI%2FCD%20Pipeline/badge.svg)
-![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-95%20passing-brightgreen)
 
 ## Overview
 
@@ -306,19 +306,20 @@ For AI-assisted development, see [AGENTS.md](AGENTS.md) for development workflow
 
 ## Testing
 
-The project includes comprehensive testing infrastructure with **85 tests** across 7 test suites:
+The project includes comprehensive testing infrastructure with **95 tests** across 8 test suites:
 
 ### Test Suite Breakdown
 
 | Test Suite | Tests | Coverage |
 |------------|-------|----------|
+| **Button Reset** | 7 | WiFi/factory reset timing, threshold detection, LED feedback |
 | **HAL Button** | 6 | Button debouncing, state changes, press detection |
-| **HAL LED** | 14 | LED patterns, brightness, PWM control, smooth pulsing |
 | **Integration** | 14 | Multi-component interaction, system scenarios |
 | **Power Manager** | 20 | Battery monitoring, power states, sleep modes, filtering |
 | **State Machine** | 10 | Mode transitions, motion detection, warning behavior |
 | **Web API** | 12 | Component integration, status reporting, mock components |
-| **WiFi Manager** | 11 | Connection states, reconnection, RSSI monitoring |
+| **WiFi Manager** | 14 | Connection states, reconnection, RSSI monitoring |
+| **WiFi Watchdog** | 12 | WiFi health monitoring, signal strength, recovery actions |
 
 ### Testing Infrastructure
 
