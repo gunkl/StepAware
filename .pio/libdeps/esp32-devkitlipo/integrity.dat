@@ -1,4 +1,4 @@
+esp32async/ESPAsyncWebServer @ ^3.0.0
+esp32async/AsyncTCP @ ^3.0.0
 bblanchon/ArduinoJson @ ^6.21.3
-me-no-dev/AsyncTCP @ ^1.1.1
-me-no-dev/ESPAsyncWebServer @ ^1.2.3
 adafruit/Adafruit Unified Sensor @ ^1.1.14
