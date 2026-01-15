@@ -232,19 +232,50 @@ docker-compose run --rm stepaware-dev pio test -e native
 - Production secrets
 - Proprietary business logic (if applicable)
 
+## GitHub Issues
+
+### IMPORTANT: Always Create Issues
+
+**Claude MUST create GitHub issues for all new features and bug fixes** before or immediately after implementation:
+
+```bash
+# Create issue for new feature
+gh issue create --title "Feature: Description" --body "..."
+
+# Create issue for bug fix
+gh issue create --title "Fix: Description" --body "..."
+```
+
+### Issue Requirements
+- Every feature/fix should have a tracking issue
+- Include summary, requirements, implementation checklist
+- Update issue status when work is complete
+- Reference related issues when applicable
+
+### Example Workflow
+```
+1. User requests feature
+2. Claude creates GitHub issue with requirements
+3. Claude implements feature
+4. Claude updates issue with completion status
+5. User reviews and commits
+```
+
 ## Common Tasks
 
 ### Adding a New Feature
 
 ```
 1. You: "I want to add feature X"
-2. Claude: Suggests implementation approach
-3. You: Review and approve approach
-4. Claude: Creates files and writes code
-5. You: Test with Docker
-6. Claude: Fixes issues if tests fail
-7. You: Review final code
-8. You: Commit changes yourself
+2. Claude: Creates GitHub issue to track the work
+3. Claude: Suggests implementation approach
+4. You: Review and approve approach
+5. Claude: Creates files and writes code
+6. You: Test with Docker
+7. Claude: Fixes issues if tests fail
+8. Claude: Updates GitHub issue with completion status
+9. You: Review final code
+10. You: Commit changes yourself
 ```
 
 ### Debugging
