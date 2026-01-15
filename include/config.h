@@ -27,9 +27,9 @@
 #define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
 #define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
 
-// Reserved Pins
-#define PIN_RESERVED_1      8    // Reserved for future expansion
-#define PIN_RESERVED_2      9    // Reserved for future expansion
+// Ultrasonic Sensor Pins (optional, for HC-SR04)
+#define PIN_ULTRASONIC_TRIGGER  8    // Ultrasonic trigger pin (GPIO8)
+#define PIN_ULTRASONIC_ECHO     9    // Ultrasonic echo pin (GPIO9)
 
 // ============================================================================
 // System Constants
