@@ -248,6 +248,43 @@ public:
      */
     void setDirectionSensitivity(uint32_t sensitivity_mm);
 
+    /**
+     * @brief Set distance range for detection (min/max thresholds)
+     *
+     * @param min_mm Minimum detection distance in millimeters
+     * @param max_mm Maximum detection distance in millimeters
+     */
+    void setDistanceRange(uint32_t min_mm, uint32_t max_mm) override;
+
+    /**
+     * @brief Get minimum detection distance
+     *
+     * @return Minimum detection distance in millimeters
+     */
+    uint32_t getMinDistance() const override { return m_minDistance; }
+
+    /**
+     * @brief Get maximum detection distance
+     *
+     * @return Maximum detection distance in millimeters
+     */
+    uint32_t getMaxDistance() const override { return m_maxDistance; }
+
+    /**
+     * @brief Enable rapid sampling mode for direction detection
+     *
+     * @param sample_count Number of samples to take (2-20)
+     * @param interval_ms Interval between samples in milliseconds
+     */
+    void setRapidSampling(uint8_t sample_count, uint16_t interval_ms) override;
+
+    /**
+     * @brief Trigger rapid sampling sequence
+     *
+     * Immediately takes rapid samples and updates direction.
+     */
+    void triggerRapidSample() override;
+
 private:
     // Pin configuration
     uint8_t m_triggerPin;           ///< GPIO pin for trigger
@@ -259,12 +296,18 @@ private:
     uint32_t m_currentDistance;     ///< Current distance reading (mm)
     uint32_t m_lastDistance;        ///< Previous distance reading (mm)
     uint32_t m_detectionThreshold;  ///< Distance threshold for detection (mm)
+    uint32_t m_minDistance;         ///< Minimum detection distance (mm)
+    uint32_t m_maxDistance;         ///< Maximum detection distance (mm)
     bool m_objectDetected;          ///< Object within threshold
 
     // Direction detection
     bool m_directionEnabled;        ///< Direction detection enabled
     MotionDirection m_direction;    ///< Current direction
     uint32_t m_directionSensitivity;///< Min change for direction (mm)
+
+    // Rapid sampling
+    uint8_t m_rapidSampleCount;     ///< Number of rapid samples
+    uint16_t m_rapidSampleMs;       ///< Interval between rapid samples
 
     // Event tracking
     MotionEvent m_lastEvent;        ///< Last event type
@@ -292,6 +335,14 @@ private:
      * @brief Update direction based on distance change
      */
     void updateDirection();
+
+    /**
+     * @brief Update direction based on multiple samples
+     *
+     * @param samples Array of distance samples
+     * @param count Number of samples
+     */
+    void updateDirectionFromSamples(const uint32_t* samples, uint8_t count);
 
     /**
      * @brief Check for threshold crossing events

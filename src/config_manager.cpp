@@ -186,6 +186,14 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     light["thresholdDark"] = m_config.lightThresholdDark;
     light["thresholdBright"] = m_config.lightThresholdBright;
 
+    // Distance Sensor
+    JsonObject sensor = doc.createNestedObject("sensor");
+    sensor["minDistance"] = m_config.sensorMinDistance;
+    sensor["maxDistance"] = m_config.sensorMaxDistance;
+    sensor["directionEnabled"] = m_config.sensorDirectionEnabled;
+    sensor["rapidSampleCount"] = m_config.sensorRapidSampleCount;
+    sensor["rapidSampleMs"] = m_config.sensorRapidSampleMs;
+
     // WiFi
     JsonObject wifi = doc.createNestedObject("wifi");
     wifi["ssid"] = m_config.wifiSSID;
@@ -269,6 +277,15 @@ bool ConfigManager::fromJSON(const char* json) {
         m_config.lightThresholdBright = doc["light"]["thresholdBright"] | LIGHT_THRESHOLD_BRIGHT;
     }
 
+    // Distance Sensor
+    if (doc.containsKey("sensor")) {
+        m_config.sensorMinDistance = doc["sensor"]["minDistance"] | SENSOR_MIN_DISTANCE_CM;
+        m_config.sensorMaxDistance = doc["sensor"]["maxDistance"] | SENSOR_MAX_DISTANCE_CM;
+        m_config.sensorDirectionEnabled = doc["sensor"]["directionEnabled"] | SENSOR_DIRECTION_ENABLED;
+        m_config.sensorRapidSampleCount = doc["sensor"]["rapidSampleCount"] | SENSOR_RAPID_SAMPLE_COUNT;
+        m_config.sensorRapidSampleMs = doc["sensor"]["rapidSampleMs"] | SENSOR_RAPID_SAMPLE_MS;
+    }
+
     // WiFi
     if (doc.containsKey("wifi")) {
         strlcpy(m_config.wifiSSID, doc["wifi"]["ssid"] | "", sizeof(m_config.wifiSSID));
@@ -336,6 +353,14 @@ void ConfigManager::print() {
     Serial.printf("  Critical: %u mV\n", m_config.batteryVoltageCritical);
     Serial.println();
 
+    Serial.println("Distance Sensor:");
+    Serial.printf("  Min Distance: %u cm\n", m_config.sensorMinDistance);
+    Serial.printf("  Max Distance: %u cm\n", m_config.sensorMaxDistance);
+    Serial.printf("  Direction Enabled: %s\n", m_config.sensorDirectionEnabled ? "YES" : "NO");
+    Serial.printf("  Rapid Sample Count: %u\n", m_config.sensorRapidSampleCount);
+    Serial.printf("  Rapid Sample Interval: %u ms\n", m_config.sensorRapidSampleMs);
+    Serial.println();
+
     Serial.println("WiFi:");
     Serial.printf("  Enabled: %s\n", m_config.wifiEnabled ? "YES" : "NO");
     Serial.printf("  SSID: %s\n", m_config.wifiSSID[0] ? m_config.wifiSSID : "(not set)");
@@ -385,6 +410,13 @@ void ConfigManager::loadDefaults() {
     // Light Sensor
     m_config.lightThresholdDark = LIGHT_THRESHOLD_DARK;
     m_config.lightThresholdBright = LIGHT_THRESHOLD_BRIGHT;
+
+    // Distance Sensor
+    m_config.sensorMinDistance = SENSOR_MIN_DISTANCE_CM;
+    m_config.sensorMaxDistance = SENSOR_MAX_DISTANCE_CM;
+    m_config.sensorDirectionEnabled = SENSOR_DIRECTION_ENABLED;
+    m_config.sensorRapidSampleCount = SENSOR_RAPID_SAMPLE_COUNT;
+    m_config.sensorRapidSampleMs = SENSOR_RAPID_SAMPLE_MS;
 
     // WiFi
     strlcpy(m_config.wifiSSID, "", sizeof(m_config.wifiSSID));
@@ -450,6 +482,32 @@ bool ConfigManager::validateParameters() {
     // Log level
     if (m_config.logLevel > LOG_LEVEL_NONE) {
         setError("Invalid log level");
+        return false;
+    }
+
+    // Distance sensor
+    if (m_config.sensorMinDistance < 10 || m_config.sensorMinDistance > 500) {
+        setError("Invalid sensor min distance (10-500cm)");
+        return false;
+    }
+
+    if (m_config.sensorMaxDistance < 20 || m_config.sensorMaxDistance > 500) {
+        setError("Invalid sensor max distance (20-500cm)");
+        return false;
+    }
+
+    if (m_config.sensorMinDistance >= m_config.sensorMaxDistance) {
+        setError("Sensor min distance must be less than max distance");
+        return false;
+    }
+
+    if (m_config.sensorRapidSampleCount < 2 || m_config.sensorRapidSampleCount > 20) {
+        setError("Invalid rapid sample count (2-20)");
+        return false;
+    }
+
+    if (m_config.sensorRapidSampleMs < 50 || m_config.sensorRapidSampleMs > 1000) {
+        setError("Invalid rapid sample interval (50-1000ms)");
         return false;
     }
 

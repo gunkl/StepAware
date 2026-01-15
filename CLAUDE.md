@@ -249,7 +249,7 @@ gh issue create --title "Fix: Description" --body "..."
 ### Issue Requirements
 - Every feature/fix should have a tracking issue
 - Include summary, requirements, implementation checklist
-- Update issue status when work is complete
+- Update issue status when work is complete, provide user with brief commit summary including github issue reference
 - Reference related issues when applicable
 
 ### Example Workflow
@@ -274,8 +274,9 @@ gh issue create --title "Fix: Description" --body "..."
 6. You: Test with Docker
 7. Claude: Fixes issues if tests fail
 8. Claude: Updates GitHub issue with completion status
-9. You: Review final code
-10. You: Commit changes yourself
+9. Claude: Provide a brief commit summary including github issue
+10. You: Review final code
+11. You: Commit changes yourself
 ```
 
 ### Debugging
