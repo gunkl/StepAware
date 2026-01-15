@@ -15,7 +15,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "state_machine.h"
-#include "hal_pir.h"
+#include "sensor_factory.h"
 #include "hal_led.h"
 #include "hal_button.h"
 
@@ -23,13 +23,15 @@
 // Global Hardware Objects
 // ============================================================================
 
-HAL_PIR pirSensor(PIN_PIR_SENSOR, MOCK_HARDWARE);
+// Motion sensor (created via factory for runtime flexibility)
+HAL_MotionSensor* motionSensor = nullptr;
+
 HAL_LED hazardLED(PIN_HAZARD_LED, LED_PWM_CHANNEL, MOCK_HARDWARE);
 HAL_LED statusLED(PIN_STATUS_LED, LED_PWM_CHANNEL + 1, MOCK_HARDWARE);
 HAL_Button modeButton(PIN_BUTTON, BUTTON_DEBOUNCE_MS, 1000, MOCK_HARDWARE);
 
-// State Machine
-StateMachine stateMachine(&pirSensor, &hazardLED, &statusLED, &modeButton);
+// State Machine (initialized after sensor creation)
+StateMachine* stateMachine = nullptr;
 
 // ============================================================================
 // System Status Reporting
@@ -45,23 +47,42 @@ void printStatus() {
 
     Serial.printf("Firmware: %s v%s\n", FIRMWARE_NAME, FIRMWARE_VERSION);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
-    Serial.printf("Uptime: %u seconds\n", stateMachine.getUptimeSeconds());
+    Serial.printf("Uptime: %u seconds\n", stateMachine->getUptimeSeconds());
     Serial.println();
 
     Serial.printf("Operating Mode: %s\n",
-                  StateMachine::getModeName(stateMachine.getMode()));
-    Serial.printf("Warning Active: %s\n", stateMachine.isWarningActive() ? "YES" : "NO");
+                  StateMachine::getModeName(stateMachine->getMode()));
+    Serial.printf("Warning Active: %s\n", stateMachine->isWarningActive() ? "YES" : "NO");
     Serial.println();
 
-    Serial.printf("PIR Sensor Ready: %s\n", pirSensor.isReady() ? "YES" : "NO");
-    if (!pirSensor.isReady()) {
+    // Sensor info (polymorphic)
+    const SensorCapabilities& caps = motionSensor->getCapabilities();
+    Serial.printf("Sensor: %s\n", caps.sensorTypeName);
+    Serial.printf("  Ready: %s\n", motionSensor->isReady() ? "YES" : "NO");
+    if (!motionSensor->isReady() && caps.requiresWarmup) {
         Serial.printf("  Warmup remaining: %u seconds\n",
-                      pirSensor.getWarmupTimeRemaining() / 1000);
+                      motionSensor->getWarmupTimeRemaining() / 1000);
     }
-    Serial.printf("  Motion Events: %u\n", stateMachine.getMotionEventCount());
+    // Show distance if sensor supports it
+    if (caps.supportsDistanceMeasurement) {
+        Serial.printf("  Distance: %u mm\n", motionSensor->getDistance());
+        Serial.printf("  Threshold: %u mm\n", motionSensor->getDetectionThreshold());
+    }
+    // Show direction if sensor supports it
+    if (caps.supportsDirectionDetection) {
+        const char* dirName = "Unknown";
+        switch (motionSensor->getDirection()) {
+            case DIRECTION_STATIONARY: dirName = "Stationary"; break;
+            case DIRECTION_APPROACHING: dirName = "Approaching"; break;
+            case DIRECTION_RECEDING: dirName = "Receding"; break;
+            default: break;
+        }
+        Serial.printf("  Direction: %s\n", dirName);
+    }
+    Serial.printf("  Motion Events: %u\n", stateMachine->getMotionEventCount());
     Serial.println();
 
-    Serial.printf("Mode Changes: %u\n", stateMachine.getModeChangeCount());
+    Serial.printf("Mode Changes: %u\n", stateMachine->getModeChangeCount());
     Serial.printf("Button Clicks: %u\n", modeButton.getClickCount());
     Serial.println();
 
@@ -87,7 +108,8 @@ void printBanner() {
     Serial.printf("Version: %s\n", FIRMWARE_VERSION);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
     Serial.printf("Board: ESP32-C3-DevKit-Lipo\n");
-    Serial.printf("Sensor: AM312 PIR\n");
+    Serial.printf("Sensor: %s\n", motionSensor ?
+                  motionSensor->getCapabilities().sensorTypeName : "Not initialized");
     Serial.println();
 
 #if MOCK_HARDWARE
@@ -121,16 +143,22 @@ void printHelp() {
     Serial.println("Serial Commands (type in Serial Monitor):");
     Serial.println("  s - Print system status");
     Serial.println("  h - Print this help");
-    Serial.println("  m - Trigger motion (mock mode only)");
-    Serial.println("  b - Simulate button press (mock mode only)");
     Serial.println("  0 - Set mode to OFF");
     Serial.println("  1 - Set mode to CONTINUOUS_ON");
     Serial.println("  2 - Set mode to MOTION_DETECT");
     Serial.println("  r - Reset statistics");
+#if MOCK_HARDWARE
+    Serial.println();
+    Serial.println("Mock Mode Commands:");
+    Serial.println("  m - Trigger mock motion");
+    Serial.println("  c - Clear mock motion");
+    Serial.println("  d - Set mock distance (ultrasonic only)");
+    Serial.println("  b - Simulate button press");
+#endif
     Serial.println();
     Serial.println("Hardware:");
     Serial.println("  Button - Press to cycle modes");
-    Serial.println("  PIR Sensor - Detects motion");
+    Serial.printf("  Sensor - %s\n", motionSensor->getCapabilities().sensorTypeName);
     Serial.println("  Hazard LED - Warning indicator");
     Serial.println("  Status LED - Mode indicator");
     Serial.println();
@@ -161,31 +189,48 @@ void processSerialCommand() {
 
         case '0':
             Serial.println("[Command] Setting mode to OFF");
-            stateMachine.setMode(StateMachine::OFF);
+            stateMachine->setMode(StateMachine::OFF);
             break;
 
         case '1':
             Serial.println("[Command] Setting mode to CONTINUOUS_ON");
-            stateMachine.setMode(StateMachine::CONTINUOUS_ON);
+            stateMachine->setMode(StateMachine::CONTINUOUS_ON);
             break;
 
         case '2':
             Serial.println("[Command] Setting mode to MOTION_DETECT");
-            stateMachine.setMode(StateMachine::MOTION_DETECT);
+            stateMachine->setMode(StateMachine::MOTION_DETECT);
             break;
 
         case 'r':
         case 'R':
             Serial.println("[Command] Resetting statistics");
-            pirSensor.resetMotionEventCount();
+            motionSensor->resetEventCount();
             modeButton.resetClickCount();
             break;
 
 #if MOCK_HARDWARE
         case 'm':
         case 'M':
-            Serial.println("[Command] Triggering mock motion (15 seconds)");
-            pirSensor.mockTriggerMotion(15000);
+            Serial.println("[Command] Triggering mock motion");
+            motionSensor->mockSetMotion(true);
+            break;
+
+        case 'c':
+        case 'C':
+            Serial.println("[Command] Clearing mock motion");
+            motionSensor->mockSetMotion(false);
+            break;
+
+        case 'd':
+        case 'D':
+            // Set mock distance (for ultrasonic testing)
+            if (motionSensor->getCapabilities().supportsDistanceMeasurement) {
+                Serial.println("[Command] Setting mock distance to 250mm");
+                motionSensor->mockSetDistance(250);
+            } else {
+                Serial.println("[Command] Distance not supported by this sensor");
+            }
             break;
 
         case 'b':
@@ -258,7 +303,9 @@ void performFactoryReset() {
     // is integrated into main.cpp
 
     // Reset state machine counters
-    pirSensor.resetMotionEventCount();
+    if (motionSensor) {
+        motionSensor->resetEventCount();
+    }
     modeButton.resetClickCount();
 
     // Solid LED for 2 seconds to confirm factory reset
@@ -353,15 +400,26 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     delay(1000);  // Allow serial to stabilize
 
-    // Print startup banner
-    printBanner();
-
     Serial.println("[Setup] Initializing StepAware...");
 
-    // Initialize hardware HALs
-    Serial.println("[Setup] Initializing PIR sensor...");
-    if (!pirSensor.begin()) {
-        Serial.println("[Setup] ERROR: Failed to initialize PIR sensor");
+    // Create motion sensor via factory
+    Serial.printf("[Setup] Creating %s sensor...\n",
+                  getSensorTypeName(ACTIVE_SENSOR_TYPE));
+    motionSensor = SensorFactory::createFromType(ACTIVE_SENSOR_TYPE, MOCK_HARDWARE);
+    if (!motionSensor) {
+        Serial.println("[Setup] ERROR: Failed to create motion sensor");
+        Serial.printf("[Setup] Sensor type %d not supported\n", ACTIVE_SENSOR_TYPE);
+        while (1) { delay(1000); }
+    }
+
+    // Print startup banner (now that sensor is created)
+    printBanner();
+
+    // Initialize motion sensor
+    Serial.printf("[Setup] Initializing %s...\n",
+                  motionSensor->getCapabilities().sensorTypeName);
+    if (!motionSensor->begin()) {
+        Serial.println("[Setup] ERROR: Failed to initialize motion sensor");
         while (1) { delay(1000); }
     }
 
@@ -389,9 +447,16 @@ void setup() {
         handleBootButtonHold();
     }
 
-    // Initialize state machine
+    // Create and initialize state machine
+    Serial.println("[Setup] Creating state machine...");
+    stateMachine = new StateMachine(motionSensor, &hazardLED, &statusLED, &modeButton);
+    if (!stateMachine) {
+        Serial.println("[Setup] ERROR: Failed to allocate state machine");
+        while (1) { delay(1000); }
+    }
+
     Serial.println("[Setup] Initializing state machine...");
-    if (!stateMachine.begin(StateMachine::MOTION_DETECT)) {
+    if (!stateMachine->begin(StateMachine::MOTION_DETECT)) {
         Serial.println("[Setup] ERROR: Failed to initialize state machine");
         while (1) { delay(1000); }
     }
@@ -422,8 +487,11 @@ void setup() {
 }
 
 void loop() {
+    // Update motion sensor (required for sensors that need polling)
+    motionSensor->update();
+
     // Update state machine (handles all hardware and logic)
-    stateMachine.update();
+    stateMachine->update();
 
     // Process serial commands
     processSerialCommand();

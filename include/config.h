@@ -32,6 +32,21 @@
 #define PIN_ULTRASONIC_ECHO     9    // Ultrasonic echo pin (GPIO9)
 
 // ============================================================================
+// Sensor Selection
+// ============================================================================
+// Select which motion sensor to use at compile time.
+// Options: SENSOR_TYPE_PIR, SENSOR_TYPE_ULTRASONIC
+// Default: SENSOR_TYPE_PIR (AM312 PIR sensor)
+
+#ifndef ACTIVE_SENSOR_TYPE
+#define ACTIVE_SENSOR_TYPE      SENSOR_TYPE_PIR
+#endif
+
+// Ultrasonic sensor configuration (when using SENSOR_TYPE_ULTRASONIC)
+#define ULTRASONIC_THRESHOLD_MM     500     // Detection threshold: 50cm
+#define ULTRASONIC_INTERVAL_MS      60      // Measurement interval: 60ms minimum
+
+// ============================================================================
 // System Constants
 // ============================================================================
 

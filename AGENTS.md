@@ -102,6 +102,7 @@ When implementing features, always check which phase they belong to and ensure p
   - Integration tests for subsystems
   - Assisted tests for hardware-dependent features
   - Mock hardware implementations for development without physical devices
+  - After making code changes, always validate with local tests, and review the github pipeline for any failures.  Always provide a brief commit summary with markup to ensure github captures the github issue associated with the change.
 - **CONFIGURABILITY**: All settings must be configurable via:
   1. Physical device controls (buttons)
   2. Configuration files on device
@@ -111,9 +112,9 @@ When implementing features, always check which phase they belong to and ensure p
   - Track version history in documentation
 - **BUG PROCESS**: Follow systematic bug handling:
   1. Investigate and document the issue
-  2. Create GitHub issue with analysis
+  2. Always offer to create GitHub issue with analysis, summarize to the user what the github issue would be and ask for confirmation.
   3. Implement fix with tests
-  4. Validate fix passes all tests
+  4. Validate fix passes all tests, check github actions pipeline results from the run.
   5. Close issue with commit reference
 
 ### Testing Infrastructure

@@ -43,7 +43,14 @@
       "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native)",
       "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native -f test_state_machine -vvv)",
       "Bash(g++:*)",
-      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native --ignore=* -vvv)"
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native --ignore=* -vvv)",
+      "Bash(cmd /c \"pio run\")",
+      "Bash(\"%USERPROFILE%\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run)",
+      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run)",
+      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe test -e native)",
+      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe test -e native -f test_hal_motion_sensor -vvv)",
+      "Bash(C:/msys64/mingw64/bin/g++:*)",
+      "Bash(docker-compose:*)"
     ]
   }
 }

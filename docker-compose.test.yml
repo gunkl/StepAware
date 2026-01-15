@@ -1,0 +1,39 @@
+# Docker Compose for StepAware testing
+# Usage:
+#   docker-compose -f docker-compose.test.yml run test        # Run all native tests
+#   docker-compose -f docker-compose.test.yml run test-single # Run specific test
+#   docker-compose -f docker-compose.test.yml run build       # Build ESP32 firmware
+
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - pio-cache:/root/.platformio
+    command: ["pio", "test", "-e", "native", "-v"]
+
+  test-single:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - pio-cache:/root/.platformio
+    # Override with: docker-compose run test-single pio test -e native -f test_hal_ultrasonic
+    entrypoint: []
+    command: ["pio", "test", "-e", "native", "-f", "test_hal_motion_sensor", "-v"]
+
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - pio-cache:/root/.platformio
+    command: ["pio", "run", "-e", "esp32-devkitlipo"]
+
+volumes:
+  pio-cache:
+    name: stepaware-pio-cache
