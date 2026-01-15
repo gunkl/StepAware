@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
-#include "hal_pir.h"
+#include "hal_motion_sensor.h"
 #include "hal_led.h"
 #include "hal_button.h"
 
@@ -64,12 +64,12 @@ public:
     /**
      * @brief Construct a new StateMachine object
      *
-     * @param pirSensor Pointer to PIR sensor HAL
+     * @param motionSensor Pointer to motion sensor HAL (polymorphic)
      * @param hazardLED Pointer to hazard LED HAL
      * @param statusLED Pointer to status LED HAL
      * @param button Pointer to button HAL
      */
-    StateMachine(HAL_PIR* pirSensor,
+    StateMachine(HAL_MotionSensor* motionSensor,
                  HAL_LED* hazardLED,
                  HAL_LED* statusLED,
                  HAL_Button* button);
@@ -175,10 +175,10 @@ public:
 
 private:
     // Hardware interfaces
-    HAL_PIR* m_pirSensor;       ///< PIR motion sensor
-    HAL_LED* m_hazardLED;       ///< Hazard warning LED
-    HAL_LED* m_statusLED;       ///< Status indicator LED
-    HAL_Button* m_button;        ///< Mode button
+    HAL_MotionSensor* m_motionSensor; ///< Motion sensor (polymorphic)
+    HAL_LED* m_hazardLED;             ///< Hazard warning LED
+    HAL_LED* m_statusLED;             ///< Status indicator LED
+    HAL_Button* m_button;             ///< Mode button
 
     // State
     OperatingMode m_currentMode; ///< Current operating mode
@@ -195,9 +195,9 @@ private:
     uint32_t m_motionEvents;     ///< Total motion events
     uint32_t m_modeChanges;      ///< Total mode changes
 
-    // PIR sensor state tracking
+    // Motion sensor state tracking
     bool m_lastMotionState;      ///< Previous motion sensor state
-    bool m_pirReady;             ///< PIR warm-up complete
+    bool m_sensorReady;          ///< Motion sensor ready (warmup complete)
 
     /**
      * @brief Enter a new operating mode

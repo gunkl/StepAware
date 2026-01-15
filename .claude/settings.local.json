@@ -36,7 +36,14 @@
       "Bash(cmd.exe /c \"pio run -e esp32-devkitlipo\")",
       "Bash(where pio:*)",
       "Bash(docker compose run:*)",
-      "Bash(gh issue view:*)"
+      "Bash(gh issue view:*)",
+      "Bash(C:UsersDavid.platformiopenvScriptspio.exe run -e esp32-devkitlipo)",
+      "Bash(cd:*)",
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe run:*)",
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native)",
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native -f test_state_machine -vvv)",
+      "Bash(g++:*)",
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pio.exe test -e native --ignore=* -vvv)"
     ]
   }
 }

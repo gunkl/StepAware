@@ -1,10 +1,10 @@
 #include "state_machine.h"
 
-StateMachine::StateMachine(HAL_PIR* pirSensor,
+StateMachine::StateMachine(HAL_MotionSensor* motionSensor,
                            HAL_LED* hazardLED,
                            HAL_LED* statusLED,
                            HAL_Button* button)
-    : m_pirSensor(pirSensor)
+    : m_motionSensor(motionSensor)
     , m_hazardLED(hazardLED)
     , m_statusLED(statusLED)
     , m_button(button)
@@ -18,7 +18,7 @@ StateMachine::StateMachine(HAL_PIR* pirSensor,
     , m_motionEvents(0)
     , m_modeChanges(0)
     , m_lastMotionState(false)
-    , m_pirReady(false)
+    , m_sensorReady(false)
 {
 }
 
@@ -41,7 +41,7 @@ bool StateMachine::begin(OperatingMode initialMode) {
     DEBUG_PRINTLN("[StateMachine] Initializing...");
 
     // Validate hardware pointers
-    if (!m_pirSensor || !m_hazardLED || !m_statusLED || !m_button) {
+    if (!m_motionSensor || !m_hazardLED || !m_statusLED || !m_button) {
         DEBUG_PRINTLN("[StateMachine] ERROR: Hardware HAL not initialized");
         return false;
     }
@@ -70,10 +70,11 @@ void StateMachine::update() {
     m_statusLED->update();
     m_button->update();
 
-    // Check if PIR sensor is ready
-    if (!m_pirReady && m_pirSensor->isReady()) {
-        m_pirReady = true;
-        DEBUG_PRINTLN("[StateMachine] PIR sensor warm-up complete");
+    // Check if motion sensor is ready
+    if (!m_sensorReady && m_motionSensor->isReady()) {
+        m_sensorReady = true;
+        DEBUG_PRINTF("[StateMachine] %s warm-up complete\n",
+                     m_motionSensor->getCapabilities().sensorTypeName);
     }
 
     // Check for button events
@@ -111,7 +112,7 @@ void StateMachine::handleEvent(SystemEvent event) {
             m_motionEvents++;
 
             // Trigger warning in appropriate modes
-            if (m_currentMode == MOTION_DETECT && m_pirReady) {
+            if (m_currentMode == MOTION_DETECT && m_sensorReady) {
                 triggerWarning();
             }
             break;
@@ -352,7 +353,7 @@ void StateMachine::updateStatusLED() {
 }
 
 void StateMachine::handleMotionDetection() {
-    bool motionDetected = m_pirSensor->motionDetected();
+    bool motionDetected = m_motionSensor->motionDetected();
 
     // Detect rising edge (motion started)
     if (motionDetected && !m_lastMotionState) {

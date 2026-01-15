@@ -1,5 +1,20 @@
 #include "hal_pir.h"
 
+// Static capabilities for PIR sensor
+const SensorCapabilities HAL_PIR::s_capabilities = {
+    .supportsBinaryDetection = true,
+    .supportsDistanceMeasurement = false,
+    .supportsDirectionDetection = false,
+    .requiresWarmup = true,
+    .supportsDeepSleepWake = true,
+    .minDetectionDistance = 0,
+    .maxDetectionDistance = 12000,     // 12m typical for AM312
+    .detectionAngleDegrees = 65,       // 65 degree FOV
+    .typicalWarmupMs = 60000,          // 60 seconds
+    .typicalCurrentMa = 1,             // ~220uA, round up to 1mA
+    .sensorTypeName = "PIR Motion Sensor (AM312)"
+};
+
 HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     : m_pin(pin)
     , m_mockMode(mock_mode)
@@ -7,8 +22,10 @@ HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     , m_motionDetected(false)
     , m_lastState(false)
     , m_sensorReady(false)
+    , m_lastEvent(MOTION_EVENT_NONE)
     , m_startTime(0)
     , m_warmupDuration(PIR_WARMUP_TIME_MS)
+    , m_lastEventTime(0)
     , m_motionEventCount(0)
     , m_mockMotionEndTime(0)
 {
@@ -38,7 +55,7 @@ bool HAL_PIR::begin() {
 
     DEBUG_PRINTF("[HAL_PIR] Warm-up period: %u ms (~%u seconds)\n",
                  m_warmupDuration, m_warmupDuration / 1000);
-    DEBUG_PRINTLN("[HAL_PIR] ✓ Initialization complete");
+    DEBUG_PRINTLN("[HAL_PIR] Initialization complete");
 
     return true;
 }
@@ -74,11 +91,15 @@ void HAL_PIR::update() {
     // Detect rising edge (motion started)
     if (currentState && !m_lastState) {
         m_motionEventCount++;
+        m_lastEventTime = millis();
+        m_lastEvent = MOTION_EVENT_DETECTED;
         DEBUG_PRINTF("[HAL_PIR] Motion detected (event #%u)\n", m_motionEventCount);
     }
 
     // Detect falling edge (motion ended)
     if (!currentState && m_lastState) {
+        m_lastEventTime = millis();
+        m_lastEvent = MOTION_EVENT_CLEARED;
         DEBUG_PRINTLN("[HAL_PIR] Motion cleared");
     }
 
@@ -86,15 +107,19 @@ void HAL_PIR::update() {
     m_motionDetected = currentState;
 }
 
-bool HAL_PIR::motionDetected() {
+bool HAL_PIR::motionDetected() const {
     return m_motionDetected;
 }
 
-bool HAL_PIR::isReady() {
+bool HAL_PIR::isReady() const {
     return m_sensorReady;
 }
 
-uint32_t HAL_PIR::getWarmupTimeRemaining() {
+const SensorCapabilities& HAL_PIR::getCapabilities() const {
+    return s_capabilities;
+}
+
+uint32_t HAL_PIR::getWarmupTimeRemaining() const {
     if (m_sensorReady) {
         return 0;
     }
@@ -107,16 +132,35 @@ uint32_t HAL_PIR::getWarmupTimeRemaining() {
     return m_warmupDuration - elapsed;
 }
 
-uint32_t HAL_PIR::getMotionEventCount() {
-    return m_motionEventCount;
-}
-
-void HAL_PIR::resetMotionEventCount() {
+void HAL_PIR::resetEventCount() {
     m_motionEventCount = 0;
     DEBUG_PRINTLN("[HAL_PIR] Motion event counter reset");
 }
 
-// Mock/Test Methods
+// =========================================================================
+// Mock Mode Methods
+// =========================================================================
+
+void HAL_PIR::mockSetMotion(bool detected) {
+    if (!m_mockMode) {
+        DEBUG_PRINTLN("[HAL_PIR] WARNING: mockSetMotion() called but mock mode not enabled");
+        return;
+    }
+
+    m_motionDetected = detected;
+    m_mockMotionEndTime = 0;
+    DEBUG_PRINTF("[HAL_PIR] MOCK: Motion set to %s\n", detected ? "TRUE" : "FALSE");
+}
+
+void HAL_PIR::mockSetReady() {
+    if (!m_mockMode) {
+        DEBUG_PRINTLN("[HAL_PIR] WARNING: mockSetReady() called but mock mode not enabled");
+        return;
+    }
+
+    m_sensorReady = true;
+    DEBUG_PRINTLN("[HAL_PIR] MOCK: Sensor marked as ready");
+}
 
 void HAL_PIR::mockTriggerMotion(uint32_t duration_ms) {
     if (!m_mockMode) {
