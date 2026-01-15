@@ -18,6 +18,8 @@
 #include "sensor_factory.h"
 #include "hal_led.h"
 #include "hal_button.h"
+#include "config_manager.h"
+#include "serial_config.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -32,6 +34,10 @@ HAL_Button modeButton(PIN_BUTTON, BUTTON_DEBOUNCE_MS, 1000, MOCK_HARDWARE);
 
 // State Machine (initialized after sensor creation)
 StateMachine* stateMachine = nullptr;
+
+// Configuration
+ConfigManager configManager;
+SerialConfigUI serialConfig(configManager);
 
 // ============================================================================
 // System Status Reporting
@@ -140,13 +146,15 @@ void printHelp() {
     Serial.println("StepAware Command Reference");
     Serial.println("========================================");
     Serial.println();
-    Serial.println("Serial Commands (type in Serial Monitor):");
+    Serial.println("Quick Commands (single key):");
     Serial.println("  s - Print system status");
     Serial.println("  h - Print this help");
     Serial.println("  0 - Set mode to OFF");
     Serial.println("  1 - Set mode to CONTINUOUS_ON");
     Serial.println("  2 - Set mode to MOTION_DETECT");
     Serial.println("  r - Reset statistics");
+    Serial.println("  p - Enter configuration mode");
+    Serial.println("  g - Show current configuration");
 #if MOCK_HARDWARE
     Serial.println();
     Serial.println("Mock Mode Commands:");
@@ -155,6 +163,10 @@ void printHelp() {
     Serial.println("  d - Set mock distance (ultrasonic only)");
     Serial.println("  b - Simulate button press");
 #endif
+    Serial.println();
+    Serial.println("Configuration Mode:");
+    Serial.println("  Press 'p' to enter interactive config mode");
+    Serial.println("  Type 'help' in config mode for all options");
     Serial.println();
     Serial.println("Hardware:");
     Serial.println("  Button - Press to cycle modes");
@@ -167,8 +179,17 @@ void printHelp() {
 
 /**
  * @brief Process serial commands
+ *
+ * If in config mode, delegates to SerialConfigUI for line-based commands.
+ * Otherwise handles single-character quick commands.
  */
 void processSerialCommand() {
+    // If in config mode, let SerialConfigUI handle all input
+    if (serialConfig.isInConfigMode()) {
+        serialConfig.update();
+        return;
+    }
+
     if (!Serial.available()) {
         return;
     }
@@ -207,6 +228,18 @@ void processSerialCommand() {
             Serial.println("[Command] Resetting statistics");
             motionSensor->resetEventCount();
             modeButton.resetClickCount();
+            break;
+
+        case 'p':
+        case 'P':
+            // Enter configuration mode
+            serialConfig.enterConfigMode();
+            break;
+
+        case 'g':
+        case 'G':
+            // Show current configuration
+            configManager.print();
             break;
 
 #if MOCK_HARDWARE
@@ -402,6 +435,16 @@ void setup() {
 
     Serial.println("[Setup] Initializing StepAware...");
 
+    // Initialize configuration manager (loads from SPIFFS)
+    Serial.println("[Setup] Initializing configuration manager...");
+    if (!configManager.begin()) {
+        Serial.println("[Setup] WARNING: Config manager failed, using defaults");
+    }
+
+    // Initialize serial configuration interface
+    Serial.println("[Setup] Initializing serial config interface...");
+    serialConfig.begin();
+
     // Create motion sensor via factory
     Serial.printf("[Setup] Creating %s sensor...\n",
                   getSensorTypeName(ACTIVE_SENSOR_TYPE));
@@ -455,8 +498,12 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Get default mode from config
+    const ConfigManager::Config& cfg = configManager.getConfig();
+    StateMachine::OperatingMode defaultMode = static_cast<StateMachine::OperatingMode>(cfg.defaultMode);
+
     Serial.println("[Setup] Initializing state machine...");
-    if (!stateMachine->begin(StateMachine::MOTION_DETECT)) {
+    if (!stateMachine->begin(defaultMode)) {
         Serial.println("[Setup] ERROR: Failed to initialize state machine");
         while (1) { delay(1000); }
     }

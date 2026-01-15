@@ -50,7 +50,10 @@
       "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe test -e native)",
       "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe test -e native -f test_hal_motion_sensor -vvv)",
       "Bash(C:/msys64/mingw64/bin/g++:*)",
-      "Bash(docker-compose:*)"
+      "Bash(docker-compose:*)",
+      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run -e esp32-devkitlipo)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue create:*)"
     ]
   }
 }
