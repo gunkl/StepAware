@@ -69,6 +69,7 @@ private:
     bool m_initialized;
     uint32_t m_currentDistance;
     uint32_t m_lastDistance;
+    uint32_t m_mockDistance;  // Separate mock value like real implementation
     uint32_t m_detectionThreshold;
     bool m_objectDetected;
     bool m_directionEnabled;
@@ -91,6 +92,7 @@ public:
         , m_initialized(false)
         , m_currentDistance(0)
         , m_lastDistance(0)
+        , m_mockDistance(0)
         , m_detectionThreshold(DEFAULT_THRESHOLD_MM)
         , m_objectDetected(false)
         , m_directionEnabled(true)
@@ -119,7 +121,11 @@ public:
         }
         m_lastMeasurementTime = now;
 
+        // Store previous distance for direction detection
         m_lastDistance = m_currentDistance;
+
+        // Read new value from mock (like real implementation)
+        m_currentDistance = m_mockDistance;
 
         // Update direction
         if (m_directionEnabled) {
@@ -131,7 +137,7 @@ public:
     }
 
     void mockSetDistance(uint32_t distance_mm) {
-        m_currentDistance = distance_mm;
+        m_mockDistance = distance_mm;
     }
 
     bool motionDetected() const { return m_objectDetected; }
