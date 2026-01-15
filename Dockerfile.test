@@ -1,0 +1,20 @@
+# Dockerfile for running native PlatformIO tests
+# Build: docker build -f Dockerfile.test -t stepaware-test .
+# Run:   docker run --rm -v ${PWD}:/app stepaware-test
+
+FROM python:3.11-slim
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PlatformIO
+RUN pip install --no-cache-dir platformio
+
+# Set working directory
+WORKDIR /app
+
+# Default command: run native tests
+CMD ["pio", "test", "-e", "native", "-v"]
