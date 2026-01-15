@@ -48,6 +48,13 @@ public:
         uint16_t lightThresholdDark;       // ADC value
         uint16_t lightThresholdBright;     // ADC value
 
+        // Distance Sensor (Ultrasonic/IR)
+        uint16_t sensorMinDistance;        // cm - minimum detection distance
+        uint16_t sensorMaxDistance;        // cm - maximum detection distance
+        bool sensorDirectionEnabled;       // Enable direction detection
+        uint8_t sensorRapidSampleCount;    // Number of samples for direction
+        uint16_t sensorRapidSampleMs;      // Interval between rapid samples (ms)
+
         // WiFi (Phase 2)
         char wifiSSID[64];                 // WiFi SSID
         char wifiPassword[64];             // WiFi password

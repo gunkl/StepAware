@@ -53,7 +53,8 @@
       "Bash(docker-compose:*)",
       "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run -e esp32-devkitlipo)",
       "Bash(gh issue list:*)",
-      "Bash(gh issue create:*)"
+      "Bash(gh issue create:*)",
+      "Bash(gh issue comment:*)"
     ]
   }
 }

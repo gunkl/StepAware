@@ -71,10 +71,14 @@ private:
     uint32_t m_lastDistance;
     uint32_t m_mockDistance;  // Separate mock value like real implementation
     uint32_t m_detectionThreshold;
+    uint32_t m_minDistance;
+    uint32_t m_maxDistance;
     bool m_objectDetected;
     bool m_directionEnabled;
     MotionDirection m_direction;
     uint32_t m_directionSensitivity;
+    uint8_t m_rapidSampleCount;
+    uint16_t m_rapidSampleMs;
     MotionEvent m_lastEvent;
     uint32_t m_eventCount;
     uint32_t m_lastEventTime;
@@ -85,6 +89,8 @@ private:
     static constexpr uint32_t MIN_MEASUREMENT_INTERVAL_MS = 60;
     static constexpr uint32_t DEFAULT_THRESHOLD_MM = 500;
     static constexpr uint32_t DEFAULT_SENSITIVITY_MM = 20;
+    static constexpr uint32_t DEFAULT_MIN_DISTANCE = 300;  // 30cm
+    static constexpr uint32_t DEFAULT_MAX_DISTANCE = 2000; // 200cm
 
 public:
     MockUltrasonic(uint8_t triggerPin = 0, uint8_t echoPin = 0, bool mockMode = true)
@@ -94,10 +100,14 @@ public:
         , m_lastDistance(0)
         , m_mockDistance(0)
         , m_detectionThreshold(DEFAULT_THRESHOLD_MM)
+        , m_minDistance(DEFAULT_MIN_DISTANCE)
+        , m_maxDistance(DEFAULT_MAX_DISTANCE)
         , m_objectDetected(false)
         , m_directionEnabled(true)
         , m_direction(DIRECTION_UNKNOWN)
         , m_directionSensitivity(DEFAULT_SENSITIVITY_MM)
+        , m_rapidSampleCount(5)
+        , m_rapidSampleMs(100)
         , m_lastEvent(MOTION_EVENT_NONE)
         , m_eventCount(0)
         , m_lastEventTime(0)
@@ -199,7 +209,8 @@ private:
     void checkThresholdEvents() {
         bool wasDetected = m_objectDetected;
         m_objectDetected = (m_currentDistance > 0 &&
-                            m_currentDistance <= m_detectionThreshold);
+                            m_currentDistance >= m_minDistance &&
+                            m_currentDistance <= m_maxDistance);
 
         if (m_objectDetected && !wasDetected) {
             m_eventCount++;
@@ -211,6 +222,20 @@ private:
             m_lastEventTime = millis();
             m_lastEvent = MOTION_EVENT_CLEARED;
         }
+    }
+
+public:
+    void setDistanceRange(uint32_t min_mm, uint32_t max_mm) {
+        m_minDistance = min_mm;
+        m_maxDistance = max_mm;
+    }
+
+    uint32_t getMinDistance() const { return m_minDistance; }
+    uint32_t getMaxDistance() const { return m_maxDistance; }
+
+    void setRapidSampling(uint8_t sample_count, uint16_t interval_ms) {
+        m_rapidSampleCount = sample_count;
+        m_rapidSampleMs = interval_ms;
     }
 };
 
@@ -276,9 +301,9 @@ void test_ultrasonic_distance_detection(void) {
 
 void test_ultrasonic_object_outside_threshold(void) {
     testSensor->begin();
-    testSensor->setDetectionThreshold(500);
+    testSensor->setDistanceRange(0, 500);  // 0-50cm range
 
-    // Object at 80cm (outside threshold)
+    // Object at 80cm (outside max range)
     testSensor->mockSetDistance(800);
     advance_time(100);
     testSensor->update();
@@ -374,7 +399,7 @@ void test_ultrasonic_direction_detection_disabled(void) {
 
 void test_ultrasonic_multiple_threshold_crossings(void) {
     testSensor->begin();
-    testSensor->setDetectionThreshold(500);
+    testSensor->setDistanceRange(100, 500);  // 10cm - 50cm range
 
     // Enter detection zone
     testSensor->mockSetDistance(300);
@@ -382,7 +407,7 @@ void test_ultrasonic_multiple_threshold_crossings(void) {
     testSensor->update();
     TEST_ASSERT_EQUAL_UINT32(1, testSensor->getEventCount());
 
-    // Leave detection zone
+    // Leave detection zone (above max)
     testSensor->mockSetDistance(700);
     advance_time(100);
     testSensor->update();
@@ -477,6 +502,134 @@ void test_default_config_ultrasonic(void) {
     TEST_ASSERT_TRUE(config.enableDirectionDetection);
 }
 
+// =========================================================================
+// Distance Range Tests (Min/Max)
+// =========================================================================
+
+void test_distance_range_min_max(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);  // 30cm - 80cm
+
+    TEST_ASSERT_EQUAL_UINT32(300, testSensor->getMinDistance());
+    TEST_ASSERT_EQUAL_UINT32(800, testSensor->getMaxDistance());
+}
+
+void test_distance_below_min_not_detected(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);  // 30cm - 80cm
+
+    // Object at 20cm (below minimum)
+    testSensor->mockSetDistance(200);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_FALSE(testSensor->motionDetected());
+    TEST_ASSERT_EQUAL_UINT32(0, testSensor->getEventCount());
+}
+
+void test_distance_above_max_not_detected(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);  // 30cm - 80cm
+
+    // Object at 100cm (above maximum)
+    testSensor->mockSetDistance(1000);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_FALSE(testSensor->motionDetected());
+    TEST_ASSERT_EQUAL_UINT32(0, testSensor->getEventCount());
+}
+
+void test_distance_within_range_detected(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);  // 30cm - 80cm
+
+    // Object at 50cm (within range)
+    testSensor->mockSetDistance(500);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_TRUE(testSensor->motionDetected());
+    TEST_ASSERT_EQUAL_UINT32(1, testSensor->getEventCount());
+}
+
+void test_distance_at_min_boundary(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);
+
+    // Object exactly at minimum
+    testSensor->mockSetDistance(300);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_TRUE(testSensor->motionDetected());
+}
+
+void test_distance_at_max_boundary(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);
+
+    // Object exactly at maximum
+    testSensor->mockSetDistance(800);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_TRUE(testSensor->motionDetected());
+}
+
+void test_distance_approaching_within_range(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);
+    testSensor->setDirectionSensitivity(20);
+
+    // Start at 70cm (within range)
+    testSensor->mockSetDistance(700);
+    advance_time(100);
+    testSensor->update();
+
+    // Move to 50cm (approaching, still in range)
+    testSensor->mockSetDistance(500);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_TRUE(testSensor->motionDetected());
+    TEST_ASSERT_EQUAL(DIRECTION_APPROACHING, testSensor->getDirection());
+}
+
+void test_distance_receding_out_of_range(void) {
+    testSensor->begin();
+    testSensor->setDistanceRange(300, 800);
+    testSensor->setDirectionSensitivity(20);
+
+    // Start at 60cm (within range)
+    testSensor->mockSetDistance(600);
+    advance_time(100);
+    testSensor->update();
+    TEST_ASSERT_TRUE(testSensor->motionDetected());
+
+    // Move to 90cm (receding, out of range)
+    testSensor->mockSetDistance(900);
+    advance_time(100);
+    testSensor->update();
+
+    TEST_ASSERT_FALSE(testSensor->motionDetected());
+    TEST_ASSERT_EQUAL(DIRECTION_RECEDING, testSensor->getDirection());
+}
+
+// =========================================================================
+// Rapid Sampling Tests
+// =========================================================================
+
+void test_rapid_sampling_configuration(void) {
+    testSensor->begin();
+
+    testSensor->setRapidSampling(10, 50);
+
+    // Note: Mock doesn't expose getters for rapid sampling config,
+    // but we can test that it doesn't crash
+    TEST_ASSERT_TRUE(testSensor->isReady());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -502,6 +655,19 @@ int main(int argc, char **argv) {
     RUN_TEST(test_sensor_type_supported_ultrasonic);
     RUN_TEST(test_default_config_pir);
     RUN_TEST(test_default_config_ultrasonic);
+
+    // Distance range tests
+    RUN_TEST(test_distance_range_min_max);
+    RUN_TEST(test_distance_below_min_not_detected);
+    RUN_TEST(test_distance_above_max_not_detected);
+    RUN_TEST(test_distance_within_range_detected);
+    RUN_TEST(test_distance_at_min_boundary);
+    RUN_TEST(test_distance_at_max_boundary);
+    RUN_TEST(test_distance_approaching_within_range);
+    RUN_TEST(test_distance_receding_out_of_range);
+
+    // Rapid sampling tests
+    RUN_TEST(test_rapid_sampling_configuration);
 
     return UNITY_END();
 }

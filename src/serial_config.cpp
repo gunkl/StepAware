@@ -231,6 +231,11 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  led.blink.slow    Slow blink interval (ms)");
     Serial.println("  button.debounce   Debounce time (ms)");
     Serial.println("  button.longpress  Long press time (ms)");
+    Serial.println("  sensor.min        Min distance (cm)");
+    Serial.println("  sensor.max        Max distance (cm)");
+    Serial.println("  sensor.direction  Direction detect (0/1)");
+    Serial.println("  sensor.samples    Rapid sample count (2-20)");
+    Serial.println("  sensor.interval   Rapid sample interval (ms)");
     Serial.println("  device.name       Device name");
     Serial.println("  device.mode       Default mode (0-2)");
     Serial.println("  power.saving      Power saving (0/1)");
@@ -468,6 +473,21 @@ void SerialConfigUI::printValue(const char* key) {
     else if (strcmp(key, "wifi.enabled") == 0) {
         Serial.printf("%s = %s\n", key, cfg.wifiEnabled ? "1" : "0");
     }
+    else if (strcmp(key, "sensor.min") == 0) {
+        Serial.printf("%s = %u\n", key, cfg.sensorMinDistance);
+    }
+    else if (strcmp(key, "sensor.max") == 0) {
+        Serial.printf("%s = %u\n", key, cfg.sensorMaxDistance);
+    }
+    else if (strcmp(key, "sensor.direction") == 0) {
+        Serial.printf("%s = %s\n", key, cfg.sensorDirectionEnabled ? "1" : "0");
+    }
+    else if (strcmp(key, "sensor.samples") == 0) {
+        Serial.printf("%s = %u\n", key, cfg.sensorRapidSampleCount);
+    }
+    else if (strcmp(key, "sensor.interval") == 0) {
+        Serial.printf("%s = %u\n", key, cfg.sensorRapidSampleMs);
+    }
     else {
         Serial.printf("Unknown key: %s\n", key);
     }
@@ -547,6 +567,26 @@ bool SerialConfigUI::setValue(const char* key, const char* value) {
     }
     else if (strcmp(key, "wifi.enabled") == 0) {
         cfg.wifiEnabled = (atoi(value) != 0);
+        changed = true;
+    }
+    else if (strcmp(key, "sensor.min") == 0) {
+        cfg.sensorMinDistance = atoi(value);
+        changed = true;
+    }
+    else if (strcmp(key, "sensor.max") == 0) {
+        cfg.sensorMaxDistance = atoi(value);
+        changed = true;
+    }
+    else if (strcmp(key, "sensor.direction") == 0) {
+        cfg.sensorDirectionEnabled = (atoi(value) != 0);
+        changed = true;
+    }
+    else if (strcmp(key, "sensor.samples") == 0) {
+        cfg.sensorRapidSampleCount = atoi(value);
+        changed = true;
+    }
+    else if (strcmp(key, "sensor.interval") == 0) {
+        cfg.sensorRapidSampleMs = atoi(value);
         changed = true;
     }
     else {

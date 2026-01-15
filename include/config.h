@@ -46,6 +46,13 @@
 #define ULTRASONIC_THRESHOLD_MM     500     // Detection threshold: 50cm
 #define ULTRASONIC_INTERVAL_MS      60      // Measurement interval: 60ms minimum
 
+// Distance-based detection defaults
+#define SENSOR_MIN_DISTANCE_CM      30      // Minimum detection distance: 30cm
+#define SENSOR_MAX_DISTANCE_CM      200     // Maximum detection distance: 200cm (2m)
+#define SENSOR_DIRECTION_ENABLED    true    // Enable direction detection by default
+#define SENSOR_RAPID_SAMPLE_COUNT   5       // Take 5 samples for direction detection
+#define SENSOR_RAPID_SAMPLE_MS      100     // 100ms between rapid samples
+
 // ============================================================================
 // System Constants
 // ============================================================================

@@ -182,6 +182,54 @@ public:
      */
     virtual bool isDirectionDetectionEnabled() const { return false; }
 
+    /**
+     * @brief Set distance range for detection (min/max thresholds)
+     *
+     * Only triggers detection when object is within this range.
+     *
+     * @param min_mm Minimum detection distance in millimeters
+     * @param max_mm Maximum detection distance in millimeters
+     */
+    virtual void setDistanceRange(uint32_t min_mm, uint32_t max_mm) {
+        (void)min_mm;
+        (void)max_mm;
+    }
+
+    /**
+     * @brief Get minimum detection distance
+     *
+     * @return Minimum detection distance in millimeters, 0 if not applicable
+     */
+    virtual uint32_t getMinDistance() const { return 0; }
+
+    /**
+     * @brief Get maximum detection distance
+     *
+     * @return Maximum detection distance in millimeters, 0 if not applicable
+     */
+    virtual uint32_t getMaxDistance() const { return 0; }
+
+    /**
+     * @brief Enable rapid sampling mode for direction detection
+     *
+     * Takes multiple quick samples to accurately determine direction.
+     *
+     * @param sample_count Number of samples to take (2-20)
+     * @param interval_ms Interval between samples in milliseconds
+     */
+    virtual void setRapidSampling(uint8_t sample_count, uint16_t interval_ms) {
+        (void)sample_count;
+        (void)interval_ms;
+    }
+
+    /**
+     * @brief Trigger rapid sampling sequence
+     *
+     * Immediately takes rapid samples and updates direction.
+     * Useful for switching from low-power to high-power mode.
+     */
+    virtual void triggerRapidSample() {}
+
     // =========================================================================
     // Mock Mode Interface
     // =========================================================================
