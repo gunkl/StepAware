@@ -508,7 +508,7 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].enabled = true;
     strlcpy(m_config.sensors[0].name, "PIR Motion", sizeof(m_config.sensors[0].name));
     m_config.sensors[0].type = SENSOR_TYPE_PIR;
-    m_config.sensors[0].primaryPin = PIN_MOTION_SENSOR;
+    m_config.sensors[0].primaryPin = PIN_PIR_SENSOR;
     m_config.sensors[0].secondaryPin = 0;
     m_config.sensors[0].isPrimary = true;
     m_config.sensors[0].detectionThreshold = 0;  // N/A for PIR
