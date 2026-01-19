@@ -73,8 +73,8 @@ void StateMachine::update() {
     // Check if motion sensor is ready
     if (!m_sensorReady && m_motionSensor->isReady()) {
         m_sensorReady = true;
-        DEBUG_PRINTF("[StateMachine] %s warm-up complete\n",
-                     m_motionSensor->getCapabilities().sensorTypeName);
+        LOG_INFO("StateMachine: %s warm-up complete",
+                 m_motionSensor->getCapabilities().sensorTypeName);
     }
 
     // Check for button events

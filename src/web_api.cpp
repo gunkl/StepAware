@@ -73,6 +73,14 @@ bool WebAPI::begin() {
         this->handlePostReset(req);
     });
 
+    m_server->on("/api/sensors", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handlePostSensors(req, data, len, index, total);
+        }
+    );
+
     // OPTIONS for CORS preflight
     m_server->on("/api/status", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
         this->handleOptions(req);
@@ -84,6 +92,9 @@ bool WebAPI::begin() {
         this->handleOptions(req);
     });
     m_server->on("/api/logs", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/sensors", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
         this->handleOptions(req);
     });
 
@@ -220,6 +231,40 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
     LOG_INFO("Config updated via API");
 }
 
+void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    // Null-terminate data
+    char* jsonStr = (char*)malloc(total + 1);
+    if (!jsonStr) {
+        sendError(request, 500, "Out of memory");
+        return;
+    }
+
+    memcpy(jsonStr, data, total);
+    jsonStr[total] = '\0';
+
+    // For now, just acknowledge receipt
+    // TODO: Parse sensor configuration and store in ConfigManager
+    // This will require extending ConfigManager to support multi-sensor configs
+
+    free(jsonStr);
+
+    // Return success
+    StaticJsonDocument<128> doc;
+    doc["status"] = "ok";
+    doc["message"] = "Sensor configuration received (persistence pending)";
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+
+    LOG_INFO("Sensor config updated via API (not yet persisted)");
+}
+
 void WebAPI::handleGetMode(AsyncWebServerRequest* request) {
     StaticJsonDocument<128> doc;
 
@@ -275,7 +320,13 @@ void WebAPI::handleGetLogs(AsyncWebServerRequest* request) {
     JsonArray logs = doc.createNestedArray("logs");
 
     uint32_t count = g_logger.getEntryCount();
-    uint32_t maxEntries = 50;  // Limit to last 50 entries
+
+    // Get limit from query parameter, default to 100
+    uint32_t maxEntries = 100;
+    if (request->hasParam("limit")) {
+        maxEntries = request->getParam("limit")->value().toInt();
+        if (maxEntries > 200) maxEntries = 200;  // Cap at 200 to prevent memory issues
+    }
 
     uint32_t startIndex = count > maxEntries ? count - maxEntries : 0;
 
@@ -460,6 +511,19 @@ String WebAPI::buildDashboardHTML() {
     html += ".save-indicator{display:none;padding:12px;background:#d1fae5;color:#065f46;border-radius:6px;margin-top:16px;text-align:center;font-weight:600;}";
     html += ".save-indicator.show{display:block;}";
 
+    // Sensor cards
+    html += ".sensor-card{border:2px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px;position:relative;}";
+    html += ".sensor-card.disabled{opacity:0.6;background:#f9fafb;}";
+    html += ".sensor-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}";
+    html += ".sensor-title{font-weight:600;font-size:1.1em;color:#333;}";
+    html += ".sensor-actions{display:flex;gap:8px;}";
+    html += ".pin-info{background:#f3f4f6;padding:8px 12px;border-radius:6px;font-family:monospace;font-size:0.9em;margin:8px 0;}";
+    html += ".pin-label{color:#6b7280;font-size:0.85em;}";
+    html += ".pin-value{color:#667eea;font-weight:600;}";
+    html += ".sensor-type-badge{display:inline-block;padding:4px 8px;background:#dbeafe;color:#1e40af;border-radius:4px;font-size:0.85em;font-weight:600;margin-bottom:8px;}";
+    html += ".btn-remove{background:#ef4444;}.btn-remove:hover{background:#dc2626;}";
+    html += ".btn-toggle{background:#6b7280;}.btn-toggle.active{background:#10b981;}";
+
     html += "</style></head><body><div class=\"container\">";
     html += "<h1>&#128680; StepAware Dashboard</h1>";
 
@@ -480,6 +544,7 @@ String WebAPI::buildDashboardHTML() {
     // Tab Navigation
     html += "<div class=\"tabs\">";
     html += "<button class=\"tab active\" onclick=\"showTab('status')\">Status</button>";
+    html += "<button class=\"tab\" onclick=\"showTab('hardware')\">Hardware</button>";
     html += "<button class=\"tab\" onclick=\"showTab('config')\">Configuration</button>";
     html += "<button class=\"tab\" onclick=\"showTab('logs')\">Logs</button>";
     html += "</div>";
@@ -498,6 +563,16 @@ String WebAPI::buildDashboardHTML() {
     html += "</div></div>";
 
     html += "</div>"; // End status tab
+
+    // HARDWARE TAB
+    html += "<div id=\"hardware-tab\" class=\"tab-content\">";
+    html += "<div class=\"card\"><h2>Sensor Configuration</h2>";
+    html += "<p class=\"form-help\" style=\"margin-bottom:16px;\">Configure up to 4 motion sensors. Each sensor can be enabled/disabled independently.</p>";
+
+    html += "<div id=\"sensors-list\"></div>";
+
+    html += "<button class=\"btn btn-primary\" style=\"margin-top:16px;\" onclick=\"addSensor()\">+ Add Sensor</button>";
+    html += "</div></div>"; // End hardware tab
 
     // CONFIG TAB
     html += "<div id=\"config-tab\" class=\"tab-content\">";
@@ -529,33 +604,6 @@ String WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-group\"><label class=\"form-label\">PIR Warmup (seconds)</label>";
     html += "<input type=\"number\" id=\"cfg-pirWarmup\" class=\"form-input\" min=\"1\" max=\"120\">";
     html += "<div class=\"form-help\">PIR sensor initialization time</div></div>";
-    html += "</div>";
-
-    html += "<h3>Distance Sensor Settings</h3>";
-    html += "<div class=\"form-row\">";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Min Distance (cm)</label>";
-    html += "<input type=\"number\" id=\"cfg-sensorMinDistance\" class=\"form-input\" min=\"10\" max=\"500\">";
-    html += "<div class=\"form-help\">Minimum detection threshold</div></div>";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Max Distance (cm)</label>";
-    html += "<input type=\"number\" id=\"cfg-sensorMaxDistance\" class=\"form-input\" min=\"20\" max=\"500\">";
-    html += "<div class=\"form-help\">Maximum detection range</div></div>";
-    html += "</div>";
-    html += "<div class=\"form-row\">";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Direction Detection</label>";
-    html += "<select id=\"cfg-sensorDirection\" class=\"form-select\">";
-    html += "<option value=\"0\">Disabled</option>";
-    html += "<option value=\"1\">Enabled</option>";
-    html += "</select>";
-    html += "<div class=\"form-help\">Detect approaching vs. departing motion</div></div>";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Rapid Sample Count</label>";
-    html += "<input type=\"number\" id=\"cfg-sensorSampleCount\" class=\"form-input\" min=\"2\" max=\"20\">";
-    html += "<div class=\"form-help\">Number of samples for direction detection (2-20)</div></div>";
-    html += "</div>";
-    html += "<div class=\"form-row\">";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Sample Interval (ms)</label>";
-    html += "<input type=\"number\" id=\"cfg-sensorSampleInterval\" class=\"form-input\" min=\"50\" max=\"1000\">";
-    html += "<div class=\"form-help\">Time between rapid samples for direction detection</div></div>";
-    html += "<div></div>";
     html += "</div>";
 
     html += "<h3>LED Settings</h3>";
@@ -622,6 +670,7 @@ String WebAPI::buildDashboardHTML() {
     html += "event.target.classList.add('active');";
     html += "document.getElementById(tab+'-tab').classList.add('active');";
     html += "if(tab==='config')loadConfig();";
+    html += "if(tab==='hardware')loadSensors();";
     html += "if(tab==='logs')fetchLogs();";
     html += "}";
 
@@ -768,8 +817,123 @@ String WebAPI::buildDashboardHTML() {
 
     html += "function clearLogView(){document.getElementById('log-viewer').innerHTML='';}";
 
-    // Auto-refresh status
-    html += "fetchStatus();setInterval(fetchStatus,2000);";
+    // Hardware Tab - Sensor Management
+    html += "let sensorSlots=[null,null,null,null];";
+    html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','debounce']},";
+    html += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
+    html += "ULTRASONIC:{name:'Ultrasonic Distance',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
+
+    // Load sensors from configuration
+    html += "async function loadSensors(){";
+    html += "try{const res=await fetch('/api/config');if(!res.ok)return;";
+    html += "const cfg=await res.json();";
+    html += "sensorSlots=[null,null,null,null];";
+    html += "if(cfg.sensors&&Array.isArray(cfg.sensors)){";
+    html += "cfg.sensors.forEach(s=>{if(s.slot>=0&&s.slot<4){sensorSlots[s.slot]=s;}});";
+    html += "renderSensors();}}catch(e){console.error('Failed to load sensors:',e);}}";
+
+    // Render all sensor cards
+    html += "function renderSensors(){";
+    html += "const container=document.getElementById('sensors-list');container.innerHTML='';";
+    html += "sensorSlots.forEach((sensor,idx)=>{";
+    html += "if(sensor!==null){container.appendChild(createSensorCard(sensor,idx));}});";
+    html += "if(sensorSlots.filter(s=>s!==null).length===0){";
+    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No sensors configured. Click \"Add Sensor\" to get started.</p>';}}";
+
+    // Create sensor card element
+    html += "function createSensorCard(sensor,slotIdx){";
+    html += "const card=document.createElement('div');";
+    html += "card.className='sensor-card'+(sensor.enabled?'':' disabled');";
+    html += "card.innerHTML='<div class=\"sensor-header\">';";
+    html += "card.innerHTML+='<div><div class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</div>';";
+    html += "card.innerHTML+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
+    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span></div>';";
+    html += "card.innerHTML+='<div class=\"sensor-actions\">';";
+    html += "card.innerHTML+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">';";
+    html += "card.innerHTML+=(sensor.enabled?'Disable':'Enable')+'</button>';";
+    html += "card.innerHTML+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
+    html += "card.innerHTML+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
+    html += "card.innerHTML+='</div></div>';";
+
+    // Pin information
+    html += "if(sensor.type===2){";
+    html += "card.innerHTML+='<div class=\"pin-info\">Trigger Pin: GPIO '+sensor.primaryPin+' | Echo Pin: GPIO '+sensor.secondaryPin+'</div>';}";
+    html += "else{card.innerHTML+='<div class=\"pin-info\">Signal Pin: GPIO '+sensor.primaryPin+'</div>';}";
+
+    // Configuration display
+    html += "card.innerHTML+='<div style=\"margin-top:12px;font-size:0.9em;color:#64748b;\">';";
+    html += "if(sensor.type===0){card.innerHTML+='Warmup: '+(sensor.warmupMs/1000)+'s | Debounce: '+sensor.debounceMs+'ms';}";
+    html += "else if(sensor.type===2){";
+    html += "card.innerHTML+='Range: '+sensor.detectionThreshold+'mm | Direction: '+(sensor.enableDirectionDetection?'Enabled':'Disabled');";
+    html += "card.innerHTML+=' | Samples: '+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms';}";
+    html += "card.innerHTML+='</div>';";
+    html += "return card;}";
+
+    // Add new sensor
+    html += "function addSensor(){";
+    html += "const freeSlot=sensorSlots.findIndex(s=>s===null);";
+    html += "if(freeSlot===-1){alert('Maximum 4 sensors allowed. Remove a sensor first.');return;}";
+    html += "const type=prompt('Select sensor type:\\n0 = PIR Motion\\n1 = IR Beam-Break\\n2 = Ultrasonic Distance','0');";
+    html += "if(type===null)return;";
+    html += "const typeNum=parseInt(type);";
+    html += "if(typeNum<0||typeNum>2){alert('Invalid sensor type');return;}";
+    html += "const name=prompt('Enter sensor name:','Sensor '+(freeSlot+1));";
+    html += "if(!name)return;";
+    html += "const pin=parseInt(prompt('Enter primary pin (GPIO number):','5'));";
+    html += "if(isNaN(pin)||pin<0||pin>48){alert('Invalid pin number');return;}";
+    html += "const sensor={type:typeNum,name:name,primaryPin:pin,enabled:true,isPrimary:freeSlot===0,";
+    html += "warmupMs:60000,debounceMs:100,detectionThreshold:300,enableDirectionDetection:true,";
+    html += "rapidSampleCount:5,rapidSampleMs:200};";
+    html += "if(typeNum===2){";
+    html += "const echoPin=parseInt(prompt('Enter echo pin (GPIO number):','14'));";
+    html += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
+    html += "sensor.secondaryPin=echoPin;}";
+    html += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
+
+    // Remove sensor
+    html += "function removeSensor(slotIdx){";
+    html += "if(!confirm('Remove sensor from slot '+slotIdx+'?'))return;";
+    html += "sensorSlots[slotIdx]=null;renderSensors();saveSensors();}";
+
+    // Toggle sensor enabled/disabled
+    html += "function toggleSensor(slotIdx){";
+    html += "if(sensorSlots[slotIdx]){";
+    html += "sensorSlots[slotIdx].enabled=!sensorSlots[slotIdx].enabled;";
+    html += "renderSensors();saveSensors();}}";
+
+    // Edit sensor
+    html += "function editSensor(slotIdx){";
+    html += "const sensor=sensorSlots[slotIdx];if(!sensor)return;";
+    html += "const newName=prompt('Sensor name:',sensor.name);";
+    html += "if(newName!==null&&newName.length>0){sensor.name=newName;}";
+    html += "if(sensor.type===0){";
+    html += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
+    html += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
+    html += "const debounce=parseInt(prompt('Debounce time (ms):',sensor.debounceMs));";
+    html += "if(!isNaN(debounce)&&debounce>=10&&debounce<=1000)sensor.debounceMs=debounce;}";
+    html += "else if(sensor.type===2){";
+    html += "const minDist=parseInt(prompt('Min detection distance (mm):',sensor.detectionThreshold));";
+    html += "if(!isNaN(minDist)&&minDist>=10)sensor.detectionThreshold=minDist;";
+    html += "const dirEn=confirm('Enable direction detection?');sensor.enableDirectionDetection=dirEn;";
+    html += "const samples=parseInt(prompt('Rapid sample count:',sensor.rapidSampleCount));";
+    html += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.rapidSampleCount=samples;";
+    html += "const interval=parseInt(prompt('Sample interval (ms):',sensor.rapidSampleMs));";
+    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.rapidSampleMs=interval;}";
+    html += "renderSensors();saveSensors();}";
+
+    // Save sensors to backend
+    html += "async function saveSensors(){";
+    html += "try{const res=await fetch('/api/sensors',{method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify({sensors:sensorSlots})});";
+    html += "if(!res.ok){alert('Failed to save sensor configuration');}}";
+    html += "catch(e){alert('Error saving sensors: '+e.message);}}";
+
+    // Auto-refresh status and logs
+    html += "fetchStatus();";
+    html += "setInterval(fetchStatus,2000);";
+    html += "setInterval(()=>{";
+    html += "if(document.getElementById('logs-tab').classList.contains('active')){fetchLogs();}";
+    html += "},5000);";
 
     html += "</script></body></html>";
 

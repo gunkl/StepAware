@@ -69,7 +69,7 @@ void HAL_PIR::update() {
     if (!m_sensorReady) {
         if (millis() - m_startTime >= m_warmupDuration) {
             m_sensorReady = true;
-            DEBUG_PRINTLN("[HAL_PIR] Warm-up complete - sensor ready");
+            LOG_INFO("HAL_PIR: Warm-up complete - sensor ready");
         }
     }
 

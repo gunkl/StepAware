@@ -20,6 +20,7 @@
  * - GET  /api/mode         - Get current operating mode
  * - POST /api/mode         - Set operating mode
  * - GET  /api/logs         - Get recent log entries
+ * - POST /api/sensors      - Update sensor configuration
  * - POST /api/reset        - Factory reset
  * - GET  /api/version      - Firmware version info
  *
@@ -122,6 +123,11 @@ private:
      * @brief GET /api/logs - Get log entries
      */
     void handleGetLogs(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/sensors - Update sensor configuration
+     */
+    void handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
 
     /**
      * @brief POST /api/reset - Factory reset
