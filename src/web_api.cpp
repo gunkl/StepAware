@@ -523,7 +523,7 @@ String WebAPI::buildDashboardHTML() {
     html += ".btn-danger{background:#ef4444;color:white;}.btn-danger:hover{background:#dc2626;}";
     html += ".btn.active{box-shadow:0 0 0 3px rgba(102,126,234,0.5);}";
     html += ".btn-small{padding:8px 16px;font-size:0.9em;}";
-    html += ".btn-sm{padding:6px 12px;font-size:0.85em;color:white;min-width:70px;}";
+    html += ".btn-sm{padding:6px 12px;font-size:0.85em;color:white;min-width:70px;line-height:1.5;text-align:center;display:inline-block;vertical-align:middle;}";
 
     // Badges
     html += ".badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:0.85em;font-weight:600;}";
@@ -900,8 +900,7 @@ String WebAPI::buildDashboardHTML() {
     html += "card.innerHTML+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
     html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span></div>';";
     html += "card.innerHTML+='<div class=\"sensor-actions\">';";
-    html += "card.innerHTML+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">';";
-    html += "card.innerHTML+=(sensor.enabled?'Disable':'Enable')+'</button>';";
+    html += "card.innerHTML+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
     html += "card.innerHTML+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
     html += "card.innerHTML+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
     html += "card.innerHTML+='</div></div>';";
