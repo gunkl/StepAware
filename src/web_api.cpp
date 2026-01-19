@@ -401,12 +401,17 @@ String WebAPI::buildDashboardHTML() {
     html += ".tab-content{display:none;}";
     html += ".tab-content.active{display:block;}";
 
-    // Status grid
-    html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:20px;}";
-    html += ".status-item{background:#f7f9fc;padding:16px;border-radius:8px;border-left:4px solid #667eea;}";
-    html += ".status-label{font-size:0.85em;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}";
-    html += ".status-value{font-size:1.5em;font-weight:600;color:#333;}";
-    html += ".status-value.warning{color:#f59e0b;}.status-value.active{color:#10b981;}.status-value.inactive{color:#6b7280;}";
+    // Sticky status bar
+    html += ".status-bar{background:white;border-radius:8px;padding:12px 16px;margin-bottom:20px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}";
+    html += ".status-compact{display:flex;gap:24px;align-items:center;flex-wrap:wrap;justify-content:space-between;}";
+    html += ".status-item-compact{display:flex;align-items:center;gap:8px;}";
+    html += ".status-icon{width:8px;height:8px;border-radius:50%;background:#667eea;flex-shrink:0;}";
+    html += ".status-icon.warning{background:#f59e0b;animation:pulse 2s infinite;}";
+    html += ".status-icon.active{background:#10b981;}";
+    html += ".status-icon.inactive{background:#6b7280;}";
+    html += "@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}";
+    html += ".status-label-compact{font-size:0.75em;color:#666;text-transform:uppercase;letter-spacing:0.5px;}";
+    html += ".status-value-compact{font-size:0.95em;font-weight:600;color:#333;}";
 
     // Buttons
     html += ".mode-buttons{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px;}";
@@ -437,10 +442,17 @@ String WebAPI::buildDashboardHTML() {
 
     // Logs
     html += "#log-viewer{background:#1e293b;color:#e2e8f0;padding:16px;border-radius:8px;font-family:monospace;";
-    html += "font-size:0.85em;max-height:400px;overflow-y:auto;line-height:1.6;}";
+    html += "font-size:0.85em;height:800px;overflow-y:auto;line-height:1.6;resize:vertical;}";
     html += ".log-entry{margin-bottom:4px;}";
+    html += ".log-entry.hidden{display:none;}";
     html += ".log-info{color:#60a5fa;}.log-warn{color:#fbbf24;}.log-error{color:#f87171;}";
     html += "#log-status{margin-bottom:12px;padding:8px;background:#f3f4f6;border-radius:6px;text-align:center;}";
+    html += ".log-controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}";
+    html += ".log-search{flex:1;min-width:200px;padding:8px;border:2px solid #e5e7eb;border-radius:6px;}";
+    html += ".log-filter-group{display:flex;gap:4px;}";
+    html += ".log-filter-btn{padding:6px 12px;border:2px solid #e5e7eb;background:white;border-radius:6px;cursor:pointer;font-size:0.85em;transition:all 0.2s;}";
+    html += ".log-filter-btn.active{background:#667eea;color:white;border-color:#667eea;}";
+    html += ".log-filter-btn:hover{border-color:#667eea;}";
 
     // Misc
     html += "#wifi-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}";
@@ -450,6 +462,20 @@ String WebAPI::buildDashboardHTML() {
 
     html += "</style></head><body><div class=\"container\">";
     html += "<h1>&#128680; StepAware Dashboard</h1>";
+
+    // Sticky Status Bar
+    html += "<div class=\"status-bar\"><div class=\"status-compact\">";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\" id=\"mode-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">Mode</div><div class=\"status-value-compact\" id=\"mode-display\">...</div></div></div>";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\" id=\"warning-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">Warning</div><div class=\"status-value-compact\" id=\"warning-status\">--</div></div></div>";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">Motion</div><div class=\"status-value-compact\" id=\"motion-events\">0</div></div></div>";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">Uptime</div><div class=\"status-value-compact\" id=\"uptime\">--</div></div></div>";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\" id=\"wifi-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">WiFi</div><div class=\"status-value-compact\" id=\"wifi-status-compact\">--</div></div></div>";
+    html += "</div></div>";
 
     // Tab Navigation
     html += "<div class=\"tabs\">";
@@ -461,27 +487,14 @@ String WebAPI::buildDashboardHTML() {
     // STATUS TAB
     html += "<div id=\"status-tab\" class=\"tab-content active\">";
 
-    html += "<div class=\"card\"><h2>System Status</h2><div class=\"status-grid\">";
-    html += "<div class=\"status-item\"><div class=\"status-label\">Operating Mode</div>";
-    html += "<div class=\"status-value\" id=\"mode-display\">Loading...</div></div>";
-    html += "<div class=\"status-item\"><div class=\"status-label\">Warning Status</div>";
-    html += "<div class=\"status-value\" id=\"warning-status\">--</div></div>";
-    html += "<div class=\"status-item\"><div class=\"status-label\">Motion Events</div>";
-    html += "<div class=\"status-value\" id=\"motion-events\">0</div></div>";
-    html += "<div class=\"status-item\"><div class=\"status-label\">Uptime</div>";
-    html += "<div class=\"status-value\" id=\"uptime\">--</div></div>";
-    html += "</div></div>";
-
     html += "<div class=\"card\"><h2>Control Panel</h2><div class=\"mode-buttons\">";
     html += "<button class=\"btn btn-off\" onclick=\"setMode(0)\" id=\"btn-0\">OFF</button>";
     html += "<button class=\"btn btn-always\" onclick=\"setMode(1)\" id=\"btn-1\">ALWAYS ON</button>";
     html += "<button class=\"btn btn-motion\" onclick=\"setMode(2)\" id=\"btn-2\">MOTION DETECT</button>";
     html += "</div></div>";
 
-    html += "<div class=\"card\"><h2>Network Status</h2><div id=\"wifi-status\">";
-    html += "<span class=\"status-label\">WiFi:</span>";
-    html += "<span id=\"wifi-state\" class=\"badge badge-info\">--</span>";
-    html += "<span id=\"wifi-details\"></span>";
+    html += "<div class=\"card\"><h2>Network Details</h2><div id=\"wifi-details-full\">";
+    html += "<p>Loading WiFi information...</p>";
     html += "</div></div>";
 
     html += "</div>"; // End status tab
@@ -510,10 +523,10 @@ String WebAPI::buildDashboardHTML() {
 
     html += "<h3>Motion Detection</h3>";
     html += "<div class=\"form-row\">";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Warning Duration (ms)</label>";
-    html += "<input type=\"number\" id=\"cfg-motionWarningDuration\" class=\"form-input\" min=\"1000\" max=\"600000\"></div>";
-    html += "<div class=\"form-group\"><label class=\"form-label\">Sensor Threshold (mm)</label>";
-    html += "<input type=\"number\" id=\"cfg-sensorThreshold\" class=\"form-input\" min=\"50\" max=\"4000\"></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Warning Duration (seconds)</label>";
+    html += "<input type=\"number\" id=\"cfg-motionWarningDuration\" class=\"form-input\" min=\"1\" max=\"600\"></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Sensor Threshold (cm)</label>";
+    html += "<input type=\"number\" id=\"cfg-sensorThreshold\" class=\"form-input\" min=\"10\" max=\"500\"></div>";
     html += "</div>";
 
     html += "<h3>LED Settings</h3>";
@@ -554,6 +567,14 @@ String WebAPI::buildDashboardHTML() {
     html += "<div id=\"logs-tab\" class=\"tab-content\">";
     html += "<div class=\"card\"><h2>System Logs</h2>";
     html += "<div id=\"log-status\">Fetching logs...</div>";
+    html += "<div class=\"log-controls\">";
+    html += "<input type=\"text\" id=\"log-search\" class=\"log-search\" placeholder=\"Search logs...\" oninput=\"filterLogs()\">";
+    html += "<div class=\"log-filter-group\">";
+    html += "<button class=\"log-filter-btn active\" data-level=\"all\" onclick=\"setLogFilter('all')\">All</button>";
+    html += "<button class=\"log-filter-btn\" data-level=\"ERROR\" onclick=\"setLogFilter('ERROR')\">Error</button>";
+    html += "<button class=\"log-filter-btn\" data-level=\"WARN\" onclick=\"setLogFilter('WARN')\">Warn</button>";
+    html += "<button class=\"log-filter-btn\" data-level=\"INFO\" onclick=\"setLogFilter('INFO')\">Info</button>";
+    html += "</div></div>";
     html += "<div id=\"log-viewer\"></div>";
     html += "<div style=\"margin-top:12px;\">";
     html += "<button class=\"btn btn-primary btn-small\" onclick=\"fetchLogs()\">Refresh</button>";
@@ -575,28 +596,51 @@ String WebAPI::buildDashboardHTML() {
     html += "if(tab==='logs')fetchLogs();";
     html += "}";
 
-    // Status fetching (existing)
+    // Status fetching
     html += "let currentMode=-1;";
     html += "async function fetchStatus(){";
-    html += "if(document.getElementById('status-tab').classList.contains('active')){";
     html += "try{const res=await fetch('/api/status');const data=await res.json();";
     html += "currentMode=data.stateMachine.mode;";
+
+    // Update compact status bar
     html += "document.getElementById('mode-display').textContent=data.stateMachine.modeName;";
+    html += "const modeIcon=document.getElementById('mode-icon');";
+    html += "modeIcon.className='status-icon '+(data.stateMachine.mode===0?'inactive':data.stateMachine.mode===1?'active':'');";
+
     html += "const warningEl=document.getElementById('warning-status');";
-    html += "if(data.stateMachine.warningActive){warningEl.textContent='ACTIVE';warningEl.className='status-value warning';}";
-    html += "else{warningEl.textContent='Inactive';warningEl.className='status-value inactive';}";
+    html += "const warningIcon=document.getElementById('warning-icon');";
+    html += "if(data.stateMachine.warningActive){warningEl.textContent='Active';warningIcon.className='status-icon warning';}";
+    html += "else{warningEl.textContent='Idle';warningIcon.className='status-icon inactive';}";
+
     html += "document.getElementById('motion-events').textContent=data.stateMachine.motionEvents;";
+
     html += "const uptime=Math.floor(data.uptime/1000);";
-    html += "const hours=Math.floor(uptime/3600);const mins=Math.floor((uptime%3600)/60);const secs=uptime%60;";
-    html += "document.getElementById('uptime').textContent=hours+'h '+mins+'m '+secs+'s';";
-    html += "if(data.wifi){const badge=document.getElementById('wifi-state');const details=document.getElementById('wifi-details');";
-    html += "if(data.wifi.state===3){badge.textContent='Connected';badge.className='badge badge-success';";
-    html += "details.textContent=data.wifi.ssid+' ('+data.wifi.ipAddress+') '+data.wifi.rssi+' dBm';}";
-    html += "else if(data.wifi.state===2){badge.textContent='Connecting...';badge.className='badge badge-warning';details.textContent='';}";
-    html += "else{badge.textContent=data.wifi.stateName;badge.className='badge badge-error';details.textContent='';}}";
+    html += "const hours=Math.floor(uptime/3600);const mins=Math.floor((uptime%3600)/60);";
+    html += "document.getElementById('uptime').textContent=hours+'h '+mins+'m';";
+
+    // WiFi compact status
+    html += "const wifiIcon=document.getElementById('wifi-icon');";
+    html += "const wifiCompact=document.getElementById('wifi-status-compact');";
+    html += "if(data.wifi){";
+    html += "if(data.wifi.state===3){wifiCompact.textContent=data.wifi.ssid;wifiIcon.className='status-icon active';}";
+    html += "else if(data.wifi.state===2){wifiCompact.textContent='Connecting';wifiIcon.className='status-icon warning';}";
+    html += "else{wifiCompact.textContent='Disconnected';wifiIcon.className='status-icon inactive';}}";
+
+    // Update detailed WiFi info on Status tab
+    html += "if(document.getElementById('status-tab').classList.contains('active')){";
+    html += "const detailsFull=document.getElementById('wifi-details-full');";
+    html += "if(data.wifi && data.wifi.state===3){";
+    html += "detailsFull.innerHTML='<p><strong>SSID:</strong> '+data.wifi.ssid+'</p>';";
+    html += "detailsFull.innerHTML+='<p><strong>IP Address:</strong> '+data.wifi.ipAddress+'</p>';";
+    html += "detailsFull.innerHTML+='<p><strong>Signal Strength:</strong> '+data.wifi.rssi+' dBm</p>';";
+    html += "detailsFull.innerHTML+='<p><strong>Status:</strong> <span class=\"badge badge-success\">Connected</span></p>';}";
+    html += "else if(data.wifi && data.wifi.state===2){detailsFull.innerHTML='<p>Connecting to WiFi...</p>';}";
+    html += "else{detailsFull.innerHTML='<p>WiFi disconnected or disabled</p>';}}";
+
+    // Update mode buttons
     html += "for(let i=0;i<=2;i++){const btn=document.getElementById('btn-'+i);";
     html += "if(i===currentMode)btn.classList.add('active');else btn.classList.remove('active');}";
-    html += "}catch(e){console.error('Status fetch error:',e);}}}";
+    html += "}catch(e){console.error('Status fetch error:',e);}}";
 
     html += "async function setMode(mode){";
     html += "try{const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},";
@@ -612,8 +656,8 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-wifiPassword').value='';";
     html += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
     html += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
-    html += "document.getElementById('cfg-motionWarningDuration').value=cfg.motion?.warningDuration||30000;";
-    html += "document.getElementById('cfg-sensorThreshold').value=cfg.sensor?.minDistance||600;";
+    html += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
+    html += "document.getElementById('cfg-sensorThreshold').value=cfg.sensor?.minDistance||30;";
     html += "document.getElementById('cfg-ledBrightnessFull').value=cfg.led?.brightnessFull||255;";
     html += "document.getElementById('cfg-ledBrightnessDim').value=cfg.led?.brightnessDim||50;";
     html += "document.getElementById('cfg-logLevel').value=cfg.logging?.level||2;";
@@ -627,7 +671,7 @@ String WebAPI::buildDashboardHTML() {
     html += "const cfg={device:{name:document.getElementById('cfg-deviceName').value,";
     html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value)},";
     html += "wifi:{ssid:document.getElementById('cfg-wifiSSID').value,enabled:true},";
-    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)},";
+    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000},";
     html += "sensor:{minDistance:parseInt(document.getElementById('cfg-sensorThreshold').value)},";
     html += "led:{brightnessFull:parseInt(document.getElementById('cfg-ledBrightnessFull').value),";
     html += "brightnessDim:parseInt(document.getElementById('cfg-ledBrightnessDim').value)},";
@@ -640,23 +684,48 @@ String WebAPI::buildDashboardHTML() {
     html += "setTimeout(()=>document.getElementById('save-indicator').classList.remove('show'),3000);";
     html += "loadConfig();}else{alert('Failed to save configuration');}}catch(e){alert('Error: '+e.message);}}";
 
-    // Log fetching
+    // Log fetching and filtering
+    html += "let currentFilter='all';";
     html += "async function fetchLogs(){";
     html += "try{document.getElementById('log-status').textContent='Fetching logs...';";
     html += "const res=await fetch('/api/logs?limit=100');const data=await res.json();";
     html += "const viewer=document.getElementById('log-viewer');viewer.innerHTML='';";
     html += "if(data.logs && data.logs.length>0){";
     html += "data.logs.forEach(log=>{const div=document.createElement('div');div.className='log-entry';";
+    html += "div.setAttribute('data-level',log.levelName);";
+    html += "div.setAttribute('data-message',log.message.toLowerCase());";
     html += "let cls='log-info';";
     html += "if(log.levelName==='WARN')cls='log-warn';";
     html += "if(log.levelName==='ERROR')cls='log-error';";
     html += "const time=new Date(log.timestamp).toLocaleTimeString();";
     html += "const msg='['+time+'] ['+log.levelName+'] '+log.message;";
     html += "div.innerHTML='<span class=\"'+cls+'\">'+msg+'</span>';viewer.appendChild(div);});";
+    html += "filterLogs();";
     html += "document.getElementById('log-status').textContent='Showing '+data.logs.length+' of '+data.count+' logs - Last updated: '+new Date().toLocaleTimeString();";
     html += "}else{viewer.innerHTML='<div style=\"color:#94a3b8;\">No logs available. Check log level in Configuration tab.</div>';";
     html += "document.getElementById('log-status').textContent='No logs found';}}";
     html += "catch(e){document.getElementById('log-status').textContent='Error fetching logs: '+e.message;console.error(e);}}";
+    html += "function setLogFilter(level){";
+    html += "currentFilter=level;";
+    html += "document.querySelectorAll('.log-filter-btn').forEach(btn=>{";
+    html += "btn.classList.toggle('active',btn.getAttribute('data-level')===level);});";
+    html += "filterLogs();}";
+    html += "function filterLogs(){";
+    html += "const search=document.getElementById('log-search').value.toLowerCase();";
+    html += "const entries=document.querySelectorAll('.log-entry');";
+    html += "let visibleCount=0;";
+    html += "entries.forEach(entry=>{";
+    html += "const level=entry.getAttribute('data-level');";
+    html += "const message=entry.getAttribute('data-message')||'';";
+    html += "const matchesFilter=(currentFilter==='all'||level===currentFilter);";
+    html += "const matchesSearch=(search===''||message.includes(search));";
+    html += "const visible=matchesFilter&&matchesSearch;";
+    html += "entry.classList.toggle('hidden',!visible);";
+    html += "if(visible)visibleCount++;});";
+    html += "const total=entries.length;";
+    html += "if(total>0){const status=document.getElementById('log-status');";
+    html += "const baseText=status.textContent.split('-')[0];";
+    html += "status.textContent=baseText+'- Showing '+visibleCount+' of '+total+' logs';}}";
 
     html += "function clearLogView(){document.getElementById('log-viewer').innerHTML='';}";
 
