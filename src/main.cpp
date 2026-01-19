@@ -653,7 +653,7 @@ void loop() {
     // Get current configuration for power saving check
     const ConfigManager::Config& cfg = configManager.getConfig();
 
-    if (!cfg.powerSaving) {
+    if (!cfg.powerSavingEnabled) {
         // Heartbeat pattern: short blink every 2 seconds
         uint32_t blinkInterval = 2000;
 
