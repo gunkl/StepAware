@@ -313,6 +313,7 @@ void WiFiManager::handleStateConnecting() {
 
             WiFi.disconnect();
             m_status.failureCount++;
+            m_lastReconnectAttempt = millis();  // Set reconnect timer on failure
 
             setState(STATE_DISCONNECTED);
 
@@ -331,6 +332,8 @@ void WiFiManager::handleStateConnected() {
         LOG_WARN("WiFi: Connection lost");
 
         m_status.failureCount++;
+        m_lastReconnectAttempt = millis();  // Set reconnect timer on connection loss
+
         setState(STATE_DISCONNECTED);
 
         if (m_onDisconnected) {
@@ -342,8 +345,6 @@ void WiFiManager::handleStateConnected() {
 
 void WiFiManager::handleStateDisconnected() {
     if (shouldReconnect()) {
-        m_lastReconnectAttempt = millis();
-
         LOG_INFO("WiFi: Attempting reconnect (failure count: %u)", m_status.failureCount);
 
         connect();
