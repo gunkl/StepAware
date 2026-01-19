@@ -399,13 +399,7 @@ bool WiFiManager::shouldReconnect() {
         return false;
     }
 
-    // Check if max attempts reached
-    if (m_status.failureCount >= m_config.maxReconnectAttempts) {
-        setState(STATE_FAILED);
-        return false;
-    }
-
-    // Check if enough time has passed
+    // Check if enough time has passed (retry indefinitely with exponential backoff)
     uint32_t elapsed = millis() - m_lastReconnectAttempt;
     return elapsed >= getReconnectDelay();
 }

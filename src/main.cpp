@@ -588,9 +588,9 @@ void setup() {
     strncpy(wifiConfig.ssid, cfg.wifiSSID, sizeof(wifiConfig.ssid));
     strncpy(wifiConfig.password, cfg.wifiPassword, sizeof(wifiConfig.password));
     strncpy(wifiConfig.hostname, cfg.deviceName, sizeof(wifiConfig.hostname));
-    wifiConfig.apModeOnFailure = true;
+    wifiConfig.apModeOnFailure = false;  // Issue #2: Never fall back to AP mode
     wifiConfig.connectionTimeout = 30000;
-    wifiConfig.maxReconnectAttempts = 10;
+    wifiConfig.maxReconnectAttempts = 0;  // Issue #2: Retry indefinitely (0 = unlimited)
 
     // Register callback to start Web API when WiFi connects
     wifiManager.onConnected(onWiFiConnected);
