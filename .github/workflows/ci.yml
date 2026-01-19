@@ -68,7 +68,7 @@ jobs:
         pip install platformio
 
     - name: Build ESP32 firmware
-      run: pio run -e esp32-devkitlipo
+      run: pio run -e esp32c3
 
     - name: Run native C++ tests
       run: pio test -e native -v
@@ -77,7 +77,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: firmware
-        path: .pio/build/esp32-devkitlipo/firmware.bin
+        path: .pio/build/esp32c3/firmware.bin
         retention-days: 30
 
     - name: Upload test results

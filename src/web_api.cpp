@@ -524,6 +524,25 @@ String WebAPI::buildDashboardHTML() {
     html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\"></div>";
     html += "</div>";
 
+    html += "<h3>Logging</h3>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Log Level</label>";
+    html += "<select id=\"cfg-logLevel\" class=\"form-select\">";
+    html += "<option value=\"0\">ERROR</option>";
+    html += "<option value=\"1\">WARN</option>";
+    html += "<option value=\"2\">INFO</option>";
+    html += "<option value=\"3\">DEBUG</option>";
+    html += "<option value=\"4\">VERBOSE</option>";
+    html += "</select>";
+    html += "<div class=\"form-help\">Higher levels include more detail but use more memory</div></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Power Saving</label>";
+    html += "<select id=\"cfg-powerSaving\" class=\"form-select\">";
+    html += "<option value=\"0\">Disabled</option>";
+    html += "<option value=\"1\">Enabled</option>";
+    html += "</select>";
+    html += "<div class=\"form-help\">Enable to reduce power consumption</div></div>";
+    html += "</div>";
+
     html += "<div style=\"margin-top:24px;\">";
     html += "<button type=\"submit\" class=\"btn btn-primary\">Save Configuration</button>";
     html += "<button type=\"button\" class=\"btn btn-off btn-small\" style=\"margin-left:12px;\" onclick=\"loadConfig()\">Reload</button>";
@@ -586,27 +605,35 @@ String WebAPI::buildDashboardHTML() {
     // Config loading
     html += "async function loadConfig(){";
     html += "try{const res=await fetch('/api/config');const cfg=await res.json();";
-    html += "document.getElementById('cfg-deviceName').value=cfg.deviceName||'';";
-    html += "document.getElementById('cfg-defaultMode').value=cfg.defaultMode||0;";
-    html += "document.getElementById('cfg-wifiSSID').value=cfg.wifiSSID||'';";
+    html += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
+    html += "document.getElementById('cfg-defaultMode').value=cfg.device?.defaultMode||0;";
+    html += "document.getElementById('cfg-wifiSSID').value=cfg.wifi?.ssid||'';";
+    html += "if(cfg.wifi?.password&&cfg.wifi.password.length>0){";
     html += "document.getElementById('cfg-wifiPassword').value='';";
-    html += "document.getElementById('cfg-motionWarningDuration').value=cfg.motionWarningDuration||30000;";
-    html += "document.getElementById('cfg-sensorThreshold').value=cfg.sensorThreshold||600;";
-    html += "document.getElementById('cfg-ledBrightnessFull').value=cfg.ledBrightnessFull||255;";
-    html += "document.getElementById('cfg-ledBrightnessDim').value=cfg.ledBrightnessDim||50;";
+    html += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
+    html += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
+    html += "document.getElementById('cfg-motionWarningDuration').value=cfg.motion?.warningDuration||30000;";
+    html += "document.getElementById('cfg-sensorThreshold').value=cfg.sensor?.minDistance||600;";
+    html += "document.getElementById('cfg-ledBrightnessFull').value=cfg.led?.brightnessFull||255;";
+    html += "document.getElementById('cfg-ledBrightnessDim').value=cfg.led?.brightnessDim||50;";
+    html += "document.getElementById('cfg-logLevel').value=cfg.logging?.level||2;";
+    html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
     html += "}catch(e){console.error('Config load error:',e);}}";
 
     // Config saving
     html += "async function saveConfig(e){";
     html += "e.preventDefault();";
-    html += "const cfg={deviceName:document.getElementById('cfg-deviceName').value,";
-    html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value),";
-    html += "wifiSSID:document.getElementById('cfg-wifiSSID').value,";
-    html += "wifiPassword:document.getElementById('cfg-wifiPassword').value,";
-    html += "motionWarningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value),";
-    html += "sensorThreshold:parseInt(document.getElementById('cfg-sensorThreshold').value),";
-    html += "ledBrightnessFull:parseInt(document.getElementById('cfg-ledBrightnessFull').value),";
-    html += "ledBrightnessDim:parseInt(document.getElementById('cfg-ledBrightnessDim').value)};";
+    html += "const pwdField=document.getElementById('cfg-wifiPassword');";
+    html += "const cfg={device:{name:document.getElementById('cfg-deviceName').value,";
+    html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value)},";
+    html += "wifi:{ssid:document.getElementById('cfg-wifiSSID').value,enabled:true},";
+    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)},";
+    html += "sensor:{minDistance:parseInt(document.getElementById('cfg-sensorThreshold').value)},";
+    html += "led:{brightnessFull:parseInt(document.getElementById('cfg-ledBrightnessFull').value),";
+    html += "brightnessDim:parseInt(document.getElementById('cfg-ledBrightnessDim').value)},";
+    html += "logging:{level:parseInt(document.getElementById('cfg-logLevel').value)},";
+    html += "power:{savingEnabled:parseInt(document.getElementById('cfg-powerSaving').value)===1}};";
+    html += "if(pwdField.value.length>0){cfg.wifi.password=pwdField.value;}";
     html += "try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},";
     html += "body:JSON.stringify(cfg)});if(res.ok){";
     html += "document.getElementById('save-indicator').classList.add('show');";
@@ -620,12 +647,16 @@ String WebAPI::buildDashboardHTML() {
     html += "const viewer=document.getElementById('log-viewer');viewer.innerHTML='';";
     html += "if(data.logs && data.logs.length>0){";
     html += "data.logs.forEach(log=>{const div=document.createElement('div');div.className='log-entry';";
-    html += "let cls='log-info';if(log.includes('WARN'))cls='log-warn';if(log.includes('ERROR'))cls='log-error';";
-    html += "div.innerHTML='<span class=\"'+cls+'\">'+log+'</span>';viewer.appendChild(div);});";
-    html += "document.getElementById('log-status').textContent='Last updated: '+new Date().toLocaleTimeString();";
-    html += "}else{viewer.innerHTML='<div style=\"color:#94a3b8;\">No logs available</div>';";
+    html += "let cls='log-info';";
+    html += "if(log.levelName==='WARN')cls='log-warn';";
+    html += "if(log.levelName==='ERROR')cls='log-error';";
+    html += "const time=new Date(log.timestamp).toLocaleTimeString();";
+    html += "const msg='['+time+'] ['+log.levelName+'] '+log.message;";
+    html += "div.innerHTML='<span class=\"'+cls+'\">'+msg+'</span>';viewer.appendChild(div);});";
+    html += "document.getElementById('log-status').textContent='Showing '+data.logs.length+' of '+data.count+' logs - Last updated: '+new Date().toLocaleTimeString();";
+    html += "}else{viewer.innerHTML='<div style=\"color:#94a3b8;\">No logs available. Check log level in Configuration tab.</div>';";
     html += "document.getElementById('log-status').textContent='No logs found';}}";
-    html += "catch(e){document.getElementById('log-status').textContent='Error fetching logs';console.error(e);}}";
+    html += "catch(e){document.getElementById('log-status').textContent='Error fetching logs: '+e.message;console.error(e);}}";
 
     html += "function clearLogView(){document.getElementById('log-viewer').innerHTML='';}";
 
