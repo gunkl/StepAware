@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "sensor_types.h"
 
 /**
  * @brief Configuration Manager for StepAware
@@ -19,6 +20,25 @@
  */
 class ConfigManager {
 public:
+    /**
+     * @brief Sensor slot configuration
+     */
+    struct SensorSlotConfig {
+        bool active;                      // Slot in use
+        char name[32];                    // Sensor name
+        SensorType type;                  // Sensor type
+        uint8_t primaryPin;               // Primary GPIO pin
+        uint8_t secondaryPin;             // Secondary GPIO pin (ultrasonic echo)
+        bool enabled;                     // Sensor enabled
+        bool isPrimary;                   // Primary sensor flag
+        uint32_t detectionThreshold;      // mm
+        uint32_t debounceMs;              // ms
+        uint32_t warmupMs;                // ms
+        bool enableDirectionDetection;    // Direction detection enabled
+        uint8_t rapidSampleCount;         // Rapid sample count
+        uint16_t rapidSampleMs;           // Rapid sample interval
+    };
+
     /**
      * @brief Runtime configuration structure
      */
@@ -73,6 +93,10 @@ public:
         uint8_t logLevel;                  // Log level (DEBUG, INFO, WARN, ERROR)
         bool serialLoggingEnabled;         // Enable serial logging
         bool fileLoggingEnabled;           // Enable file logging
+
+        // Multi-Sensor Configuration (Phase 2)
+        SensorSlotConfig sensors[4];       // Up to 4 sensor slots
+        uint8_t fusionMode;                // Sensor fusion mode
 
         // Configuration metadata
         char version[16];                  // Config version

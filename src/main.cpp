@@ -87,7 +87,7 @@ void startWebAPI() {
  * @brief Callback when WiFi connects
  */
 void onWiFiConnected() {
-    Serial.println("[WiFi] Connected callback - starting Web API if needed");
+    LOG_INFO("WiFi: Connected callback - starting Web API if needed");
     startWebAPI();
 }
 

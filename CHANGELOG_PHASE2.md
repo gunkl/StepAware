@@ -1,8 +1,9 @@
 # Changelog - Phase 2 Features
 
-## Version: Issue #4 Phase 2 & Issue #8 Complete
+## Version: Issue #4 Phase 2 & Issue #8 Complete + Hardware Configuration UI
 
 **Date**: 2026-01-19
+**Updated**: 2026-01-19 (Added Hardware Configuration Tab)
 
 ### Major Features
 
@@ -29,6 +30,137 @@
 - All sensor parameters now configurable via web UI
 - No need to recompile firmware for sensor tuning
 - Better user experience with inline help
+
+---
+
+#### ✅ Hardware Configuration Tab (Issue #4 + #8 Enhancement)
+
+**Summary**: New dedicated Hardware tab in web dashboard for dynamic multi-sensor configuration with visual pin information.
+
+**Changes**:
+- Added new "Hardware" tab to web dashboard navigation
+- Removed hard-coded distance sensor settings from Config tab
+- Implemented dynamic sensor card system with:
+  - Add/Remove/Edit sensor functionality
+  - Enable/Disable toggle per sensor
+  - Pin connection information display (GPIO numbers)
+  - Sensor-specific configuration fields
+  - Support for up to 4 sensor slots
+  - Visual feedback for enabled/disabled sensors
+
+**Features**:
+1. **Dynamic Sensor Management**:
+   - Add sensors via interactive prompts (PIR, IR, Ultrasonic)
+   - Configure sensor name and GPIO pins
+   - Edit sensor parameters at runtime
+   - Remove sensors when not needed
+
+2. **Pin Information Display**:
+   - PIR/IR: Shows single Signal Pin
+   - Ultrasonic: Shows Trigger Pin and Echo Pin
+   - Helps users wire sensors correctly to the board
+
+3. **Sensor Configuration UI**:
+   - PIR: Warmup time, debounce
+   - IR: Debounce
+   - Ultrasonic: Detection threshold, direction detection, sample count/interval
+   - Visual badges showing sensor type
+   - Sensor slot tracking (0-3)
+
+4. **REST API**:
+   - New POST `/api/sensors` endpoint
+   - Accepts JSON sensor configuration array
+   - Returns acknowledgment (persistence pending ConfigManager integration)
+
+**Files Modified**:
+- [src/web_api.cpp](src/web_api.cpp):
+  - Lines 463-474: Sensor card CSS styles
+  - Lines 483: Added Hardware tab to navigation
+  - Lines 503-511: Hardware tab HTML structure
+  - Lines 622: Load sensors when Hardware tab shown
+  - Lines 769-876: JavaScript sensor management functions
+  - Lines 76-82: POST `/api/sensors` endpoint registration
+  - Lines 97-99: OPTIONS handler for CORS
+  - Lines 234-266: `handlePostSensors()` implementation
+
+- [include/web_api.h](include/web_api.h):
+  - Line 23: Added `/api/sensors` endpoint documentation
+  - Lines 127-130: Method declaration for `handlePostSensors()`
+
+**JavaScript Functions**:
+- `loadSensors()` - Fetch sensor configuration from backend
+- `renderSensors()` - Display all sensor cards
+- `createSensorCard()` - Build individual sensor card UI
+- `addSensor()` - Interactive sensor addition
+- `removeSensor()` - Delete sensor from slot
+- `toggleSensor()` - Enable/disable sensor
+- `editSensor()` - Modify sensor parameters
+- `saveSensors()` - Persist configuration to backend
+
+**User Experience**:
+- No more hard-coded sensor assumptions
+- Users can add sensors as they physically connect them
+- Clear visual feedback about pin connections
+- Easy sensor management without recompiling firmware
+- Prevents configuration mismatch with actual hardware
+
+**Completed Integration** (2026-01-19 Update):
+- ✅ ConfigManager now persists sensor configurations
+- ✅ Default PIR sensor configured in slot 0
+- ✅ Hardware tab loads sensors from saved config
+- ✅ JSON serialization/deserialization implemented
+- ✅ Increased JSON buffer to 4096 bytes
+
+**Remaining Integration**:
+- [ ] Runtime sensor reload when config changes via web UI
+- [ ] main.cpp integration to use ConfigManager sensors at startup
+
+---
+
+#### ✅ Issue #11: Logs Auto-Refresh & Missing Messages
+
+**Summary**: Fixed logs not updating after initial page load and missing system messages in web UI.
+
+**Root Causes**:
+1. Logs tab wasn't auto-refreshing after initial load
+2. Some code used `DEBUG_PRINTLN`/`DEBUG_PRINTF` which bypass logger
+
+**Changes**:
+- Added 5-second auto-refresh for logs tab when active
+- Fixed `/api/logs` to respect limit query parameter (up to 200 entries)
+- Replaced `DEBUG_*` macros with `LOG_INFO` in critical paths:
+  - `src/hal_pir.cpp:72` - PIR warmup complete message
+  - `src/state_machine.cpp:76-77` - Sensor warmup complete message
+  - `src/main.cpp:90` - WiFi connected callback message
+
+**User Impact**:
+- Logs now update automatically every 5 seconds
+- All system messages appear in web UI
+- WiFi connection, sensor warmup, and state changes visible in logs
+
+---
+
+#### ✅ ConfigManager Multi-Sensor Persistence
+
+**Summary**: Extended ConfigManager to store and load multi-sensor configurations.
+
+**Changes**:
+- Added `SensorSlotConfig` structure ([include/config_manager.h:25-39](include/config_manager.h#L25-L39))
+- Added `sensors[4]` array and `fusionMode` to Config ([include/config_manager.h:78-79](include/config_manager.h#L78-L79))
+- Increased JSON buffer from 2048 to 4096 bytes
+- Default PIR sensor configured in slot 0 ([src/config_manager.cpp:451-464](src/config_manager.cpp#L451-L464))
+- Implemented sensor array serialization ([src/config_manager.cpp:224-245](src/config_manager.cpp#L224-L245))
+- Implemented sensor array deserialization ([src/config_manager.cpp:343-373](src/config_manager.cpp#L343-L373))
+
+**Sensor Fields Persisted**:
+- Slot metadata: active, name, enabled, isPrimary
+- Hardware config: type, primaryPin, secondaryPin
+- Detection config: detectionThreshold, debounceMs, warmupMs
+- Advanced: enableDirectionDetection, rapidSampleCount, rapidSampleMs
+
+**Files Modified**:
+- `include/config_manager.h` - Added SensorSlotConfig structure
+- `src/config_manager.cpp` - loadDefaults(), toJSON(), fromJSON()
 
 ---
 
@@ -211,13 +343,13 @@ if (sensorMgr.isMotionDetected()) {
 - ✅ Documentation
 - ✅ Examples
 - ✅ Web UI sensor config (Issue #8)
+- ✅ Hardware configuration tab with dynamic sensor management
 
-**Future Work** (Not Required for Phase 2):
-- [ ] ConfigManager multi-sensor persistence
-- [ ] Web UI multi-sensor configuration
-- [ ] StateMachine direct integration
+**Future Work**:
+- [ ] Runtime sensor reload when config changes via web UI (requires restart currently)
+- [ ] StateMachine direct integration with SensorManager
 - [ ] Serial commands for sensor management
-- [ ] main.cpp integration example
+- [ ] main.cpp example using ConfigManager sensors at startup
 
 **Current State**:
 - SensorManager is production-ready

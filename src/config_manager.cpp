@@ -158,7 +158,7 @@ bool ConfigManager::setConfig(const Config& config) {
 }
 
 bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<4096> doc;
 
     // Motion Detection
     JsonObject motion = doc.createNestedObject("motion");
@@ -221,6 +221,29 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     logging["serialEnabled"] = m_config.serialLoggingEnabled;
     logging["fileEnabled"] = m_config.fileLoggingEnabled;
 
+    // Multi-Sensor Configuration
+    JsonArray sensorsArray = doc.createNestedArray("sensors");
+    for (int i = 0; i < 4; i++) {
+        if (m_config.sensors[i].active) {
+            JsonObject sensorObj = sensorsArray.createNestedObject();
+            sensorObj["slot"] = i;
+            sensorObj["name"] = m_config.sensors[i].name;
+            sensorObj["type"] = m_config.sensors[i].type;
+            sensorObj["primaryPin"] = m_config.sensors[i].primaryPin;
+            sensorObj["secondaryPin"] = m_config.sensors[i].secondaryPin;
+            sensorObj["enabled"] = m_config.sensors[i].enabled;
+            sensorObj["isPrimary"] = m_config.sensors[i].isPrimary;
+            sensorObj["detectionThreshold"] = m_config.sensors[i].detectionThreshold;
+            sensorObj["debounceMs"] = m_config.sensors[i].debounceMs;
+            sensorObj["warmupMs"] = m_config.sensors[i].warmupMs;
+            sensorObj["enableDirectionDetection"] = m_config.sensors[i].enableDirectionDetection;
+            sensorObj["rapidSampleCount"] = m_config.sensors[i].rapidSampleCount;
+            sensorObj["rapidSampleMs"] = m_config.sensors[i].rapidSampleMs;
+        }
+    }
+
+    doc["fusionMode"] = m_config.fusionMode;
+
     // Metadata
     JsonObject meta = doc.createNestedObject("metadata");
     meta["version"] = m_config.version;
@@ -238,7 +261,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 }
 
 bool ConfigManager::fromJSON(const char* json) {
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<4096> doc;
     DeserializationError error = deserializeJson(doc, json);
 
     if (error) {
@@ -315,6 +338,38 @@ bool ConfigManager::fromJSON(const char* json) {
         m_config.logLevel = doc["logging"]["level"] | LOG_LEVEL_INFO;
         m_config.serialLoggingEnabled = doc["logging"]["serialEnabled"] | true;
         m_config.fileLoggingEnabled = doc["logging"]["fileEnabled"] | false;
+    }
+
+    // Multi-Sensor Configuration
+    if (doc.containsKey("sensors")) {
+        // Clear all slots first
+        for (int i = 0; i < 4; i++) {
+            m_config.sensors[i].active = false;
+        }
+
+        JsonArray sensorsArray = doc["sensors"];
+        for (JsonObject sensorObj : sensorsArray) {
+            int slot = sensorObj["slot"] | -1;
+            if (slot >= 0 && slot < 4) {
+                m_config.sensors[slot].active = true;
+                strlcpy(m_config.sensors[slot].name, sensorObj["name"] | "", sizeof(m_config.sensors[slot].name));
+                m_config.sensors[slot].type = (SensorType)(sensorObj["type"] | 0);
+                m_config.sensors[slot].primaryPin = sensorObj["primaryPin"] | 0;
+                m_config.sensors[slot].secondaryPin = sensorObj["secondaryPin"] | 0;
+                m_config.sensors[slot].enabled = sensorObj["enabled"] | true;
+                m_config.sensors[slot].isPrimary = sensorObj["isPrimary"] | false;
+                m_config.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 0;
+                m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
+                m_config.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
+                m_config.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
+                m_config.sensors[slot].rapidSampleCount = sensorObj["rapidSampleCount"] | 0;
+                m_config.sensors[slot].rapidSampleMs = sensorObj["rapidSampleMs"] | 0;
+            }
+        }
+    }
+
+    if (doc.containsKey("fusionMode")) {
+        m_config.fusionMode = doc["fusionMode"] | 0;
     }
 
     // Metadata
@@ -440,6 +495,30 @@ void ConfigManager::loadDefaults() {
     m_config.logLevel = LOG_LEVEL_INFO;
     m_config.serialLoggingEnabled = true;
     m_config.fileLoggingEnabled = false;
+
+    // Multi-Sensor Configuration - Default PIR sensor
+    for (int i = 0; i < 4; i++) {
+        m_config.sensors[i].active = false;
+        m_config.sensors[i].enabled = false;
+        strlcpy(m_config.sensors[i].name, "", sizeof(m_config.sensors[i].name));
+    }
+
+    // Sensor slot 0: Default PIR sensor
+    m_config.sensors[0].active = true;
+    m_config.sensors[0].enabled = true;
+    strlcpy(m_config.sensors[0].name, "PIR Motion", sizeof(m_config.sensors[0].name));
+    m_config.sensors[0].type = SENSOR_TYPE_PIR;
+    m_config.sensors[0].primaryPin = PIN_MOTION_SENSOR;
+    m_config.sensors[0].secondaryPin = 0;
+    m_config.sensors[0].isPrimary = true;
+    m_config.sensors[0].detectionThreshold = 0;  // N/A for PIR
+    m_config.sensors[0].debounceMs = 100;
+    m_config.sensors[0].warmupMs = PIR_WARMUP_TIME_MS;
+    m_config.sensors[0].enableDirectionDetection = false;
+    m_config.sensors[0].rapidSampleCount = 0;
+    m_config.sensors[0].rapidSampleMs = 0;
+
+    m_config.fusionMode = 0;  // FUSION_MODE_ANY
 
     // Metadata
     strlcpy(m_config.version, FIRMWARE_VERSION, sizeof(m_config.version));
