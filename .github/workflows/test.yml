@@ -43,16 +43,16 @@ jobs:
         run: pip install platformio
 
       - name: Build ESP32 firmware
-        run: pio run -e esp32-devkitlipo
+        run: pio run -e esp32c3
 
       - name: Check firmware size
-        run: pio run -e esp32-devkitlipo --target size
+        run: pio run -e esp32c3 --target size
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: .pio/build/esp32-devkitlipo/firmware.bin
+          path: .pio/build/esp32c3/firmware.bin
           retention-days: 30
 
   test-native:
@@ -104,7 +104,7 @@ jobs:
         run: docker compose run --rm stepaware-dev pio test -e native
 
       - name: Build firmware in Docker
-        run: docker compose run --rm stepaware-dev pio run -e esp32-devkitlipo
+        run: docker compose run --rm stepaware-dev pio run -e esp32c3
 
   lint:
     name: Code Linting

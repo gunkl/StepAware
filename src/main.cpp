@@ -645,6 +645,39 @@ void loop() {
     // Update WiFi manager (handles connection state, reconnection)
     wifiManager.update();
 
+    // Update status LED (low priority heartbeat)
+    static uint32_t lastStatusBlink = 0;
+    static bool statusLedState = false;
+    uint32_t now = millis();
+
+    // Get current configuration for power saving check
+    const ConfigManager::Config& cfg = configManager.getConfig();
+
+    if (!cfg.powerSaving) {
+        // Heartbeat pattern: short blink every 2 seconds
+        uint32_t blinkInterval = 2000;
+
+        if (now - lastStatusBlink >= blinkInterval) {
+            lastStatusBlink = now;
+            statusLedState = !statusLedState;
+
+            if (statusLedState) {
+                // Brief flash (50ms)
+                statusLED.setBrightness(20);  // Dim brightness
+            } else {
+                statusLED.setBrightness(0);   // Off
+            }
+        }
+
+        // Turn off after 50ms flash
+        if (statusLedState && (now - lastStatusBlink >= 50)) {
+            statusLED.setBrightness(0);
+        }
+    } else {
+        // Power saving mode: keep status LED off
+        statusLED.setBrightness(0);
+    }
+
     // Process serial commands
     processSerialCommand();
 
