@@ -64,7 +64,10 @@
       "Bash(timeout 25 ~/.platformio/penv/Scripts/pio.exe device monitor:*)",
       "Bash(C:UsersDavid.platformiopenvScriptspio.exe run -e esp32c3)",
       "Bash(git log:*)",
-      "Bash(gh run:*)"
+      "Bash(gh run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
