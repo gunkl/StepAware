@@ -1,6 +1,10 @@
 #include "config_manager.h"
-#include <SPIFFS.h>
 #include <ArduinoJson.h>
+
+// Use LittleFS instead of FILESYSTEM for better ESP32-C3 support
+// LittleFS is more reliable and has better wear leveling
+#include <LittleFS.h>
+#define FILESYSTEM LittleFS
 
 const char* ConfigManager::CONFIG_FILE_PATH = "/config.json";
 
@@ -12,7 +16,7 @@ ConfigManager::ConfigManager()
 }
 
 ConfigManager::~ConfigManager() {
-    // SPIFFS cleanup handled by framework
+    // FILESYSTEM cleanup handled by framework
 }
 
 bool ConfigManager::begin() {
@@ -22,20 +26,20 @@ bool ConfigManager::begin() {
 
     DEBUG_PRINTLN("[ConfigManager] Initializing...");
 
-    // Mount SPIFFS
-    if (!SPIFFS.begin(true)) {  // true = format on fail
-        setError("Failed to mount SPIFFS");
-        DEBUG_PRINTLN("[ConfigManager] ERROR: Failed to mount SPIFFS");
+    // Mount FILESYSTEM
+    if (!FILESYSTEM.begin(true)) {  // true = format on fail
+        setError("Failed to mount FILESYSTEM");
+        DEBUG_PRINTLN("[ConfigManager] ERROR: Failed to mount FILESYSTEM");
         return false;
     }
 
-    DEBUG_PRINTLN("[ConfigManager] SPIFFS mounted");
+    DEBUG_PRINTLN("[ConfigManager] FILESYSTEM mounted");
 
     // Load defaults first
     loadDefaults();
 
     // Try to load config from file
-    if (SPIFFS.exists(CONFIG_FILE_PATH)) {
+    if (FILESYSTEM.exists(CONFIG_FILE_PATH)) {
         DEBUG_PRINTLN("[ConfigManager] Config file found, loading...");
         if (!load()) {
             DEBUG_PRINTLN("[ConfigManager] WARNING: Failed to load config, using defaults");
@@ -54,7 +58,7 @@ bool ConfigManager::begin() {
 }
 
 bool ConfigManager::load() {
-    File file = SPIFFS.open(CONFIG_FILE_PATH, "r");
+    File file = FILESYSTEM.open(CONFIG_FILE_PATH, "r");
     if (!file) {
         setError("Failed to open config file");
         return false;
@@ -99,7 +103,7 @@ bool ConfigManager::save() {
         return false;
     }
 
-    File file = SPIFFS.open(CONFIG_FILE_PATH, "w");
+    File file = FILESYSTEM.open(CONFIG_FILE_PATH, "w");
     if (!file) {
         setError("Failed to open config file for writing");
         return false;
@@ -541,6 +545,6 @@ bool ConfigManager::setWiFiCredentials(const char* ssid, const char* password) {
     // Update metadata
     m_config.lastModified = millis();
 
-    // Save to SPIFFS
+    // Save to FILESYSTEM
     return save();
 }
