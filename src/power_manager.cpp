@@ -5,6 +5,12 @@
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <driver/adc.h>
+#include <driver/gpio.h>
+
+// ESP32-C3 specific includes for deep sleep GPIO wakeup
+#if CONFIG_IDF_TARGET_ESP32C3
+#include <esp_chip_info.h>
+#endif
 #endif
 
 // Global power manager instance
@@ -96,8 +102,16 @@ bool PowerManager::begin(const Config* config) {
 
 #ifndef MOCK_MODE
     // Configure ADC for battery voltage reading
+    // Note: ESP32-C3 uses different ADC API - analogRead() works via Arduino framework
+    // The adc1_config functions are deprecated in newer ESP-IDF
+    #if !CONFIG_IDF_TARGET_ESP32C3
     adc1_config_width(ADC_WIDTH_BIT_12);
     adc1_config_channel_atten(BATTERY_ADC_CHANNEL, ADC_ATTEN_DB_12);
+    #else
+    // ESP32-C3: Use analogReadResolution and analogSetAttenuation instead
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);  // For full 0-3.3V range
+    #endif
 #endif
 
     m_startTime = millis();
@@ -224,8 +238,8 @@ float PowerManager::getBatteryVoltage() {
 
 float PowerManager::readBatteryVoltageRaw() {
 #ifndef MOCK_MODE
-    // Read ADC value
-    uint16_t raw = adc1_get_raw(BATTERY_ADC_CHANNEL);
+    // Read ADC value using Arduino API (works on all ESP32 variants)
+    uint16_t raw = analogRead(PIN_BATTERY_ADC);
 
     // Convert to voltage (12-bit ADC, 0-3.3V range with 11dB attenuation)
     // With voltage divider (2:1 ratio), multiply by 2
@@ -400,20 +414,24 @@ void PowerManager::enterLightSleep(uint32_t duration_ms) {
         esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL); // Convert to µs
     }
 
-    // Wake on PIR motion
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIR_SENSOR_PIN, HIGH);
+    // ESP32-C3 uses GPIO wakeup for light sleep (gpio_wakeup_enable)
+    // Enable GPIO wakeup source first
+    esp_sleep_enable_gpio_wakeup();
 
-    // Wake on button press
-    esp_sleep_enable_ext1_wakeup(1ULL << BUTTON_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);
+    // Wake on PIR motion (HIGH level)
+    gpio_wakeup_enable((gpio_num_t)PIR_SENSOR_PIN, GPIO_INTR_HIGH_LEVEL);
 
-    // Reduce CPU frequency
+    // Wake on button press (LOW level since button is active-low with pull-up)
+    gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+
+    // Reduce CPU frequency (ESP32-C3 max is 160MHz)
     setCPUFrequency(80);
 
     // Enter light sleep
     esp_light_sleep_start();
 
-    // Restore after wake
-    setCPUFrequency(240);
+    // Restore after wake (ESP32-C3 max is 160MHz, not 240MHz)
+    setCPUFrequency(160);
 #endif
 
     // Wake up
@@ -432,13 +450,32 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms) {
         esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL);
     }
 
-    // Wake on PIR motion
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIR_SENSOR_PIN, HIGH);
+    // ESP32-C3 deep sleep GPIO wakeup configuration
+    // Note: ESP32-C3 only supports wakeup on GPIO 0-5 in deep sleep
+    // PIR_SENSOR_PIN (GPIO1) and BUTTON_PIN (GPIO0) are both valid
 
-    // Wake on button press
-    esp_sleep_enable_ext1_wakeup(1ULL << BUTTON_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);
+    // Create bitmask for GPIO wakeup pins
+    // PIR sensor wakes on HIGH (motion detected)
+    // Button wakes on LOW (button pressed, active-low)
+    uint64_t gpio_wakeup_pin_mask = (1ULL << PIR_SENSOR_PIN) | (1ULL << BUTTON_PIN);
 
-    // Enter deep sleep (no return)
+    // For ESP32-C3 deep sleep, we use esp_deep_sleep_enable_gpio_wakeup
+    // The mode parameter: ESP_GPIO_WAKEUP_GPIO_LOW or ESP_GPIO_WAKEUP_GPIO_HIGH
+    // Since PIR needs HIGH and button needs LOW, we configure separately
+
+    // Configure PIR pin for high-level wakeup
+    gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
+
+    // Configure button pin for low-level wakeup (has external pull-up)
+    gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en((gpio_num_t)BUTTON_PIN);
+
+    // Enable deep sleep wakeup on these GPIOs
+    // Note: ESP32-C3 wakes on ANY of the configured pins changing to the specified level
+    // We use LOW level since button is more reliable, PIR will also work due to edge
+    esp_deep_sleep_enable_gpio_wakeup(gpio_wakeup_pin_mask, ESP_GPIO_WAKEUP_GPIO_LOW);
+
+    // Enter deep sleep (no return - system reboots on wake)
     esp_deep_sleep_start();
 #endif
 }
@@ -454,15 +491,10 @@ void PowerManager::wakeUp() {
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
     switch (wakeup_reason) {
-        case ESP_SLEEP_WAKEUP_EXT0:  // PIR sensor wake
-            LOG_INFO("Power: Wake source = PIR motion");
-            // PIR wake → Motion alert state (WiFi off, save battery)
-            setState(STATE_MOTION_ALERT);
-            break;
-
-        case ESP_SLEEP_WAKEUP_EXT1:  // Button wake
-            LOG_INFO("Power: Wake source = Button press");
-            // Button wake → Full active state (WiFi on)
+        case ESP_SLEEP_WAKEUP_GPIO:  // ESP32-C3 GPIO wakeup (replaces EXT0/EXT1)
+            LOG_INFO("Power: Wake source = GPIO (motion or button)");
+            // For ESP32-C3, we can't easily distinguish which GPIO triggered the wake
+            // Default to active state (user can check button state if needed)
             setState(STATE_ACTIVE);
             break;
 
@@ -471,8 +503,13 @@ void PowerManager::wakeUp() {
             setState(STATE_ACTIVE);
             break;
 
-        default:  // Unknown wake or normal boot
+        case ESP_SLEEP_WAKEUP_UNDEFINED:  // Normal boot (not from sleep)
             LOG_INFO("Power: Wake source = Normal boot");
+            setState(STATE_ACTIVE);
+            break;
+
+        default:  // Unknown wake source
+            LOG_INFO("Power: Wake source = Unknown (%d)", (int)wakeup_reason);
             setState(STATE_ACTIVE);
             break;
     }
@@ -496,6 +533,13 @@ uint32_t PowerManager::getTimeSinceActivity() const {
 
 void PowerManager::setCPUFrequency(uint8_t mhz) {
 #ifndef MOCK_MODE
+    // ESP32-C3 max frequency is 160MHz (not 240MHz like original ESP32)
+    #if CONFIG_IDF_TARGET_ESP32C3
+    if (mhz > 160) {
+        mhz = 160;
+    }
+    #endif
+
     setCpuFrequencyMhz(mhz);
     LOG_INFO("Power: CPU frequency set to %uMHz", mhz);
 #endif

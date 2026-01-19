@@ -54,7 +54,8 @@
       "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run -e esp32-devkitlipo)",
       "Bash(gh issue list:*)",
       "Bash(gh issue create:*)",
-      "Bash(gh issue comment:*)"
+      "Bash(gh issue comment:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe run -e esp32c3)"
     ]
   }
 }
