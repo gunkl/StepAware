@@ -157,6 +157,16 @@ private:
      * @param message Error message
      */
     void sendError(AsyncWebServerRequest* request, int code, const char* message);
+
+    /**
+     * @brief Handle root dashboard page
+     */
+    void handleRoot(AsyncWebServerRequest* request);
+
+    /**
+     * @brief Build dashboard HTML
+     */
+    String buildDashboardHTML();
 };
 
 #endif // STEPAWARE_WEB_API_H
