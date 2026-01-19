@@ -247,22 +247,67 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
     memcpy(jsonStr, data, total);
     jsonStr[total] = '\0';
 
-    // For now, just acknowledge receipt
-    // TODO: Parse sensor configuration and store in ConfigManager
-    // This will require extending ConfigManager to support multi-sensor configs
+    // Parse JSON sensor array
+    StaticJsonDocument<2048> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (error) {
+        free(jsonStr);
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    // Get current config
+    ConfigManager::Config currentConfig = m_config->getConfig();
+
+    // Clear all sensor slots first
+    for (int i = 0; i < 4; i++) {
+        currentConfig.sensors[i].active = false;
+    }
+
+    // Parse and update sensor slots
+    JsonArray sensorsArray = doc.as<JsonArray>();
+    for (JsonObject sensorObj : sensorsArray) {
+        uint8_t slot = sensorObj["slot"] | 0;
+        if (slot >= 4) continue;  // Skip invalid slots
+
+        currentConfig.sensors[slot].active = true;
+        currentConfig.sensors[slot].enabled = sensorObj["enabled"] | true;
+        strlcpy(currentConfig.sensors[slot].name, sensorObj["name"] | "", 32);
+        currentConfig.sensors[slot].type = (SensorType)(sensorObj["type"] | 0);
+        currentConfig.sensors[slot].primaryPin = sensorObj["primaryPin"] | 0;
+        currentConfig.sensors[slot].secondaryPin = sensorObj["secondaryPin"] | 0;
+        currentConfig.sensors[slot].isPrimary = sensorObj["isPrimary"] | false;
+        currentConfig.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 0;
+        currentConfig.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
+        currentConfig.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
+        currentConfig.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
+        currentConfig.sensors[slot].rapidSampleCount = sensorObj["rapidSampleCount"] | 5;
+        currentConfig.sensors[slot].rapidSampleMs = sensorObj["rapidSampleMs"] | 100;
+    }
 
     free(jsonStr);
 
-    // Return success
-    StaticJsonDocument<128> doc;
-    doc["status"] = "ok";
-    doc["message"] = "Sensor configuration received (persistence pending)";
+    // Update and save config
+    if (!m_config->setConfig(currentConfig)) {
+        sendError(request, 400, m_config->getLastError());
+        return;
+    }
 
-    String json;
-    serializeJson(doc, json);
-    sendJSON(request, 200, json.c_str());
+    if (!m_config->save()) {
+        sendError(request, 500, "Failed to save sensor configuration");
+        return;
+    }
 
-    LOG_INFO("Sensor config updated via API (not yet persisted)");
+    // Return updated sensor configuration
+    char buffer[2048];
+    if (!m_config->toJSON(buffer, sizeof(buffer))) {
+        sendError(request, 500, "Failed to serialize configuration");
+        return;
+    }
+
+    sendJSON(request, 200, buffer);
+    LOG_INFO("Sensor configuration saved successfully");
 }
 
 void WebAPI::handleGetMode(AsyncWebServerRequest* request) {
@@ -473,8 +518,12 @@ String WebAPI::buildDashboardHTML() {
     html += ".btn-motion{background:#3b82f6;}.btn-motion:hover{background:#2563eb;}";
     html += ".btn-primary{background:#667eea;}.btn-primary:hover{background:#5568d3;}";
     html += ".btn-success{background:#10b981;}.btn-success:hover{background:#059669;}";
+    html += ".btn-warning{background:#f59e0b;color:white;}.btn-warning:hover{background:#d97706;}";
+    html += ".btn-secondary{background:#6b7280;color:white;}.btn-secondary:hover{background:#4b5563;}";
+    html += ".btn-danger{background:#ef4444;color:white;}.btn-danger:hover{background:#dc2626;}";
     html += ".btn.active{box-shadow:0 0 0 3px rgba(102,126,234,0.5);}";
     html += ".btn-small{padding:8px 16px;font-size:0.9em;}";
+    html += ".btn-sm{padding:6px 12px;font-size:0.85em;color:white;min-width:70px;}";
 
     // Badges
     html += ".badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:0.85em;font-weight:600;}";
@@ -609,9 +658,11 @@ String WebAPI::buildDashboardHTML() {
     html += "<h3>LED Settings</h3>";
     html += "<div class=\"form-row\">";
     html += "<div class=\"form-group\"><label class=\"form-label\">Full Brightness (0-255)</label>";
-    html += "<input type=\"number\" id=\"cfg-ledBrightnessFull\" class=\"form-input\" min=\"0\" max=\"255\"></div>";
+    html += "<input type=\"number\" id=\"cfg-ledBrightnessFull\" class=\"form-input\" min=\"0\" max=\"255\">";
+    html += "<div class=\"form-help\">LED brightness when fully on</div></div>";
     html += "<div class=\"form-group\"><label class=\"form-label\">Dim Brightness (0-255)</label>";
-    html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\"></div>";
+    html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\">";
+    html += "<div class=\"form-help\">LED brightness when dimmed</div></div>";
     html += "</div>";
 
     html += "<h3>Logging</h3>";
@@ -923,10 +974,18 @@ String WebAPI::buildDashboardHTML() {
 
     // Save sensors to backend
     html += "async function saveSensors(){";
-    html += "try{const res=await fetch('/api/sensors',{method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify({sensors:sensorSlots})});";
-    html += "if(!res.ok){alert('Failed to save sensor configuration');}}";
-    html += "catch(e){alert('Error saving sensors: '+e.message);}}";
+    html += "try{";
+    html += "const activeSensors=sensorSlots.filter(s=>s!==null);";
+    html += "const res=await fetch('/api/sensors',{method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeSensors)});";
+    html += "if(res.ok){";
+    html += "const data=await res.json();";
+    html += "console.log('Sensors saved:',data);";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "console.error('Save failed:',err);";
+    html += "alert('Failed to save sensor configuration: '+err);}}";
+    html += "catch(e){console.error('Save error:',e);alert('Error saving sensors: '+e.message);}}";
 
     // Auto-refresh status and logs
     html += "fetchStatus();";
