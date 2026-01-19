@@ -45,6 +45,51 @@ SerialConfigUI serialConfig(configManager);
 WiFiManager wifiManager;
 AsyncWebServer webServer(80);
 WebAPI* webAPI = nullptr;
+bool webServerStarted = false;
+
+// ============================================================================
+// Web API Initialization (can be called at runtime)
+// ============================================================================
+
+/**
+ * @brief Start the Web API server
+ *
+ * Can be called at boot or when WiFi connects for the first time.
+ * Safe to call multiple times - will only initialize once.
+ */
+void startWebAPI() {
+    if (webServerStarted) {
+        return;  // Already started
+    }
+
+    if (!stateMachine) {
+        Serial.println("[WebAPI] Cannot start - state machine not initialized");
+        return;
+    }
+
+    Serial.println("[WebAPI] Starting Web API server...");
+
+    if (webAPI == nullptr) {
+        webAPI = new WebAPI(&webServer, stateMachine, &configManager);
+        webAPI->setWiFiManager(&wifiManager);
+    }
+
+    if (webAPI && webAPI->begin()) {
+        webServer.begin();
+        webServerStarted = true;
+        Serial.println("[WebAPI] Web API started on port 80");
+    } else {
+        Serial.println("[WebAPI] WARNING: Web API failed to start");
+    }
+}
+
+/**
+ * @brief Callback when WiFi connects
+ */
+void onWiFiConnected() {
+    Serial.println("[WiFi] Connected callback - starting Web API if needed");
+    startWebAPI();
+}
 
 // ============================================================================
 // System Status Reporting
@@ -547,6 +592,9 @@ void setup() {
     wifiConfig.connectionTimeout = 30000;
     wifiConfig.maxReconnectAttempts = 10;
 
+    // Register callback to start Web API when WiFi connects
+    wifiManager.onConnected(onWiFiConnected);
+
     if (!wifiManager.begin(&wifiConfig)) {
         Serial.println("[Setup] WARNING: WiFi manager initialization failed");
     } else {
@@ -556,17 +604,10 @@ void setup() {
         }
     }
 
-    // Initialize Web API (only if WiFi is enabled)
+    // Start Web API immediately if WiFi is already enabled
+    // (callback will also fire when WiFi connects later)
     if (cfg.wifiEnabled) {
-        Serial.println("[Setup] Initializing Web API...");
-        webAPI = new WebAPI(&webServer, stateMachine, &configManager);
-        webAPI->setWiFiManager(&wifiManager);
-        if (webAPI && webAPI->begin()) {
-            webServer.begin();
-            Serial.println("[Setup] Web API started on port 80");
-        } else {
-            Serial.println("[Setup] WARNING: Web API failed to start");
-        }
+        startWebAPI();
     }
 
     Serial.println("[Setup] ✓ Initialization complete!");

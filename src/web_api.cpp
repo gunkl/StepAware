@@ -26,6 +26,29 @@ bool WebAPI::begin() {
 
     LOG_INFO("WebAPI: Registering endpoints");
 
+    // Root endpoint - simple landing page
+    m_server->on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        String html = "<!DOCTYPE html><html><head><title>StepAware</title>";
+        html += "<style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:20px;}";
+        html += "h1{color:#333;}a{color:#0066cc;}pre{background:#f4f4f4;padding:15px;overflow-x:auto;}</style></head>";
+        html += "<body><h1>StepAware</h1>";
+        html += "<p>Motion-activated hazard warning system</p>";
+        html += "<h2>API Endpoints</h2><ul>";
+        html += "<li><a href='/api/status'>GET /api/status</a> - System status</li>";
+        html += "<li><a href='/api/config'>GET /api/config</a> - Configuration</li>";
+        html += "<li><a href='/api/mode'>GET /api/mode</a> - Operating mode</li>";
+        html += "<li><a href='/api/logs'>GET /api/logs</a> - Recent logs</li>";
+        html += "<li><a href='/api/version'>GET /api/version</a> - Firmware version</li>";
+        html += "<li>POST /api/config - Update configuration</li>";
+        html += "<li>POST /api/mode - Set operating mode</li>";
+        html += "<li>POST /api/reset - Factory reset</li>";
+        html += "</ul>";
+        html += "<h2>Quick Status</h2><pre id='status'>Loading...</pre>";
+        html += "<script>fetch('/api/status').then(r=>r.json()).then(d=>document.getElementById('status').textContent=JSON.stringify(d,null,2));</script>";
+        html += "</body></html>";
+        req->send(200, "text/html", html);
+    });
+
     // GET endpoints
     m_server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
         this->handleGetStatus(req);

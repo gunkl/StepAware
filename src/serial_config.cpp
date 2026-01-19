@@ -207,21 +207,21 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  config            Show all configuration");
     Serial.println("  exit              Exit config mode");
     Serial.println();
-    Serial.println("Configuration:");
+    Serial.println("Configuration (use 'set' then 'save' to persist):");
     Serial.println("  get <key>         Get a config value");
-    Serial.println("  set <key> <value> Set a config value");
-    Serial.println("  save              Save config to flash");
-    Serial.println("  load              Reload config from flash");
+    Serial.println("  set <key> <value> Set a config value (in memory)");
+    Serial.println("  save              Save all settings to flash");
+    Serial.println("  load              Reload settings from flash");
     Serial.println("  reset             Reset to factory defaults");
     Serial.println("  reboot            Reboot the device");
     Serial.println();
-    Serial.println("WiFi:");
+    Serial.println("WiFi (auto-saves to flash):");
     Serial.println("  wifi status       Show WiFi connection status");
     Serial.println("  wifi scan         Scan for available networks");
+    Serial.println("  wifi ssid <name> [pass]  Set network and connect");
+    Serial.println("  wifi pass <pass>  Change password and reconnect");
     Serial.println("  wifi connect      Reconnect to configured network");
     Serial.println("  wifi disconnect   Disconnect from WiFi");
-    Serial.println("  wifi ssid <name>  Set WiFi SSID");
-    Serial.println("  wifi pass <pass>  Set WiFi password");
     Serial.println("  wifi enable       Enable WiFi");
     Serial.println("  wifi disable      Disable WiFi");
     Serial.println();
@@ -229,7 +229,7 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  sensor info       Show sensor information");
     Serial.println("  sensor threshold <mm>  Set detection threshold");
     Serial.println();
-    Serial.println("Configuration Keys:");
+    Serial.println("Configuration Keys (for 'get'/'set' commands):");
     Serial.println("  motion.duration   Warning duration (ms)");
     Serial.println("  motion.warmup     PIR warmup time (ms)");
     Serial.println("  led.brightness    Full brightness (0-255)");
@@ -247,6 +247,8 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  device.mode       Default mode (0-2)");
     Serial.println("  power.saving      Power saving (0/1)");
     Serial.println("  log.level         Log level (0-4)");
+    Serial.println();
+    Serial.println("Note: WiFi commands auto-save. Other settings need 'save'.");
     Serial.println();
 }
 
@@ -376,11 +378,65 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
     else if (strcmp(subcmd, "ssid") == 0) {
         if (argc < 2) {
             Serial.printf("Current SSID: %s\n", cfg.wifiSSID[0] ? cfg.wifiSSID : "(not set)");
+            Serial.println("Usage: wifi ssid <network_name> [password]");
         } else {
             ConfigManager::Config newCfg = cfg;
             strlcpy(newCfg.wifiSSID, argv[1], sizeof(newCfg.wifiSSID));
+
+            // Check if password was also provided
+            if (argc >= 3) {
+                strlcpy(newCfg.wifiPassword, argv[2], sizeof(newCfg.wifiPassword));
+                Serial.printf("WiFi SSID set to: %s\n", argv[1]);
+                Serial.println("WiFi password updated");
+            } else {
+                // Prompt for password
+                Serial.printf("WiFi SSID set to: %s\n", argv[1]);
+                Serial.print("Enter password (or press Enter for open network): ");
+
+                // Read password from serial (blocking)
+                char password[64] = {0};
+                size_t pos = 0;
+                unsigned long startTime = millis();
+                const unsigned long timeout = 30000;  // 30 second timeout
+
+                while (pos < sizeof(password) - 1 && (millis() - startTime) < timeout) {
+                    if (Serial.available()) {
+                        char c = Serial.read();
+                        if (c == '\n' || c == '\r') {
+                            Serial.println();  // New line
+                            break;
+                        } else if (c == '\b' || c == 127) {
+                            if (pos > 0) {
+                                pos--;
+                                Serial.print("\b \b");
+                            }
+                        } else {
+                            password[pos++] = c;
+                            Serial.print('*');  // Mask password
+                        }
+                    }
+                    delay(1);
+                }
+                password[pos] = '\0';
+                strlcpy(newCfg.wifiPassword, password, sizeof(newCfg.wifiPassword));
+
+                if (pos > 0) {
+                    Serial.println("WiFi password set");
+                } else {
+                    Serial.println("No password (open network)");
+                }
+            }
+
+            // Enable WiFi, save, and connect
+            newCfg.wifiEnabled = true;
             m_configManager.setConfig(newCfg);
-            Serial.printf("WiFi SSID set to: %s\n", argv[1]);
+            m_configManager.save();
+            Serial.println("Configuration saved");
+
+            // Update WiFiManager and connect
+            wifiManager.setCredentials(newCfg.wifiSSID, newCfg.wifiPassword);
+            wifiManager.setEnabled(true);
+            Serial.println("Connecting to WiFi...");
         }
     }
     else if (strcmp(subcmd, "pass") == 0 || strcmp(subcmd, "password") == 0) {
@@ -390,14 +446,23 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
             ConfigManager::Config newCfg = cfg;
             strlcpy(newCfg.wifiPassword, argv[1], sizeof(newCfg.wifiPassword));
             m_configManager.setConfig(newCfg);
-            Serial.println("WiFi password updated");
+            m_configManager.save();  // Auto-save WiFi settings
+            Serial.println("WiFi password updated (saved)");
+
+            // If WiFi is enabled, reconnect with new password
+            if (newCfg.wifiEnabled && strlen(newCfg.wifiSSID) > 0) {
+                wifiManager.setCredentials(newCfg.wifiSSID, newCfg.wifiPassword);
+                Serial.println("Reconnecting with new password...");
+                wifiManager.reconnect();
+            }
         }
     }
     else if (strcmp(subcmd, "enable") == 0) {
         ConfigManager::Config newCfg = cfg;
         newCfg.wifiEnabled = true;
         m_configManager.setConfig(newCfg);
-        Serial.println("WiFi enabled");
+        m_configManager.save();  // Auto-save WiFi settings
+        Serial.println("WiFi enabled (saved)");
 
         // Update WiFiManager with new credentials and enable
         wifiManager.setCredentials(newCfg.wifiSSID, newCfg.wifiPassword);
@@ -407,7 +472,8 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
         ConfigManager::Config newCfg = cfg;
         newCfg.wifiEnabled = false;
         m_configManager.setConfig(newCfg);
-        Serial.println("WiFi disabled");
+        m_configManager.save();  // Auto-save WiFi settings
+        Serial.println("WiFi disabled (saved)");
 
         // Disable WiFiManager immediately
         wifiManager.setEnabled(false);
