@@ -20,6 +20,8 @@
 #include "hal_button.h"
 #include "config_manager.h"
 #include "serial_config.h"
+#include "wifi_manager.h"
+#include "web_api.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -38,6 +40,11 @@ StateMachine* stateMachine = nullptr;
 // Configuration
 ConfigManager configManager;
 SerialConfigUI serialConfig(configManager);
+
+// WiFi and Web API
+WiFiManager wifiManager;
+AsyncWebServer webServer(80);
+WebAPI* webAPI = nullptr;
 
 // ============================================================================
 // System Status Reporting
@@ -94,6 +101,27 @@ void printStatus() {
 
     Serial.printf("Memory - Free Heap: %u bytes\n", ESP.getFreeHeap());
     Serial.printf("Memory - Largest Block: %u bytes\n", ESP.getMaxAllocHeap());
+    Serial.println();
+
+    // WiFi Status
+    const WiFiManager::Status& wifiStatus = wifiManager.getStatus();
+    Serial.printf("WiFi State: %s\n", WiFiManager::getStateName(wifiStatus.state));
+    if (wifiStatus.state == WiFiManager::STATE_CONNECTED) {
+        Serial.printf("  SSID: %s\n", wifiStatus.ssid);
+        Serial.printf("  IP Address: %s\n", wifiStatus.ip.toString().c_str());
+        Serial.printf("  Signal: %d dBm\n", wifiStatus.rssi);
+        Serial.printf("  Uptime: %u seconds\n", wifiStatus.connectionUptime / 1000);
+    } else if (wifiStatus.state == WiFiManager::STATE_AP_MODE) {
+        Serial.printf("  AP SSID: %s\n", wifiStatus.apSSID);
+        Serial.printf("  AP IP: %s\n", wifiStatus.ip.toString().c_str());
+    } else if (wifiStatus.state == WiFiManager::STATE_CONNECTING) {
+        Serial.println("  Connecting...");
+    } else if (wifiStatus.state == WiFiManager::STATE_DISABLED) {
+        Serial.println("  WiFi is disabled in configuration");
+    }
+    if (wifiStatus.failureCount > 0) {
+        Serial.printf("  Failures: %u\n", wifiStatus.failureCount);
+    }
 
     Serial.println("========================================\n");
 }
@@ -508,6 +536,39 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Initialize WiFi Manager
+    Serial.println("[Setup] Initializing WiFi manager...");
+    WiFiManager::Config wifiConfig;
+    wifiConfig.enabled = cfg.wifiEnabled;
+    strncpy(wifiConfig.ssid, cfg.wifiSSID, sizeof(wifiConfig.ssid));
+    strncpy(wifiConfig.password, cfg.wifiPassword, sizeof(wifiConfig.password));
+    strncpy(wifiConfig.hostname, cfg.deviceName, sizeof(wifiConfig.hostname));
+    wifiConfig.apModeOnFailure = true;
+    wifiConfig.connectionTimeout = 30000;
+    wifiConfig.maxReconnectAttempts = 10;
+
+    if (!wifiManager.begin(&wifiConfig)) {
+        Serial.println("[Setup] WARNING: WiFi manager initialization failed");
+    } else {
+        Serial.printf("[Setup] WiFi %s\n", cfg.wifiEnabled ? "enabled" : "disabled");
+        if (cfg.wifiEnabled && strlen(cfg.wifiSSID) > 0) {
+            Serial.printf("[Setup] Connecting to WiFi: %s\n", cfg.wifiSSID);
+        }
+    }
+
+    // Initialize Web API (only if WiFi is enabled)
+    if (cfg.wifiEnabled) {
+        Serial.println("[Setup] Initializing Web API...");
+        webAPI = new WebAPI(&webServer, stateMachine, &configManager);
+        webAPI->setWiFiManager(&wifiManager);
+        if (webAPI && webAPI->begin()) {
+            webServer.begin();
+            Serial.println("[Setup] Web API started on port 80");
+        } else {
+            Serial.println("[Setup] WARNING: Web API failed to start");
+        }
+    }
+
     Serial.println("[Setup] ✓ Initialization complete!");
     Serial.println();
 
@@ -539,6 +600,9 @@ void loop() {
 
     // Update state machine (handles all hardware and logic)
     stateMachine->update();
+
+    // Update WiFi manager (handles connection state, reconnection)
+    wifiManager.update();
 
     // Process serial commands
     processSerialCommand();

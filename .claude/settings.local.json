@@ -55,7 +55,14 @@
       "Bash(gh issue list:*)",
       "Bash(gh issue create:*)",
       "Bash(gh issue comment:*)",
-      "Bash(~/.platformio/penv/Scripts/pio.exe run -e esp32c3)"
+      "Bash(~/.platformio/penv/Scripts/pio.exe run -e esp32c3)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe test -e native)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe test:*)",
+      "Bash(cmd /c:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)",
+      "Bash(timeout 20 ~/.platformio/penv/Scripts/pio.exe device monitor:*)",
+      "Bash(timeout 25 ~/.platformio/penv/Scripts/pio.exe device monitor:*)",
+      "Bash(C:UsersDavid.platformiopenvScriptspio.exe run -e esp32c3)"
     ]
   }
 }

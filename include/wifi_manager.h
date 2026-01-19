@@ -195,6 +195,26 @@ public:
     bool setCredentials(const char* ssid, const char* password);
 
     /**
+     * @brief Update WiFi configuration at runtime
+     *
+     * Updates the WiFi manager's internal configuration.
+     * If WiFi becomes enabled and was disabled, initiates connection.
+     * If WiFi becomes disabled, disconnects.
+     *
+     * @param config New configuration to apply
+     */
+    void updateConfig(const Config& config);
+
+    /**
+     * @brief Set WiFi enabled state
+     *
+     * Enables or disables WiFi. If enabling, attempts to connect.
+     *
+     * @param enabled True to enable WiFi
+     */
+    void setEnabled(bool enabled);
+
+    /**
      * @brief Scan for available WiFi networks
      *
      * @param networks Output array for scan results
