@@ -238,7 +238,7 @@ bool SensorManager::isMotionDetected() {
             // Any sensor detecting = motion
             for (uint8_t i = 0; i < MAX_SENSORS; i++) {
                 if (m_slots[i].sensor && m_slots[i].enabled) {
-                    if (m_slots[i].sensor->isMotionDetected()) {
+                    if (m_slots[i].sensor->motionDetected()) {
                         return true;
                     }
                 }
@@ -252,7 +252,7 @@ bool SensorManager::isMotionDetected() {
             for (uint8_t i = 0; i < MAX_SENSORS; i++) {
                 if (m_slots[i].sensor && m_slots[i].enabled) {
                     anyActive = true;
-                    if (!m_slots[i].sensor->isMotionDetected()) {
+                    if (!m_slots[i].sensor->motionDetected()) {
                         return false;  // At least one not detecting
                     }
                 }
@@ -264,7 +264,7 @@ bool SensorManager::isMotionDetected() {
             // Primary/trigger sensor must detect
             HAL_MotionSensor* primary = getPrimarySensor();
             if (primary) {
-                return primary->isMotionDetected();
+                return primary->motionDetected();
             }
             return false;
         }
@@ -274,7 +274,7 @@ bool SensorManager::isMotionDetected() {
             // Independent mode - check primary sensor
             HAL_MotionSensor* primary = getPrimarySensor();
             if (primary) {
-                return primary->isMotionDetected();
+                return primary->motionDetected();
             }
             return false;
         }
@@ -295,7 +295,7 @@ CombinedSensorStatus SensorManager::getStatus() {
         if (m_slots[i].sensor && m_slots[i].enabled) {
             status.activeSensorCount++;
 
-            if (m_slots[i].sensor->isMotionDetected()) {
+            if (m_slots[i].sensor->motionDetected()) {
                 status.anyMotionDetected = true;
                 status.detectingSensorCount++;
             } else {
@@ -411,7 +411,7 @@ void SensorManager::printStatus() {
             Serial.printf("  Type: %s\n", caps.sensorTypeName);
             Serial.printf("  Enabled: %s\n", m_slots[i].enabled ? "YES" : "NO");
             Serial.printf("  Ready: %s\n", m_slots[i].sensor->isReady() ? "YES" : "NO");
-            Serial.printf("  Motion: %s\n", m_slots[i].sensor->isMotionDetected() ? "YES" : "NO");
+            Serial.printf("  Motion: %s\n", m_slots[i].sensor->motionDetected() ? "YES" : "NO");
 
             if (caps.supportsDistanceMeasurement) {
                 Serial.printf("  Distance: %u mm\n", m_slots[i].sensor->getDistance());

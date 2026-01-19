@@ -151,7 +151,7 @@ void loop() {
         Serial.println("\n✓ All sensors ready - PIR warmup complete\n");
     }
 
-    // Motion detection logic
+    // Motion detection logic (uses fusion mode)
     if (sensorMgr.isMotionDetected()) {
         // PIR triggered - get distance measurement
         uint32_t distance = status.nearestDistance;
@@ -263,7 +263,7 @@ void printDetailedStatus() {
         const SensorCapabilities& caps = pir->getCapabilities();
         Serial.printf("  Type: %s\n", caps.sensorTypeName);
         Serial.printf("  Ready: %s\n", pir->isReady() ? "YES" : "NO");
-        Serial.printf("  Motion: %s\n", pir->isMotionDetected() ? "YES" : "NO");
+        Serial.printf("  Motion: %s\n", pir->motionDetected() ? "YES" : "NO");
         Serial.printf("  Events: %u\n", pir->getEventCount());
 
         if (!pir->isReady()) {
@@ -278,7 +278,7 @@ void printDetailedStatus() {
         const SensorCapabilities& caps = ultrasonic->getCapabilities();
         Serial.printf("  Type: %s\n", caps.sensorTypeName);
         Serial.printf("  Ready: %s\n", ultrasonic->isReady() ? "YES" : "NO");
-        Serial.printf("  Motion: %s\n", ultrasonic->isMotionDetected() ? "YES" : "NO");
+        Serial.printf("  Motion: %s\n", ultrasonic->motionDetected() ? "YES" : "NO");
         Serial.printf("  Distance: %u mm\n", ultrasonic->getDistance());
         Serial.printf("  Threshold: %u mm\n", ultrasonic->getDetectionThreshold());
 
