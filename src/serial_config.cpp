@@ -1,6 +1,10 @@
 #include "serial_config.h"
 #include "sensor_types.h"
+#include "wifi_manager.h"
 #include <cstring>
+
+// External WiFi manager reference (defined in main.cpp)
+extern WiFiManager wifiManager;
 
 SerialConfigUI::SerialConfigUI(ConfigManager& configManager)
     : m_configManager(configManager)
@@ -212,7 +216,10 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  reboot            Reboot the device");
     Serial.println();
     Serial.println("WiFi:");
-    Serial.println("  wifi status       Show WiFi status");
+    Serial.println("  wifi status       Show WiFi connection status");
+    Serial.println("  wifi scan         Scan for available networks");
+    Serial.println("  wifi connect      Reconnect to configured network");
+    Serial.println("  wifi disconnect   Disconnect from WiFi");
     Serial.println("  wifi ssid <name>  Set WiFi SSID");
     Serial.println("  wifi pass <pass>  Set WiFi password");
     Serial.println("  wifi enable       Enable WiFi");
@@ -338,10 +345,33 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
     const ConfigManager::Config& cfg = m_configManager.getConfig();
 
     if (strcmp(subcmd, "status") == 0) {
-        Serial.println("\nWiFi Status:");
+        Serial.println("\nWiFi Configuration:");
         Serial.printf("  Enabled: %s\n", cfg.wifiEnabled ? "YES" : "NO");
-        Serial.printf("  SSID: %s\n", cfg.wifiSSID[0] ? cfg.wifiSSID : "(not set)");
+        Serial.printf("  Configured SSID: %s\n", cfg.wifiSSID[0] ? cfg.wifiSSID : "(not set)");
         Serial.printf("  Password: %s\n", cfg.wifiPassword[0] ? "********" : "(not set)");
+
+        // Show actual connection status from WiFi manager
+        const WiFiManager::Status& status = wifiManager.getStatus();
+        Serial.println("\nConnection Status:");
+        Serial.printf("  State: %s\n", WiFiManager::getStateName(status.state));
+
+        if (status.state == WiFiManager::STATE_CONNECTED) {
+            Serial.printf("  Connected to: %s\n", status.ssid);
+            Serial.printf("  IP Address: %s\n", status.ip.toString().c_str());
+            Serial.printf("  Signal Strength: %d dBm\n", status.rssi);
+            Serial.printf("  Connection Uptime: %u seconds\n", status.connectionUptime / 1000);
+            Serial.printf("  Reconnect Count: %u\n", status.reconnectCount);
+        } else if (status.state == WiFiManager::STATE_AP_MODE) {
+            Serial.printf("  AP SSID: %s\n", status.apSSID);
+            Serial.printf("  AP IP: %s\n", status.ip.toString().c_str());
+            Serial.println("  Connect to this AP to configure WiFi");
+        } else if (status.state == WiFiManager::STATE_CONNECTING) {
+            Serial.println("  Currently connecting...");
+        } else if (status.state == WiFiManager::STATE_DISCONNECTED) {
+            Serial.printf("  Failure Count: %u\n", status.failureCount);
+        } else if (status.state == WiFiManager::STATE_FAILED) {
+            Serial.printf("  Connection failed after %u attempts\n", status.failureCount);
+        }
     }
     else if (strcmp(subcmd, "ssid") == 0) {
         if (argc < 2) {
@@ -368,15 +398,47 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
         newCfg.wifiEnabled = true;
         m_configManager.setConfig(newCfg);
         Serial.println("WiFi enabled");
+
+        // Update WiFiManager with new credentials and enable
+        wifiManager.setCredentials(newCfg.wifiSSID, newCfg.wifiPassword);
+        wifiManager.setEnabled(true);
     }
     else if (strcmp(subcmd, "disable") == 0) {
         ConfigManager::Config newCfg = cfg;
         newCfg.wifiEnabled = false;
         m_configManager.setConfig(newCfg);
         Serial.println("WiFi disabled");
+
+        // Disable WiFiManager immediately
+        wifiManager.setEnabled(false);
+    }
+    else if (strcmp(subcmd, "connect") == 0) {
+        // Update credentials from config before connecting
+        wifiManager.setCredentials(cfg.wifiSSID, cfg.wifiPassword);
+        wifiManager.setEnabled(true);  // Ensure enabled
+        Serial.println("Triggering WiFi connection...");
+        wifiManager.reconnect();
+    }
+    else if (strcmp(subcmd, "disconnect") == 0) {
+        Serial.println("Disconnecting WiFi...");
+        wifiManager.disconnect();
+    }
+    else if (strcmp(subcmd, "scan") == 0) {
+        Serial.println("Scanning for WiFi networks...");
+        String networks[10];
+        int count = wifiManager.scanNetworks(networks, 10);
+        if (count > 0) {
+            Serial.printf("Found %d networks:\n", count);
+            for (int i = 0; i < count; i++) {
+                Serial.printf("  %d. %s\n", i + 1, networks[i].c_str());
+            }
+        } else {
+            Serial.println("No networks found");
+        }
     }
     else {
         Serial.printf("Unknown wifi command: %s\n", subcmd);
+        Serial.println("Available: status, ssid, pass, enable, disable, connect, disconnect, scan");
     }
 }
 

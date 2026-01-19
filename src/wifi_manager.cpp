@@ -448,3 +448,62 @@ void WiFiManager::setState(State newState) {
         m_status.state = newState;
     }
 }
+
+void WiFiManager::updateConfig(const Config& config) {
+    bool wasEnabled = m_config.enabled;
+    bool wasConnected = (m_state == STATE_CONNECTED);
+
+    // Update configuration
+    m_config = config;
+
+    LOG_INFO("WiFi: Configuration updated (enabled=%s, ssid=%s)",
+             m_config.enabled ? "yes" : "no", m_config.ssid);
+
+    if (!m_config.enabled && wasEnabled) {
+        // WiFi was disabled
+        LOG_INFO("WiFi: Disabling");
+        disconnect();
+        setState(STATE_DISABLED);
+    } else if (m_config.enabled && !wasEnabled) {
+        // WiFi was enabled
+        LOG_INFO("WiFi: Enabling");
+        m_status.failureCount = 0;
+        if (strlen(m_config.ssid) > 0) {
+            connect();
+        } else {
+            LOG_WARN("WiFi: No SSID configured, entering AP mode");
+            startAPMode();
+        }
+    } else if (m_config.enabled && wasConnected) {
+        // Check if SSID changed while connected
+        if (strcmp(m_status.ssid, m_config.ssid) != 0) {
+            LOG_INFO("WiFi: SSID changed, reconnecting");
+            disconnect();
+            m_status.failureCount = 0;
+            connect();
+        }
+    }
+}
+
+void WiFiManager::setEnabled(bool enabled) {
+    if (enabled == m_config.enabled) {
+        return;  // No change
+    }
+
+    m_config.enabled = enabled;
+
+    if (enabled) {
+        LOG_INFO("WiFi: Enabling");
+        m_status.failureCount = 0;
+        if (strlen(m_config.ssid) > 0) {
+            connect();
+        } else {
+            LOG_WARN("WiFi: No SSID configured, entering AP mode");
+            startAPMode();
+        }
+    } else {
+        LOG_INFO("WiFi: Disabling");
+        disconnect();
+        setState(STATE_DISABLED);
+    }
+}
