@@ -1,4 +1,5 @@
 #include "state_machine.h"
+#include "logger.h"
 
 StateMachine::StateMachine(HAL_MotionSensor* motionSensor,
                            HAL_LED* hazardLED,

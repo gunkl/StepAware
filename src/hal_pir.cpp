@@ -1,4 +1,5 @@
 #include "hal_pir.h"
+#include "logger.h"
 
 // Static capabilities for PIR sensor
 const SensorCapabilities HAL_PIR::s_capabilities = {
