@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "sensor_types.h"
+#include "display_types.h"
 
 /**
  * @brief Configuration Manager for StepAware
@@ -37,6 +38,22 @@ public:
         bool enableDirectionDetection;    // Direction detection enabled
         uint8_t rapidSampleCount;         // Rapid sample count
         uint16_t rapidSampleMs;           // Rapid sample interval
+    };
+
+    /**
+     * @brief Display slot configuration
+     */
+    struct DisplaySlotConfig {
+        bool active;                    // Slot in use
+        char name[32];                  // Display name
+        DisplayType type;               // DISPLAY_TYPE_SINGLE_LED, DISPLAY_TYPE_MATRIX_8X8
+        uint8_t i2cAddress;             // I2C address (0x70-0x77 for HT16K33)
+        uint8_t sdaPin;                 // I2C SDA pin
+        uint8_t sclPin;                 // I2C SCL pin
+        bool enabled;                   // Display enabled
+        uint8_t brightness;             // Brightness level (0-15 for matrix, 0-255 for LED)
+        uint8_t rotation;               // Rotation (0-3 for 90° increments)
+        bool useForStatus;              // Use for status displays
     };
 
     /**
@@ -97,6 +114,10 @@ public:
         // Multi-Sensor Configuration (Phase 2)
         SensorSlotConfig sensors[4];       // Up to 4 sensor slots
         uint8_t fusionMode;                // Sensor fusion mode
+
+        // Multi-Display Configuration (Issue #12)
+        DisplaySlotConfig displays[2];     // Up to 2 display devices
+        uint8_t primaryDisplaySlot;        // Primary display slot index
 
         // Configuration metadata
         char version[16];                  // Config version

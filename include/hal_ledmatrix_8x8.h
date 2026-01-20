@@ -1,0 +1,247 @@
+#ifndef STEPAWARE_HAL_LEDMATRIX_8X8_H
+#define STEPAWARE_HAL_LEDMATRIX_8X8_H
+
+#include <Arduino.h>
+#ifndef MOCK_HARDWARE
+    #include <Adafruit_LEDBackpack.h>
+    #include <Adafruit_GFX.h>
+#endif
+#include "config.h"
+#include "display_types.h"
+
+/**
+ * @brief Hardware Abstraction Layer for 8x8 LED Matrix
+ *
+ * Provides high-level control of Adafruit Mini 8x8 LED Matrix w/I2C Backpack (HT16K33).
+ * Supports animations, scrolling text, and pixel-level control with mock mode for testing.
+ *
+ * Features:
+ * - Pre-defined animations (motion alert, battery status, boot)
+ * - Scrolling text display
+ * - Direct pixel/frame buffer control
+ * - Brightness control (0-15)
+ * - Rotation support (0°, 90°, 180°, 270°)
+ * - Mock mode for testing without hardware
+ */
+class HAL_LEDMatrix_8x8 {
+public:
+    /**
+     * @brief Animation pattern enumeration
+     */
+    enum AnimationPattern {
+        ANIM_NONE,              // No animation
+        ANIM_MOTION_ALERT,      // Flash + scroll up arrow
+        ANIM_BATTERY_LOW,       // Show battery percentage
+        ANIM_BOOT_STATUS,       // Boot-time info display
+        ANIM_WIFI_CONNECTED,    // WiFi checkmark
+        ANIM_CUSTOM             // For Phase 2
+    };
+
+    /**
+     * @brief Constructor
+     *
+     * @param i2c_address I2C address (0x70-0x77)
+     * @param sda_pin SDA GPIO pin
+     * @param scl_pin SCL GPIO pin
+     * @param mock_mode Enable mock mode for testing
+     */
+    HAL_LEDMatrix_8x8(uint8_t i2c_address = MATRIX_I2C_ADDRESS,
+                      uint8_t sda_pin = I2C_SDA_PIN,
+                      uint8_t scl_pin = I2C_SCL_PIN,
+                      bool mock_mode = false);
+
+    /**
+     * @brief Destructor
+     */
+    ~HAL_LEDMatrix_8x8();
+
+    /**
+     * @brief Initialize the LED matrix
+     *
+     * Sets up I2C communication and configures the HT16K33 driver.
+     *
+     * @return true if initialization successful
+     */
+    bool begin();
+
+    /**
+     * @brief Update animation state (call every loop)
+     *
+     * Updates animation frames and handles timing.
+     */
+    void update();
+
+    /**
+     * @brief Clear all pixels
+     */
+    void clear();
+
+    /**
+     * @brief Set brightness level
+     *
+     * @param level Brightness (0-15, where 15 is brightest)
+     */
+    void setBrightness(uint8_t level);
+
+    /**
+     * @brief Set display rotation
+     *
+     * @param rotation Rotation (0=0°, 1=90°, 2=180°, 3=270°)
+     */
+    void setRotation(uint8_t rotation);
+
+    /**
+     * @brief Start an animation
+     *
+     * @param pattern Animation pattern to play
+     * @param duration_ms Animation duration (0 = loop indefinitely)
+     */
+    void startAnimation(AnimationPattern pattern, uint32_t duration_ms = 0);
+
+    /**
+     * @brief Stop current animation
+     */
+    void stopAnimation();
+
+    /**
+     * @brief Check if animation is running
+     *
+     * @return true if animating
+     */
+    bool isAnimating() const;
+
+    /**
+     * @brief Get current animation pattern
+     *
+     * @return AnimationPattern Current pattern
+     */
+    AnimationPattern getPattern() const;
+
+    /**
+     * @brief Draw a frame buffer to display
+     *
+     * @param frame 8-byte frame buffer (each byte = one row)
+     */
+    void drawFrame(const uint8_t frame[8]);
+
+    /**
+     * @brief Set individual pixel
+     *
+     * @param x X coordinate (0-7)
+     * @param y Y coordinate (0-7)
+     * @param on true = LED on, false = LED off
+     */
+    void setPixel(uint8_t x, uint8_t y, bool on);
+
+    /**
+     * @brief Draw bitmap (8x8)
+     *
+     * @param bitmap 8-byte bitmap
+     */
+    void drawBitmap(const uint8_t* bitmap);
+
+    /**
+     * @brief Scroll text across display
+     *
+     * @param text Text to scroll
+     * @param speed_ms Delay between frames (ms)
+     */
+    void scrollText(const char* text, uint32_t speed_ms = MATRIX_SCROLL_SPEED_MS);
+
+    /**
+     * @brief Get brightness level
+     *
+     * @return uint8_t Current brightness (0-15)
+     */
+    uint8_t getBrightness() const { return m_brightness; }
+
+    /**
+     * @brief Check if matrix is initialized
+     *
+     * @return true if ready
+     */
+    bool isReady() const { return m_initialized; }
+
+    /**
+     * @brief Mock mode: Set frame buffer
+     *
+     * @param frame 8-byte frame buffer
+     */
+    void mockSetFrame(const uint8_t frame[8]);
+
+    /**
+     * @brief Mock mode: Get frame buffer
+     *
+     * @return uint8_t* Pointer to 8-byte frame buffer
+     */
+    uint8_t* mockGetFrame() { return m_mockFrame; }
+
+private:
+    // Hardware
+#ifndef MOCK_HARDWARE
+    Adafruit_8x8matrix* m_matrix;
+#endif
+    uint8_t m_i2cAddress;
+    uint8_t m_sdaPin;
+    uint8_t m_sclPin;
+    bool m_mockMode;
+    bool m_initialized;
+
+    // Display state
+    uint8_t m_brightness;
+    uint8_t m_rotation;
+    uint8_t m_currentFrame[8];
+
+    // Animation state
+    AnimationPattern m_currentPattern;
+    uint32_t m_animationStartTime;
+    uint32_t m_animationDuration;
+    uint32_t m_lastFrameTime;
+    uint8_t m_animationFrame;
+
+    // Mock mode
+    uint8_t m_mockFrame[8];
+
+    /**
+     * @brief Update current animation
+     */
+    void updateAnimation();
+
+    /**
+     * @brief Motion alert animation
+     */
+    void animateMotionAlert();
+
+    /**
+     * @brief Battery low animation
+     *
+     * @param percentage Battery percentage (0-100)
+     */
+    void animateBatteryLow(uint8_t percentage);
+
+    /**
+     * @brief Boot status animation
+     *
+     * @param status Status text
+     */
+    void animateBootStatus(const char* status);
+
+    /**
+     * @brief Draw arrow symbol
+     */
+    void drawArrow();
+
+    /**
+     * @brief Flash display
+     *
+     * @param times Number of times to flash
+     */
+    void flashDisplay(uint8_t times);
+
+    /**
+     * @brief Write current frame to hardware
+     */
+    void writeDisplay();
+};
+
+#endif // STEPAWARE_HAL_LEDMATRIX_8X8_H

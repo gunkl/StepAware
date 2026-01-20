@@ -21,6 +21,8 @@
  * - POST /api/mode         - Set operating mode
  * - GET  /api/logs         - Get recent log entries
  * - POST /api/sensors      - Update sensor configuration
+ * - GET /api/displays       - Get display configuration
+ * - POST /api/displays      - Update display configuration
  * - POST /api/reset        - Factory reset
  * - GET  /api/version      - Firmware version info
  *
@@ -128,6 +130,16 @@ private:
      * @brief POST /api/sensors - Update sensor configuration
      */
     void handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief GET /api/displays - Get display configuration
+     */
+    void handleGetDisplays(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/displays - Update display configuration
+     */
+    void handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
 
     /**
      * @brief POST /api/reset - Factory reset

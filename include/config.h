@@ -31,6 +31,12 @@
 #define PIN_ULTRASONIC_TRIGGER  8    // Ultrasonic trigger pin (GPIO8)
 #define PIN_ULTRASONIC_ECHO     9    // Ultrasonic echo pin (GPIO9)
 
+// I2C Pins (for LED Matrix and other I2C devices)
+// Note: Using GPIO 7 and 10 to avoid conflict with ultrasonic sensor (GPIO 8/9)
+#define I2C_SDA_PIN             7    // GPIO 7 (SDA)
+#define I2C_SCL_PIN             10   // GPIO 10 (SCL)
+#define I2C_FREQUENCY           100000  // 100kHz standard mode
+
 // ============================================================================
 // Sensor Selection
 // ============================================================================
@@ -99,6 +105,19 @@
 #define LED_BRIGHTNESS_DIM         20    // Night light mode
 #define LED_BRIGHTNESS_MEDIUM      128   // Status indication
 #define LED_BRIGHTNESS_FULL        255   // Hazard warning (full brightness)
+
+// ============================================================================
+// LED Matrix Configuration (8x8 Adafruit Mini w/I2C Backpack)
+// ============================================================================
+
+#define MATRIX_I2C_ADDRESS          0x70    // Default HT16K33 address (0x70-0x77)
+#define MATRIX_BRIGHTNESS_DEFAULT   5       // 0-15 scale
+#define MATRIX_ROTATION             0       // 0, 1, 2, or 3 (90° increments)
+
+// Animation timings
+#define MATRIX_SCROLL_SPEED_MS      100     // Scroll delay between frames
+#define MATRIX_FLASH_DURATION_MS    200     // Flash on/off duration
+#define MATRIX_BOOT_DISPLAY_MS      3000    // Boot status display time
 
 // ============================================================================
 // Battery Management

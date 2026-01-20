@@ -81,6 +81,18 @@ bool WebAPI::begin() {
         }
     );
 
+    m_server->on("/api/displays", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetDisplays(req);
+    });
+
+    m_server->on("/api/displays", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handlePostDisplays(req, data, len, index, total);
+        }
+    );
+
     // OPTIONS for CORS preflight
     m_server->on("/api/status", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
         this->handleOptions(req);
@@ -95,6 +107,9 @@ bool WebAPI::begin() {
         this->handleOptions(req);
     });
     m_server->on("/api/sensors", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/displays", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
         this->handleOptions(req);
     });
 
@@ -308,6 +323,111 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
 
     sendJSON(request, 200, buffer);
     LOG_INFO("Sensor configuration saved successfully");
+}
+
+void WebAPI::handleGetDisplays(AsyncWebServerRequest* request) {
+    StaticJsonDocument<1024> doc;
+
+    // Get current config
+    const ConfigManager::Config& config = m_config->getConfig();
+
+    // Build displays array
+    JsonArray displaysArray = doc.createNestedArray("displays");
+    for (int i = 0; i < 2; i++) {
+        if (config.displays[i].active) {
+            JsonObject displayObj = displaysArray.createNestedObject();
+            displayObj["slot"] = i;
+            displayObj["name"] = config.displays[i].name;
+            displayObj["type"] = config.displays[i].type;
+            displayObj["i2cAddress"] = config.displays[i].i2cAddress;
+            displayObj["sdaPin"] = config.displays[i].sdaPin;
+            displayObj["sclPin"] = config.displays[i].sclPin;
+            displayObj["enabled"] = config.displays[i].enabled;
+            displayObj["brightness"] = config.displays[i].brightness;
+            displayObj["rotation"] = config.displays[i].rotation;
+            displayObj["useForStatus"] = config.displays[i].useForStatus;
+        }
+    }
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+}
+
+void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    // Null-terminate data
+    char* jsonStr = (char*)malloc(total + 1);
+    if (!jsonStr) {
+        sendError(request, 500, "Out of memory");
+        return;
+    }
+
+    memcpy(jsonStr, data, total);
+    jsonStr[total] = '\0';
+
+    // Parse JSON display array
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (error) {
+        free(jsonStr);
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    // Get current config
+    ConfigManager::Config currentConfig = m_config->getConfig();
+
+    // Clear all display slots first
+    for (int i = 0; i < 2; i++) {
+        currentConfig.displays[i].active = false;
+    }
+
+    // Parse and update display slots
+    JsonArray displaysArray = doc.as<JsonArray>();
+    for (JsonObject displayObj : displaysArray) {
+        uint8_t slot = displayObj["slot"] | 0;
+        if (slot >= 2) continue;  // Skip invalid slots
+
+        currentConfig.displays[slot].active = true;
+        currentConfig.displays[slot].enabled = displayObj["enabled"] | true;
+        strlcpy(currentConfig.displays[slot].name, displayObj["name"] | "", 32);
+        currentConfig.displays[slot].type = (DisplayType)(displayObj["type"] | 0);
+        currentConfig.displays[slot].i2cAddress = displayObj["i2cAddress"] | MATRIX_I2C_ADDRESS;
+        currentConfig.displays[slot].sdaPin = displayObj["sdaPin"] | I2C_SDA_PIN;
+        currentConfig.displays[slot].sclPin = displayObj["sclPin"] | I2C_SCL_PIN;
+        currentConfig.displays[slot].brightness = displayObj["brightness"] | MATRIX_BRIGHTNESS_DEFAULT;
+        currentConfig.displays[slot].rotation = displayObj["rotation"] | 0;
+        currentConfig.displays[slot].useForStatus = displayObj["useForStatus"] | true;
+    }
+
+    free(jsonStr);
+
+    // Update and save config
+    if (!m_config->setConfig(currentConfig)) {
+        sendError(request, 400, m_config->getLastError());
+        return;
+    }
+
+    if (!m_config->save()) {
+        sendError(request, 500, "Failed to save display configuration");
+        return;
+    }
+
+    // Return updated display configuration
+    char buffer[1024];
+    if (!m_config->toJSON(buffer, sizeof(buffer))) {
+        sendError(request, 500, "Failed to serialize configuration");
+        return;
+    }
+
+    sendJSON(request, 200, buffer);
+    LOG_INFO("Display configuration saved successfully");
 }
 
 void WebAPI::handleGetMode(AsyncWebServerRequest* request) {
@@ -621,7 +741,20 @@ String WebAPI::buildDashboardHTML() {
     html += "<div id=\"sensors-list\"></div>";
 
     html += "<button class=\"btn btn-primary\" style=\"margin-top:16px;\" onclick=\"addSensor()\">+ Add Sensor</button>";
-    html += "</div></div>"; // End hardware tab
+
+    html += "</div>"; // End sensors section
+
+    // DISPLAYS SECTION
+    html += "<div class=\"section\" style=\"margin-top:24px;\">";
+    html += "<h3>LED Matrix Display</h3>";
+    html += "<p class=\"help-text\">Configure 8x8 LED matrix for enhanced visual feedback.</p>";
+
+    html += "<div id=\"displays-list\"></div>";
+
+    html += "<button class=\"btn btn-primary\" style=\"margin-top:16px;\" onclick=\"addDisplay()\">+ Add Display</button>";
+    html += "</div>"; // End displays section
+
+    html += "</div>"; // End hardware tab
 
     // CONFIG TAB
     html += "<div id=\"config-tab\" class=\"tab-content\">";
@@ -718,7 +851,7 @@ String WebAPI::buildDashboardHTML() {
     html += "event.target.classList.add('active');";
     html += "document.getElementById(tab+'-tab').classList.add('active');";
     html += "if(tab==='config')loadConfig();";
-    html += "if(tab==='hardware')loadSensors();";
+    html += "if(tab==='hardware'){loadSensors();loadDisplays();}";
     html += "if(tab==='logs')fetchLogs();";
     html += "}";
 
@@ -1008,6 +1141,122 @@ String WebAPI::buildDashboardHTML() {
     html += "console.error('Save failed:',err);";
     html += "alert('Failed to save sensor configuration: '+err);}}";
     html += "catch(e){console.error('Save error:',e);alert('Error saving sensors: '+e.message);}}";
+
+    // === DISPLAY MANAGEMENT ===
+    html += "let displaySlots=[null,null];";
+
+    // Load displays from backend
+    html += "async function loadDisplays(){";
+    html += "try{";
+    html += "const res=await fetch('/api/displays');";
+    html += "if(res.ok){";
+    html += "const data=await res.json();";
+    html += "if(data.displays&&Array.isArray(data.displays)){";
+    html += "data.displays.forEach(d=>{if(d.slot>=0&&d.slot<2){displaySlots[d.slot]=d;}});";
+    html += "renderDisplays();}}";
+    html += "}catch(e){console.error('Load displays error:',e);}}";
+
+    // Render displays list
+    html += "function renderDisplays(){";
+    html += "const container=document.getElementById('displays-list');";
+    html += "if(!container)return;";
+    html += "container.innerHTML='';";
+    html += "let anyDisplay=false;";
+    html += "for(let i=0;i<displaySlots.length;i++){";
+    html += "if(displaySlots[i]){anyDisplay=true;const card=createDisplayCard(displaySlots[i],i);container.appendChild(card);}}";
+    html += "if(!anyDisplay){";
+    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No displays configured. Click \"Add Display\" to get started.</p>';}}";
+
+    // Create display card
+    html += "function createDisplayCard(display,slotIdx){";
+    html += "const card=document.createElement('div');";
+    html += "card.className='sensor-card';";
+    html += "card.style.cssText='border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:12px;background:#fff;';";
+    html += "let content='';";
+    html += "content+='<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;\">';";
+    html += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html += "const typeName=display.type===1?'8x8 Matrix':'LED';";
+    html += "const typeColor=display.type===1?'#3b82f6':'#10b981';";
+    html += "content+='<span style=\"background:'+typeColor+';color:white;padding:4px 8px;border-radius:4px;font-size:0.75em;font-weight:600;\">'+typeName+'</span>';";
+    html += "content+='<span style=\"font-weight:600;\">Slot '+slotIdx+': '+display.name+'</span>';";
+    html += "content+='</div>';";
+    html += "content+='<div style=\"display:flex;gap:8px;\">';";
+    html += "const toggleBtn=display.enabled?'Disable':'Enable';";
+    html += "const toggleColor=display.enabled?'#ef4444':'#10b981';";
+    html += "content+='<button class=\"btn\" style=\"background:'+toggleColor+';color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"toggleDisplay('+slotIdx+')\">'+toggleBtn+'</button>';";
+    html += "content+='<button class=\"btn\" style=\"background:#f59e0b;color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"editDisplay('+slotIdx+')\">Edit</button>';";
+    html += "content+='<button class=\"btn\" style=\"background:#ef4444;color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"removeDisplay('+slotIdx+')\">Remove</button>';";
+    html += "content+='</div></div>';";
+    html += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:0.875em;\">';";
+    html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
+    html += "content+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sdaPin+'</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sclPin+'</span></div>';";
+    html += "content+='</div></div>';";
+    html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
+    html += "content+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+    html += "content+='<div><span style=\"color:#64748b;\">I2C Address:</span> <span style=\"font-family:monospace;\">0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
+    html += "content+='<div><span style=\"color:#64748b;\">Brightness:</span> '+display.brightness+'/15</div>';";
+    html += "content+='<div><span style=\"color:#64748b;\">Rotation:</span> '+(display.rotation*90)+'°</div>';";
+    html += "content+='</div></div></div>';";
+    html += "card.innerHTML=content;";
+    html += "return card;}";
+
+    // Add display
+    html += "function addDisplay(){";
+    html += "let slot=-1;";
+    html += "for(let i=0;i<2;i++){if(!displaySlots[i]){slot=i;break;}}";
+    html += "if(slot===-1){alert('Maximum 2 displays reached');return;}";
+    html += "const name=prompt('Display name:','8x8 Matrix');";
+    html += "if(!name)return;";
+    html += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:5,rotation:0,useForStatus:true};";
+    html += "displaySlots[slot]=newDisplay;";
+    html += "renderDisplays();";
+    html += "saveDisplays();}";
+
+    // Remove display
+    html += "function removeDisplay(slotIdx){";
+    html += "if(!confirm('Remove this display?'))return;";
+    html += "displaySlots[slotIdx]=null;";
+    html += "renderDisplays();";
+    html += "saveDisplays();}";
+
+    // Toggle display
+    html += "function toggleDisplay(slotIdx){";
+    html += "if(displaySlots[slotIdx]){";
+    html += "displaySlots[slotIdx].enabled=!displaySlots[slotIdx].enabled;";
+    html += "renderDisplays();";
+    html += "saveDisplays();}}";
+
+    // Edit display
+    html += "function editDisplay(slotIdx){";
+    html += "const display=displaySlots[slotIdx];";
+    html += "if(!display)return;";
+    html += "const name=prompt('Display name:',display.name);";
+    html += "if(name){display.name=name;}";
+    html += "const brightness=prompt('Brightness (0-15):',display.brightness);";
+    html += "if(brightness){display.brightness=parseInt(brightness)||5;}";
+    html += "const rotation=prompt('Rotation (0,1,2,3):',display.rotation);";
+    html += "if(rotation){display.rotation=parseInt(rotation)||0;}";
+    html += "renderDisplays();";
+    html += "saveDisplays();}";
+
+    // Save displays to backend
+    html += "async function saveDisplays(){";
+    html += "try{";
+    html += "const activeDisplays=displaySlots.filter(d=>d!==null);";
+    html += "const res=await fetch('/api/displays',{method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeDisplays)});";
+    html += "if(res.ok){";
+    html += "const data=await res.json();";
+    html += "console.log('Displays saved:',data);";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "console.error('Save failed:',err);";
+    html += "alert('Failed to save display configuration: '+err);}}";
+    html += "catch(e){console.error('Save error:',e);alert('Error saving displays: '+e.message);}}";
 
     // Auto-refresh status and logs
     html += "fetchStatus();";
