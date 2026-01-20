@@ -658,10 +658,10 @@ String WebAPI::buildDashboardHTML() {
     html += "<h3>LED Settings</h3>";
     html += "<div class=\"form-row\">";
     html += "<div class=\"form-group\"><label class=\"form-label\">Full Brightness (0-255)</label>";
-    html += "<input type=\"number\" id=\"cfg-ledBrightnessFull\" class=\"form-input\" min=\"0\" max=\"255\">";
+    html += "<input type=\"number\" id=\"cfg-ledBrightnessFull\" class=\"form-input\" min=\"0\" max=\"255\" value=\"255\">";
     html += "<div class=\"form-help\">LED brightness when fully on</div></div>";
     html += "<div class=\"form-group\"><label class=\"form-label\">Dim Brightness (0-255)</label>";
-    html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\">";
+    html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\" value=\"50\">";
     html += "<div class=\"form-help\">LED brightness when dimmed</div></div>";
     html += "</div>";
 
@@ -792,8 +792,8 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-sensorDirection').value=cfg.sensor?.directionEnabled?1:0;";
     html += "document.getElementById('cfg-sensorSampleCount').value=cfg.sensor?.rapidSampleCount||5;";
     html += "document.getElementById('cfg-sensorSampleInterval').value=cfg.sensor?.rapidSampleMs||100;";
-    html += "document.getElementById('cfg-ledBrightnessFull').value=cfg.led?.brightnessFull||255;";
-    html += "document.getElementById('cfg-ledBrightnessDim').value=cfg.led?.brightnessDim||50;";
+    html += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
+    html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
     html += "document.getElementById('cfg-logLevel').value=cfg.logging?.level||2;";
     html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
     html += "}catch(e){console.error('Config load error:',e);}}";
