@@ -1042,7 +1042,7 @@ String WebAPI::buildDashboardHTML() {
 
     // Wiring diagram column
     html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
-    html += "html+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+    html += "html+='<div style=\"font-size:0.85em;line-height:1.6;\">';";
 
     // PIR/IR wiring
     html += "if(sensor.type===0||sensor.type===1){";
@@ -1189,14 +1189,14 @@ String WebAPI::buildDashboardHTML() {
     html += "content+='</div></div>';";
     html += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:0.875em;\">';";
     html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
-    html += "content+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+    html += "content+='<div style=\"font-size:0.85em;line-height:1.6;\">';";
     html += "content+='<div style=\"color:#64748b;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
     html += "content+='<div style=\"color:#64748b;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
     html += "content+='<div style=\"color:#64748b;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sdaPin+'</span></div>';";
     html += "content+='<div style=\"color:#64748b;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sclPin+'</span></div>';";
     html += "content+='</div></div>';";
     html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
-    html += "content+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+    html += "content+='<div style=\"font-size:0.85em;line-height:1.6;\">';";
     html += "content+='<div><span style=\"color:#64748b;\">I2C Address:</span> <span style=\"font-family:monospace;\">0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
     html += "content+='<div><span style=\"color:#64748b;\">Brightness:</span> '+display.brightness+'/15</div>';";
     html += "content+='<div><span style=\"color:#64748b;\">Rotation:</span> '+(display.rotation*90)+'°</div>';";
