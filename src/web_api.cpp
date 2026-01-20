@@ -315,7 +315,7 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
     }
 
     // Return updated sensor configuration
-    char buffer[2048];
+    char buffer[4096];
     if (!m_config->toJSON(buffer, sizeof(buffer))) {
         sendError(request, 500, "Failed to serialize configuration");
         return;
@@ -420,7 +420,7 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
     }
 
     // Return updated display configuration
-    char buffer[1024];
+    char buffer[4096];
     if (!m_config->toJSON(buffer, sizeof(buffer))) {
         sendError(request, 500, "Failed to serialize configuration");
         return;
@@ -745,9 +745,9 @@ String WebAPI::buildDashboardHTML() {
     html += "</div>"; // End sensors section
 
     // DISPLAYS SECTION
-    html += "<div class=\"section\" style=\"margin-top:24px;\">";
-    html += "<h3>LED Matrix Display</h3>";
-    html += "<p class=\"help-text\">Configure 8x8 LED matrix for enhanced visual feedback.</p>";
+    html += "<div class=\"card\" style=\"margin-top:24px;\">";
+    html += "<h2>LED Matrix Display</h2>";
+    html += "<p class=\"form-help\" style=\"margin-bottom:16px;\">Configure 8x8 LED matrix for enhanced visual feedback.</p>";
 
     html += "<div id=\"displays-list\"></div>";
 
