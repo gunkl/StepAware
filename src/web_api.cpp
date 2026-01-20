@@ -890,50 +890,56 @@ String WebAPI::buildDashboardHTML() {
     html += "function createSensorCard(sensor,slotIdx){";
     html += "const card=document.createElement('div');";
     html += "card.className='sensor-card'+(sensor.enabled?'':' disabled');";
+    html += "let html='';";
 
     // Header with badge, title, and buttons on one line
-    html += "card.innerHTML='<div class=\"sensor-header\">';";
-    html += "card.innerHTML+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
-    html += "card.innerHTML+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
+    html += "html+='<div class=\"sensor-header\">';";
+    html += "html+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
+    html += "html+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
     html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span>';";
-    html += "card.innerHTML+='<div class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</div></div>';";
-    html += "card.innerHTML+='<div class=\"sensor-actions\">';";
-    html += "card.innerHTML+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
-    html += "card.innerHTML+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
-    html += "card.innerHTML+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
-    html += "card.innerHTML+='</div></div>';";
+    html += "html+='<span class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</span></div>';";
+    html += "html+='<div class=\"sensor-actions\">';";
+    html += "html+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
+    html += "html+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
+    html += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
+    html += "html+='</div></div>';";
 
-    // Pin connection table
-    html += "card.innerHTML+='<div style=\"margin:12px 0;\"><strong>Pin Connections:</strong></div>';";
-    html += "card.innerHTML+='<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-bottom:12px;\">';";
-    html += "if(sensor.type===2){";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Trigger Pin</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.primaryPin+'</td></tr>';";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Echo Pin</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.secondaryPin+'</td></tr>';}";
-    html += "else{";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Signal Pin</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.primaryPin+'</td></tr>';}";
-    html += "card.innerHTML+='</table>';";
+    // Compact horizontal layout for pin and config info
+    html += "html+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;\">';";
 
-    // Configuration table
-    html += "card.innerHTML+='<div style=\"margin:12px 0;\"><strong>Configuration:</strong></div>';";
-    html += "card.innerHTML+='<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;\">';";
-    html += "if(sensor.type===0){";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Warmup Time</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+(sensor.warmupMs/1000)+' seconds</td></tr>';";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Debounce</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.debounceMs+' ms</td></tr>';}";
+    // Wiring diagram column
+    html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
+    html += "html+='<div style=\"font-size:0.75em;line-height:1.6;\">';";
+
+    // PIR/IR wiring
+    html += "if(sensor.type===0||sensor.type===1){";
+    html += "html+='<div style=\"color:#64748b;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.primaryPin+'</span></div>';}";
+
+    // Ultrasonic wiring
     html += "else if(sensor.type===2){";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Detection Threshold</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.detectionThreshold+' mm</td></tr>';";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Direction Detection</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</td></tr>';";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Sample Count</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.rapidSampleCount+'</td></tr>';";
-    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Sample Interval</td>';";
-    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.rapidSampleMs+' ms</td></tr>';}";
-    html += "card.innerHTML+='</table>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">5V</span></div>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.primaryPin+'</span></div>';";
+    html += "html+='<div style=\"color:#64748b;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
+
+    html += "html+='</div></div>';";
+
+    // Configuration column
+    html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
+    html += "if(sensor.type===0){";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Warmup: <span style=\"color:#1e293b;\">'+(sensor.warmupMs/1000)+'s</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Debounce: <span style=\"color:#1e293b;\">'+sensor.debounceMs+'ms</span></div>';}";
+    html += "else if(sensor.type===2){";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Range: <span style=\"color:#1e293b;\">'+sensor.detectionThreshold+'mm</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Direction: <span style=\"color:#1e293b;\">'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Samples: <span style=\"color:#1e293b;\">'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}";
+    html += "html+='</div>';";
+
+    html += "html+='</div>';";  // Close grid
+
+    html += "card.innerHTML=html;";
     html += "return card;}";
 
     // Add new sensor
