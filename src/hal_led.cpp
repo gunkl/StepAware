@@ -109,8 +109,17 @@ void HAL_LED::startPattern(Pattern pattern, uint32_t duration_ms) {
     m_lastToggleTime = millis();
     m_patternState = false;
 
-    LOG_INFO("HAL_LED: Pattern started: %s, duration: %u ms",
-             getPatternName(pattern), duration_ms);
+    const char* patternName = "UNKNOWN";
+    switch (pattern) {
+        case PATTERN_OFF:           patternName = "OFF"; break;
+        case PATTERN_ON:            patternName = "ON"; break;
+        case PATTERN_BLINK_FAST:    patternName = "BLINK_FAST"; break;
+        case PATTERN_BLINK_SLOW:    patternName = "BLINK_SLOW"; break;
+        case PATTERN_BLINK_WARNING: patternName = "BLINK_WARNING"; break;
+        case PATTERN_PULSE:         patternName = "PULSE"; break;
+        case PATTERN_CUSTOM:        patternName = "CUSTOM"; break;
+    }
+    LOG_INFO("HAL_LED: Pattern started: %s, duration: %u ms", patternName, duration_ms);
 
     // Initial state
     if (pattern == PATTERN_OFF) {
