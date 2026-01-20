@@ -38,12 +38,11 @@ bool StateMachine::begin(OperatingMode initialMode) {
         return true;
     }
 
-    DEBUG_PRINTLN("========================================");
-    DEBUG_PRINTLN("[StateMachine] Initializing...");
+    LOG_INFO("StateMachine: Initializing...");
 
     // Validate hardware pointers
     if (!m_motionSensor || !m_hazardLED || !m_statusLED || !m_button) {
-        DEBUG_PRINTLN("[StateMachine] ERROR: Hardware HAL not initialized");
+        LOG_ERROR("StateMachine: Hardware HAL not initialized");
         return false;
     }
 
@@ -55,8 +54,7 @@ bool StateMachine::begin(OperatingMode initialMode) {
 
     m_initialized = true;
 
-    DEBUG_PRINTF("[StateMachine] Initialized in mode: %s\n", getModeName(initialMode));
-    DEBUG_PRINTLN("========================================");
+    LOG_INFO("StateMachine: Initialized in mode: %s", getModeName(initialMode));
 
     return true;
 }
@@ -100,16 +98,14 @@ void StateMachine::update() {
 }
 
 void StateMachine::handleEvent(SystemEvent event) {
-    DEBUG_PRINTF("[StateMachine] Event: ");
-
     switch (event) {
         case EVENT_BUTTON_PRESS:
-            DEBUG_PRINTLN("BUTTON_PRESS");
+            LOG_DEBUG("StateMachine: Event BUTTON_PRESS");
             cycleMode();
             break;
 
         case EVENT_MOTION_DETECTED:
-            DEBUG_PRINTLN("MOTION_DETECTED");
+            LOG_INFO("StateMachine: Event MOTION_DETECTED");
             m_motionEvents++;
 
             // Trigger warning in appropriate modes
@@ -119,32 +115,32 @@ void StateMachine::handleEvent(SystemEvent event) {
             break;
 
         case EVENT_MOTION_CLEARED:
-            DEBUG_PRINTLN("MOTION_CLEARED");
+            LOG_INFO("StateMachine: Event MOTION_CLEARED");
             // Motion cleared, warning will time out naturally
             break;
 
         case EVENT_TIMER_EXPIRED:
-            DEBUG_PRINTLN("TIMER_EXPIRED");
+            LOG_DEBUG("StateMachine: Event TIMER_EXPIRED");
             stopWarning();
             break;
 
         case EVENT_BATTERY_LOW:
-            DEBUG_PRINTLN("BATTERY_LOW");
+            LOG_WARN("StateMachine: Event BATTERY_LOW");
             // Future: Switch to LOW_BATTERY mode
             break;
 
         case EVENT_BATTERY_OK:
-            DEBUG_PRINTLN("BATTERY_OK");
+            LOG_INFO("StateMachine: Event BATTERY_OK");
             // Battery recovered
             break;
 
         case EVENT_CHARGING_START:
-            DEBUG_PRINTLN("CHARGING_START");
+            LOG_INFO("StateMachine: Event CHARGING_START");
             // Future: Switch to CHARGING mode
             break;
 
         case EVENT_CHARGING_STOP:
-            DEBUG_PRINTLN("CHARGING_STOP");
+            LOG_INFO("StateMachine: Event CHARGING_STOP");
             // Exit charging mode
             break;
 
@@ -168,8 +164,8 @@ void StateMachine::setMode(OperatingMode mode) {
         return;  // Already in this mode
     }
 
-    DEBUG_PRINTF("[StateMachine] Mode change: %s -> %s\n",
-                 getModeName(m_currentMode), getModeName(mode));
+    LOG_INFO("StateMachine: Mode change: %s -> %s",
+             getModeName(m_currentMode), getModeName(mode));
 
     // Exit current mode
     exitMode(m_currentMode);
@@ -232,7 +228,7 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
     // Start hazard LED pattern
     m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
 
-    DEBUG_PRINTF("[StateMachine] Warning triggered (%u ms)\n", duration_ms);
+    LOG_INFO("StateMachine: Warning triggered (%u ms)", duration_ms);
 }
 
 void StateMachine::stopWarning() {
@@ -243,7 +239,7 @@ void StateMachine::stopWarning() {
     m_warningActive = false;
     m_hazardLED->stopPattern();
 
-    DEBUG_PRINTLN("[StateMachine] Warning stopped");
+    LOG_INFO("StateMachine: Warning stopped");
 }
 
 uint32_t StateMachine::getUptimeSeconds() {
@@ -287,7 +283,7 @@ void StateMachine::enterMode(OperatingMode mode) {
         case LOW_BATTERY:
         case CHARGING:
             // Future modes (Phases 5-6)
-            DEBUG_PRINTLN("[StateMachine] Mode not yet implemented");
+            LOG_WARN("StateMachine: Mode not yet implemented");
             break;
     }
 }

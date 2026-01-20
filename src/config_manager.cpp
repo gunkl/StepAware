@@ -1,4 +1,5 @@
 #include "config_manager.h"
+#include "logger.h"
 #include <ArduinoJson.h>
 
 // Use LittleFS instead of FILESYSTEM for better ESP32-C3 support
@@ -24,35 +25,35 @@ bool ConfigManager::begin() {
         return true;
     }
 
-    DEBUG_PRINTLN("[ConfigManager] Initializing...");
+    LOG_INFO("ConfigManager: Initializing...");
 
     // Mount FILESYSTEM
     if (!FILESYSTEM.begin(true)) {  // true = format on fail
         setError("Failed to mount FILESYSTEM");
-        DEBUG_PRINTLN("[ConfigManager] ERROR: Failed to mount FILESYSTEM");
+        LOG_ERROR("ConfigManager: Failed to mount FILESYSTEM");
         return false;
     }
 
-    DEBUG_PRINTLN("[ConfigManager] FILESYSTEM mounted");
+    LOG_DEBUG("ConfigManager: FILESYSTEM mounted");
 
     // Load defaults first
     loadDefaults();
 
     // Try to load config from file
     if (FILESYSTEM.exists(CONFIG_FILE_PATH)) {
-        DEBUG_PRINTLN("[ConfigManager] Config file found, loading...");
+        LOG_DEBUG("ConfigManager: Config file found, loading...");
         if (!load()) {
-            DEBUG_PRINTLN("[ConfigManager] WARNING: Failed to load config, using defaults");
+            LOG_WARN("ConfigManager: Failed to load config, using defaults");
             // Continue with defaults
         }
     } else {
-        DEBUG_PRINTLN("[ConfigManager] No config file found, using defaults");
+        LOG_INFO("ConfigManager: No config file found, using defaults");
         // Save defaults
         save();
     }
 
     m_initialized = true;
-    DEBUG_PRINTLN("[ConfigManager] ✓ Initialization complete");
+    LOG_INFO("ConfigManager: Initialization complete");
 
     return true;
 }
@@ -88,9 +89,9 @@ bool ConfigManager::load() {
     free(buffer);
 
     if (result) {
-        DEBUG_PRINTLN("[ConfigManager] ✓ Config loaded successfully");
+        LOG_INFO("ConfigManager: Config loaded successfully");
     } else {
-        DEBUG_PRINTLN("[ConfigManager] ERROR: Failed to parse config");
+        LOG_ERROR("ConfigManager: Failed to parse config");
     }
 
     return result;
@@ -117,12 +118,12 @@ bool ConfigManager::save() {
         return false;
     }
 
-    DEBUG_PRINTLN("[ConfigManager] ✓ Config saved successfully");
+    LOG_INFO("ConfigManager: Config saved successfully");
     return true;
 }
 
 bool ConfigManager::reset(bool save) {
-    DEBUG_PRINTLN("[ConfigManager] Resetting to factory defaults");
+    LOG_INFO("ConfigManager: Resetting to factory defaults");
     loadDefaults();
 
     if (save) {
@@ -137,7 +138,7 @@ bool ConfigManager::validate() {
         return false;
     }
 
-    DEBUG_PRINTLN("[ConfigManager] ✓ Configuration validated");
+    LOG_DEBUG("ConfigManager: Configuration validated");
     return true;
 }
 
@@ -443,7 +444,7 @@ const char* ConfigManager::getLastError() const {
 }
 
 void ConfigManager::loadDefaults() {
-    DEBUG_PRINTLN("[ConfigManager] Loading factory defaults");
+    LOG_DEBUG("ConfigManager: Loading factory defaults");
 
     // Motion Detection
     m_config.motionWarningDuration = MOTION_WARNING_DURATION_MS;
