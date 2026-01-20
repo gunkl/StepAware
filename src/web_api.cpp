@@ -650,9 +650,6 @@ String WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-group\"><label class=\"form-label\">Warning Duration (seconds)</label>";
     html += "<input type=\"number\" id=\"cfg-motionWarningDuration\" class=\"form-input\" min=\"1\" max=\"600\">";
     html += "<div class=\"form-help\">Time to display warning after motion detected</div></div>";
-    html += "<div class=\"form-group\"><label class=\"form-label\">PIR Warmup (seconds)</label>";
-    html += "<input type=\"number\" id=\"cfg-pirWarmup\" class=\"form-input\" min=\"1\" max=\"120\">";
-    html += "<div class=\"form-help\">PIR sensor initialization time</div></div>";
     html += "</div>";
 
     html += "<h3>LED Settings</h3>";
@@ -786,7 +783,6 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
     html += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
     html += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
-    html += "document.getElementById('cfg-pirWarmup').value=Math.round((cfg.motion?.pirWarmup||60000)/1000);";
     html += "document.getElementById('cfg-sensorMinDistance').value=cfg.sensor?.minDistance||30;";
     html += "document.getElementById('cfg-sensorMaxDistance').value=cfg.sensor?.maxDistance||200;";
     html += "document.getElementById('cfg-sensorDirection').value=cfg.sensor?.directionEnabled?1:0;";
@@ -805,8 +801,7 @@ String WebAPI::buildDashboardHTML() {
     html += "const cfg={device:{name:document.getElementById('cfg-deviceName').value,";
     html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value)},";
     html += "wifi:{ssid:document.getElementById('cfg-wifiSSID').value,enabled:true},";
-    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000,";
-    html += "pirWarmup:parseInt(document.getElementById('cfg-pirWarmup').value)*1000},";
+    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000},";
     html += "sensor:{minDistance:parseInt(document.getElementById('cfg-sensorMinDistance').value),";
     html += "maxDistance:parseInt(document.getElementById('cfg-sensorMaxDistance').value),";
     html += "directionEnabled:parseInt(document.getElementById('cfg-sensorDirection').value)===1,";
@@ -895,28 +890,50 @@ String WebAPI::buildDashboardHTML() {
     html += "function createSensorCard(sensor,slotIdx){";
     html += "const card=document.createElement('div');";
     html += "card.className='sensor-card'+(sensor.enabled?'':' disabled');";
+
+    // Header with badge, title, and buttons on one line
     html += "card.innerHTML='<div class=\"sensor-header\">';";
-    html += "card.innerHTML+='<div><div class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</div>';";
+    html += "card.innerHTML+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
     html += "card.innerHTML+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
-    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span></div>';";
+    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span>';";
+    html += "card.innerHTML+='<div class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</div></div>';";
     html += "card.innerHTML+='<div class=\"sensor-actions\">';";
     html += "card.innerHTML+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
     html += "card.innerHTML+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
     html += "card.innerHTML+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
     html += "card.innerHTML+='</div></div>';";
 
-    // Pin information
+    // Pin connection table
+    html += "card.innerHTML+='<div style=\"margin:12px 0;\"><strong>Pin Connections:</strong></div>';";
+    html += "card.innerHTML+='<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;margin-bottom:12px;\">';";
     html += "if(sensor.type===2){";
-    html += "card.innerHTML+='<div class=\"pin-info\">Trigger Pin: GPIO '+sensor.primaryPin+' | Echo Pin: GPIO '+sensor.secondaryPin+'</div>';}";
-    html += "else{card.innerHTML+='<div class=\"pin-info\">Signal Pin: GPIO '+sensor.primaryPin+'</div>';}";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Trigger Pin</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.primaryPin+'</td></tr>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Echo Pin</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.secondaryPin+'</td></tr>';}";
+    html += "else{";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Signal Pin</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;font-family:monospace;\">GPIO '+sensor.primaryPin+'</td></tr>';}";
+    html += "card.innerHTML+='</table>';";
 
-    // Configuration display
-    html += "card.innerHTML+='<div style=\"margin-top:12px;font-size:0.9em;color:#64748b;\">';";
-    html += "if(sensor.type===0){card.innerHTML+='Warmup: '+(sensor.warmupMs/1000)+'s | Debounce: '+sensor.debounceMs+'ms';}";
+    // Configuration table
+    html += "card.innerHTML+='<div style=\"margin:12px 0;\"><strong>Configuration:</strong></div>';";
+    html += "card.innerHTML+='<table style=\"width:100%;border-collapse:collapse;font-size:0.9em;\">';";
+    html += "if(sensor.type===0){";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Warmup Time</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+(sensor.warmupMs/1000)+' seconds</td></tr>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Debounce</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.debounceMs+' ms</td></tr>';}";
     html += "else if(sensor.type===2){";
-    html += "card.innerHTML+='Range: '+sensor.detectionThreshold+'mm | Direction: '+(sensor.enableDirectionDetection?'Enabled':'Disabled');";
-    html += "card.innerHTML+=' | Samples: '+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms';}";
-    html += "card.innerHTML+='</div>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;width:50%;\">Detection Threshold</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.detectionThreshold+' mm</td></tr>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Direction Detection</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</td></tr>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Sample Count</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.rapidSampleCount+'</td></tr>';";
+    html += "card.innerHTML+='<tr><td style=\"padding:4px;background:#f3f4f6;border:1px solid #e5e7eb;\">Sample Interval</td>';";
+    html += "card.innerHTML+='<td style=\"padding:4px;background:white;border:1px solid #e5e7eb;\">'+sensor.rapidSampleMs+' ms</td></tr>';}";
+    html += "card.innerHTML+='</table>';";
     html += "return card;}";
 
     // Add new sensor

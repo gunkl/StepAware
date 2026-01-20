@@ -1,4 +1,5 @@
 #include "hal_led.h"
+#include "logger.h"
 
 HAL_LED::HAL_LED(uint8_t pin, uint8_t pwm_channel, bool mock_mode)
     : m_pin(pin)
@@ -26,7 +27,7 @@ bool HAL_LED::begin() {
         return true;
     }
 
-    DEBUG_PRINTF("[HAL_LED] Initializing LED on pin %d...\n", m_pin);
+    LOG_DEBUG("HAL_LED: Initializing LED on pin %d", m_pin);
 
     if (!m_mockMode) {
         // Configure PWM channel
@@ -34,14 +35,14 @@ bool HAL_LED::begin() {
         ledcAttachPin(m_pin, m_pwmChannel);
         ledcWrite(m_pwmChannel, 0);  // Start with LED off
 
-        DEBUG_PRINTF("[HAL_LED] PWM configured: channel=%d, freq=%dHz, resolution=%d-bit\n",
-                     m_pwmChannel, LED_PWM_FREQUENCY, LED_PWM_RESOLUTION);
+        LOG_DEBUG("HAL_LED: PWM configured: channel=%d, freq=%dHz, resolution=%d-bit",
+                  m_pwmChannel, LED_PWM_FREQUENCY, LED_PWM_RESOLUTION);
     } else {
-        DEBUG_PRINTLN("[HAL_LED] MOCK MODE: Simulating LED");
+        LOG_DEBUG("HAL_LED: MOCK MODE - Simulating LED");
     }
 
     m_initialized = true;
-    DEBUG_PRINTLN("[HAL_LED] ✓ Initialization complete");
+    LOG_DEBUG("HAL_LED: Initialization complete");
 
     return true;
 }
@@ -54,7 +55,7 @@ void HAL_LED::update() {
     // Check if pattern duration has expired
     if (m_patternDuration > 0) {
         if (millis() - m_patternStartTime >= m_patternDuration) {
-            DEBUG_PRINTLN("[HAL_LED] Pattern stopped");
+            LOG_DEBUG("HAL_LED: Pattern stopped");
             stopPattern();
             return;
         }
@@ -71,7 +72,7 @@ void HAL_LED::on(uint8_t brightness) {
     applyBrightness();
 
     if (!m_mockMode) {
-        DEBUG_PRINTF("[HAL_LED] LED turned ON (brightness=%d)\n", brightness);
+        LOG_DEBUG("HAL_LED: LED turned ON (brightness=%d)", brightness);
     }
 }
 
@@ -82,7 +83,7 @@ void HAL_LED::off() {
     applyBrightness();
 
     if (!m_mockMode) {
-        DEBUG_PRINTLN("[HAL_LED] LED turned OFF");
+        LOG_DEBUG("HAL_LED: LED turned OFF");
     }
 }
 
@@ -108,18 +109,8 @@ void HAL_LED::startPattern(Pattern pattern, uint32_t duration_ms) {
     m_lastToggleTime = millis();
     m_patternState = false;
 
-    DEBUG_PRINTF("[HAL_LED] Pattern started: ");
-    switch (pattern) {
-        case PATTERN_OFF:           DEBUG_PRINT("PATTERN_OFF"); break;
-        case PATTERN_ON:            DEBUG_PRINT("PATTERN_ON"); break;
-        case PATTERN_BLINK_FAST:    DEBUG_PRINT("PATTERN_BLINK_FAST"); break;
-        case PATTERN_BLINK_SLOW:    DEBUG_PRINT("PATTERN_BLINK_SLOW"); break;
-        case PATTERN_BLINK_WARNING: DEBUG_PRINT("PATTERN_BLINK_WARNING"); break;
-        case PATTERN_PULSE:         DEBUG_PRINT("PATTERN_PULSE"); break;
-        case PATTERN_CUSTOM:        DEBUG_PRINT("PATTERN_CUSTOM"); break;
-        default:                    DEBUG_PRINT("UNKNOWN"); break;
-    }
-    DEBUG_PRINTF(", duration: %u ms\n", duration_ms);
+    LOG_INFO("HAL_LED: Pattern started: %s, duration: %u ms",
+             getPatternName(pattern), duration_ms);
 
     // Initial state
     if (pattern == PATTERN_OFF) {
@@ -150,7 +141,7 @@ bool HAL_LED::isOn() {
 void HAL_LED::setCustomPattern(uint32_t on_ms, uint32_t off_ms) {
     m_customOnMs = on_ms;
     m_customOffMs = off_ms;
-    DEBUG_PRINTF("[HAL_LED] Custom pattern set: %ums ON, %ums OFF\n", on_ms, off_ms);
+    LOG_DEBUG("HAL_LED: Custom pattern set: %ums ON, %ums OFF", on_ms, off_ms);
 }
 
 uint32_t HAL_LED::getPatternInterval() {

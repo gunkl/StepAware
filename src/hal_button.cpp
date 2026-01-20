@@ -1,4 +1,5 @@
 #include "hal_button.h"
+#include "logger.h"
 
 HAL_Button::HAL_Button(uint8_t pin, uint32_t debounce_ms,
                        uint32_t long_press_ms, bool mock_mode)
@@ -33,7 +34,7 @@ bool HAL_Button::begin() {
         return true;
     }
 
-    DEBUG_PRINTF("[HAL_Button] Initializing button on pin %d...\n", m_pin);
+    LOG_DEBUG("HAL_Button: Initializing button on pin %d", m_pin);
 
     if (!m_mockMode) {
         // Configure GPIO with internal pull-up (active LOW)
