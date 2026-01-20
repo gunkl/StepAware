@@ -245,6 +245,26 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 
     doc["fusionMode"] = m_config.fusionMode;
 
+    // Multi-Display Configuration
+    JsonArray displaysArray = doc.createNestedArray("displays");
+    for (int i = 0; i < 2; i++) {
+        if (m_config.displays[i].active) {
+            JsonObject displayObj = displaysArray.createNestedObject();
+            displayObj["slot"] = i;
+            displayObj["name"] = m_config.displays[i].name;
+            displayObj["type"] = m_config.displays[i].type;
+            displayObj["i2cAddress"] = m_config.displays[i].i2cAddress;
+            displayObj["sdaPin"] = m_config.displays[i].sdaPin;
+            displayObj["sclPin"] = m_config.displays[i].sclPin;
+            displayObj["enabled"] = m_config.displays[i].enabled;
+            displayObj["brightness"] = m_config.displays[i].brightness;
+            displayObj["rotation"] = m_config.displays[i].rotation;
+            displayObj["useForStatus"] = m_config.displays[i].useForStatus;
+        }
+    }
+
+    doc["primaryDisplaySlot"] = m_config.primaryDisplaySlot;
+
     // Metadata
     JsonObject meta = doc.createNestedObject("metadata");
     meta["version"] = m_config.version;
@@ -371,6 +391,35 @@ bool ConfigManager::fromJSON(const char* json) {
 
     if (doc.containsKey("fusionMode")) {
         m_config.fusionMode = doc["fusionMode"] | 0;
+    }
+
+    // Multi-Display Configuration
+    if (doc.containsKey("displays")) {
+        // Clear all slots first
+        for (int i = 0; i < 2; i++) {
+            m_config.displays[i].active = false;
+        }
+
+        JsonArray displaysArray = doc["displays"];
+        for (JsonObject displayObj : displaysArray) {
+            int slot = displayObj["slot"] | -1;
+            if (slot >= 0 && slot < 2) {
+                m_config.displays[slot].active = true;
+                strlcpy(m_config.displays[slot].name, displayObj["name"] | "", sizeof(m_config.displays[slot].name));
+                m_config.displays[slot].type = (DisplayType)(displayObj["type"] | 0);
+                m_config.displays[slot].i2cAddress = displayObj["i2cAddress"] | 0x70;
+                m_config.displays[slot].sdaPin = displayObj["sdaPin"] | I2C_SDA_PIN;
+                m_config.displays[slot].sclPin = displayObj["sclPin"] | I2C_SCL_PIN;
+                m_config.displays[slot].enabled = displayObj["enabled"] | true;
+                m_config.displays[slot].brightness = displayObj["brightness"] | MATRIX_BRIGHTNESS_DEFAULT;
+                m_config.displays[slot].rotation = displayObj["rotation"] | 0;
+                m_config.displays[slot].useForStatus = displayObj["useForStatus"] | true;
+            }
+        }
+    }
+
+    if (doc.containsKey("primaryDisplaySlot")) {
+        m_config.primaryDisplaySlot = doc["primaryDisplaySlot"] | 0;
     }
 
     // Metadata
@@ -520,6 +569,22 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].rapidSampleMs = 0;
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
+
+    // Multi-Display Configuration - No displays by default
+    for (int i = 0; i < 2; i++) {
+        m_config.displays[i].active = false;
+        m_config.displays[i].enabled = false;
+        strlcpy(m_config.displays[i].name, "", sizeof(m_config.displays[i].name));
+        m_config.displays[i].type = DISPLAY_TYPE_NONE;
+        m_config.displays[i].i2cAddress = MATRIX_I2C_ADDRESS;
+        m_config.displays[i].sdaPin = I2C_SDA_PIN;
+        m_config.displays[i].sclPin = I2C_SCL_PIN;
+        m_config.displays[i].brightness = MATRIX_BRIGHTNESS_DEFAULT;
+        m_config.displays[i].rotation = 0;
+        m_config.displays[i].useForStatus = true;
+    }
+
+    m_config.primaryDisplaySlot = 0;
 
     // Metadata
     strlcpy(m_config.version, FIRMWARE_VERSION, sizeof(m_config.version));
