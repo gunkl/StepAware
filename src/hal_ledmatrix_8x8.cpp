@@ -443,3 +443,50 @@ void HAL_LEDMatrix_8x8::writeDisplay() {
 #endif
     }
 }
+
+// ============================================================================
+// Phase 2: Custom Animation Support (Stubs)
+// ============================================================================
+
+bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
+    // Phase 2 implementation will:
+    // 1. Open file from SPIFFS/LittleFS
+    // 2. Parse animation definition format:
+    //    name=MyAnimation
+    //    loop=true
+    //    frame=11111111,10000001,...,100  (8 bytes + delay)
+    // 3. Store in m_customAnimations array
+    // 4. Return true on success
+
+    LOG_WARN("HAL_LEDMatrix_8x8: loadCustomAnimation() not yet implemented (Phase 2)");
+    LOG_INFO("  Requested file: %s", filepath);
+
+    return false;  // Not implemented yet
+}
+
+bool HAL_LEDMatrix_8x8::playCustomAnimation(const char* name, uint32_t duration_ms) {
+    // Phase 2 implementation will:
+    // 1. Find animation by name in m_customAnimations
+    // 2. Set current pattern to ANIM_CUSTOM
+    // 3. Start animation with specified duration
+    // 4. updateAnimation() will handle frame progression
+
+    LOG_WARN("HAL_LEDMatrix_8x8: playCustomAnimation() not yet implemented (Phase 2)");
+    LOG_INFO("  Requested animation: %s", name);
+    LOG_INFO("  Duration: %u ms", duration_ms);
+
+    return false;  // Not implemented yet
+}
+
+uint8_t HAL_LEDMatrix_8x8::getCustomAnimationCount() const {
+    // Phase 2 implementation will return count of loaded animations
+    return 0;  // No custom animations loaded yet
+}
+
+void HAL_LEDMatrix_8x8::clearCustomAnimations() {
+    // Phase 2 implementation will:
+    // 1. Free memory used by m_customAnimations
+    // 2. Reset custom animation count to 0
+
+    LOG_INFO("HAL_LEDMatrix_8x8: clearCustomAnimations() called (no-op in Phase 1)");
+}

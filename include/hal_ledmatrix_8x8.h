@@ -176,6 +176,72 @@ public:
      */
     uint8_t* mockGetFrame() { return m_mockFrame; }
 
+    // ========================================================================
+    // Phase 2: Custom Animation Support (Stubs)
+    // ========================================================================
+
+    /**
+     * @brief Custom animation definition (Phase 2)
+     *
+     * Allows loading user-defined animations from configuration files.
+     * Each animation consists of multiple frames with individual timing.
+     */
+    struct CustomAnimation {
+        char name[32];              ///< Animation name
+        uint8_t frames[16][8];      ///< Up to 16 frames (8 bytes each)
+        uint16_t frameDelays[16];   ///< Delay after each frame (ms)
+        uint8_t frameCount;         ///< Number of frames (1-16)
+        bool loop;                  ///< Loop animation when complete
+    };
+
+    /**
+     * @brief Load custom animation from file (Phase 2 - STUB)
+     *
+     * Loads a custom animation definition from a text file.
+     * File format:
+     *   name=MyAnimation
+     *   loop=true
+     *   frame=11111111,10000001,10000001,10000001,10000001,10000001,10000001,11111111,100
+     *   frame=...
+     *
+     * @param filepath Path to animation definition file
+     * @return true if animation loaded successfully
+     *
+     * @note Phase 2 implementation - currently a stub
+     */
+    bool loadCustomAnimation(const char* filepath);
+
+    /**
+     * @brief Play custom animation by name (Phase 2 - STUB)
+     *
+     * Plays a previously loaded custom animation.
+     *
+     * @param name Animation name
+     * @param duration_ms Animation duration (0 = loop indefinitely)
+     * @return true if animation started successfully
+     *
+     * @note Phase 2 implementation - currently a stub
+     */
+    bool playCustomAnimation(const char* name, uint32_t duration_ms = 0);
+
+    /**
+     * @brief Get number of loaded custom animations (Phase 2 - STUB)
+     *
+     * @return uint8_t Number of custom animations loaded
+     *
+     * @note Phase 2 implementation - currently a stub
+     */
+    uint8_t getCustomAnimationCount() const;
+
+    /**
+     * @brief Clear all custom animations (Phase 2 - STUB)
+     *
+     * Frees memory used by custom animations.
+     *
+     * @note Phase 2 implementation - currently a stub
+     */
+    void clearCustomAnimations();
+
 private:
     // Hardware
 #ifndef MOCK_HARDWARE

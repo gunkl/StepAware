@@ -6,6 +6,7 @@
 #include "hal_motion_sensor.h"
 #include "hal_led.h"
 #include "hal_button.h"
+#include "hal_ledmatrix_8x8.h"
 
 /**
  * @brief State Machine for StepAware Operating Modes
@@ -173,12 +174,30 @@ public:
      */
     uint32_t getModeChangeCount();
 
+    /**
+     * @brief Set LED matrix display (Issue #12)
+     *
+     * Allows dynamic assignment of LED matrix display for enhanced visual feedback.
+     * If set, matrix will be used for warnings instead of single LED.
+     *
+     * @param matrix Pointer to LED matrix HAL (nullptr to disable)
+     */
+    void setLEDMatrix(HAL_LEDMatrix_8x8* matrix);
+
+    /**
+     * @brief Get LED matrix display
+     *
+     * @return HAL_LEDMatrix_8x8* Pointer to matrix or nullptr if not set
+     */
+    HAL_LEDMatrix_8x8* getLEDMatrix() const { return m_ledMatrix; }
+
 private:
     // Hardware interfaces
     HAL_MotionSensor* m_motionSensor; ///< Motion sensor (polymorphic)
     HAL_LED* m_hazardLED;             ///< Hazard warning LED
     HAL_LED* m_statusLED;             ///< Status indicator LED
     HAL_Button* m_button;             ///< Mode button
+    HAL_LEDMatrix_8x8* m_ledMatrix;   ///< LED matrix display (Issue #12, optional)
 
     // State
     OperatingMode m_currentMode; ///< Current operating mode
