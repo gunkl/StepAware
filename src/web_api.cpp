@@ -1046,28 +1046,28 @@ String WebAPI::buildDashboardHTML() {
 
     // PIR/IR wiring
     html += "if(sensor.type===0||sensor.type===1){";
-    html += "html+='<div style=\"color:#64748b;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
-    html += "html+='<div style=\"color:#64748b;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "html+='<div style=\"color:#64748b;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.primaryPin+'</span></div>';}";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;font-size:0.85em;\">3.3V</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;font-size:0.85em;\">GND</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;font-size:0.85em;\">GPIO '+sensor.primaryPin+'</span></div>';}";
 
     // Ultrasonic wiring
     html += "else if(sensor.type===2){";
-    html += "html+='<div style=\"color:#64748b;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">5V</span></div>';";
-    html += "html+='<div style=\"color:#64748b;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "html+='<div style=\"color:#64748b;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.primaryPin+'</span></div>';";
-    html += "html+='<div style=\"color:#64748b;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;font-size:0.85em;\">5V</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;font-size:0.85em;\">GND</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;font-size:0.85em;\">GPIO '+sensor.primaryPin+'</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;font-size:0.85em;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
 
     html += "html+='</div></div>';";
 
     // Configuration column
     html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
     html += "if(sensor.type===0){";
-    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Warmup: <span style=\"color:#1e293b;\">'+(sensor.warmupMs/1000)+'s</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Debounce: <span style=\"color:#1e293b;\">'+sensor.debounceMs+'ms</span></div>';}";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Warmup: <span style=\"color:#1e293b;font-size:0.85em;\">'+(sensor.warmupMs/1000)+'s</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Debounce: <span style=\"color:#1e293b;font-size:0.85em;\">'+sensor.debounceMs+'ms</span></div>';}";
     html += "else if(sensor.type===2){";
-    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Range: <span style=\"color:#1e293b;\">'+sensor.detectionThreshold+'mm</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Direction: <span style=\"color:#1e293b;\">'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Samples: <span style=\"color:#1e293b;\">'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Range: <span style=\"color:#1e293b;font-size:0.85em;\">'+sensor.detectionThreshold+'mm</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Direction: <span style=\"color:#1e293b;font-size:0.85em;\">'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;color:#64748b;\">Samples: <span style=\"color:#1e293b;font-size:0.85em;\">'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}";
     html += "html+='</div>';";
 
     html += "html+='</div>';";  // Close grid
@@ -1181,25 +1181,23 @@ String WebAPI::buildDashboardHTML() {
     html += "content+='<span style=\"font-weight:600;\">Slot '+slotIdx+': '+display.name+'</span>';";
     html += "content+='</div>';";
     html += "content+='<div style=\"display:flex;gap:8px;\">';";
-    html += "const toggleBtn=display.enabled?'Disable':'Enable';";
-    html += "const toggleColor=display.enabled?'#ef4444':'#10b981';";
-    html += "content+='<button class=\"btn\" style=\"background:'+toggleColor+';color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"toggleDisplay('+slotIdx+')\">'+toggleBtn+'</button>';";
-    html += "content+='<button class=\"btn\" style=\"background:#f59e0b;color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"editDisplay('+slotIdx+')\">Edit</button>';";
-    html += "content+='<button class=\"btn\" style=\"background:#ef4444;color:white;padding:6px 12px;font-size:0.85em;\" onclick=\"removeDisplay('+slotIdx+')\">Remove</button>';";
+    html += "content+='<button class=\"btn btn-sm btn-'+(display.enabled?'warning':'success')+'\" onclick=\"toggleDisplay('+slotIdx+')\">'+(display.enabled?'Disable':'Enable')+'</button>';";
+    html += "content+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editDisplay('+slotIdx+')\">Edit</button>';";
+    html += "content+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeDisplay('+slotIdx+')\">Remove</button>';";
     html += "content+='</div></div>';";
-    html += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:0.875em;\">';";
+    html += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;\">';";
     html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
     html += "content+='<div style=\"font-size:0.85em;line-height:1.6;\">';";
-    html += "content+='<div style=\"color:#64748b;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
-    html += "content+='<div style=\"color:#64748b;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "content+='<div style=\"color:#64748b;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sdaPin+'</span></div>';";
-    html += "content+='<div style=\"color:#64748b;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;\">GPIO '+display.sclPin+'</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;font-size:0.85em;\">3.3V</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix GND → <span style=\"color:#000;font-weight:600;font-size:0.85em;\">GND</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;font-size:0.85em;\">GPIO '+display.sdaPin+'</span></div>';";
+    html += "content+='<div style=\"color:#64748b;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;font-family:monospace;font-size:0.85em;\">GPIO '+display.sclPin+'</span></div>';";
     html += "content+='</div></div>';";
     html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
     html += "content+='<div style=\"font-size:0.85em;line-height:1.6;\">';";
-    html += "content+='<div><span style=\"color:#64748b;\">I2C Address:</span> <span style=\"font-family:monospace;\">0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
-    html += "content+='<div><span style=\"color:#64748b;\">Brightness:</span> '+display.brightness+'/15</div>';";
-    html += "content+='<div><span style=\"color:#64748b;\">Rotation:</span> '+(display.rotation*90)+'°</div>';";
+    html += "content+='<div><span style=\"color:#64748b;font-size:0.85em;\">I2C Address:</span> <span style=\"font-family:monospace;font-size:0.85em;\">0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
+    html += "content+='<div><span style=\"color:#64748b;font-size:0.85em;\">Brightness:</span> <span style=\"font-size:0.85em;\">'+display.brightness+'/15</span></div>';";
+    html += "content+='<div><span style=\"color:#64748b;font-size:0.85em;\">Rotation:</span> <span style=\"font-size:0.85em;\">'+(display.rotation*90)+'°</span></div>';";
     html += "content+='</div></div></div>';";
     html += "card.innerHTML=content;";
     html += "return card;}";
