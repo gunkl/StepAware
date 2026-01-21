@@ -2,6 +2,10 @@
 #include "logger.h"
 #include <Wire.h>
 
+#ifndef MOCK_HARDWARE
+#include <LittleFS.h>
+#endif
+
 // LED state constants for Adafruit_GFX
 #ifndef LED_ON
 #define LED_ON 1
@@ -58,15 +62,21 @@ HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
     , m_animationDuration(0)
     , m_lastFrameTime(0)
     , m_animationFrame(0)
+    , m_customAnimationCount(0)
+    , m_activeCustomAnimation(nullptr)
 #ifndef MOCK_HARDWARE
     , m_matrix(nullptr)
 #endif
 {
     memset(m_currentFrame, 0, sizeof(m_currentFrame));
     memset(m_mockFrame, 0, sizeof(m_mockFrame));
+    memset(m_customAnimations, 0, sizeof(m_customAnimations));
 }
 
 HAL_LEDMatrix_8x8::~HAL_LEDMatrix_8x8() {
+    // Free custom animations
+    clearCustomAnimations();
+
 #ifndef MOCK_HARDWARE
     if (m_matrix) {
         delete m_matrix;
@@ -341,6 +351,9 @@ void HAL_LEDMatrix_8x8::updateAnimation() {
         case ANIM_WIFI_CONNECTED:
             drawBitmap(CHECKMARK);
             break;
+        case ANIM_CUSTOM:
+            animateCustom();
+            break;
         default:
             break;
     }
@@ -445,48 +458,219 @@ void HAL_LEDMatrix_8x8::writeDisplay() {
 }
 
 // ============================================================================
-// Phase 2: Custom Animation Support (Stubs)
+// Phase 2: Custom Animation Support
 // ============================================================================
 
 bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
-    // Phase 2 implementation will:
-    // 1. Open file from SPIFFS/LittleFS
-    // 2. Parse animation definition format:
-    //    name=MyAnimation
-    //    loop=true
-    //    frame=11111111,10000001,...,100  (8 bytes + delay)
-    // 3. Store in m_customAnimations array
-    // 4. Return true on success
+    // Check if we have room for more animations
+    if (m_customAnimationCount >= MAX_CUSTOM_ANIMATIONS) {
+        LOG_ERROR("HAL_LEDMatrix_8x8: Cannot load animation, max limit reached (%d)", MAX_CUSTOM_ANIMATIONS);
+        return false;
+    }
 
-    LOG_WARN("HAL_LEDMatrix_8x8: loadCustomAnimation() not yet implemented (Phase 2)");
-    LOG_INFO("  Requested file: %s", filepath);
+#ifndef MOCK_HARDWARE
+    // Open file from LittleFS
+    File file = LittleFS.open(filepath, "r");
+    if (!file) {
+        LOG_ERROR("HAL_LEDMatrix_8x8: Failed to open animation file: %s", filepath);
+        return false;
+    }
 
-    return false;  // Not implemented yet
+    // Allocate new custom animation
+    HAL_LEDMatrix_8x8::CustomAnimation* anim = new HAL_LEDMatrix_8x8::CustomAnimation();
+    if (!anim) {
+        LOG_ERROR("HAL_LEDMatrix_8x8: Failed to allocate memory for animation");
+        file.close();
+        return false;
+    }
+
+    // Initialize animation
+    memset(anim, 0, sizeof(HAL_LEDMatrix_8x8::CustomAnimation));
+    anim->loop = false;
+    anim->frameCount = 0;
+
+    // Parse file line by line
+    String line;
+    while (file.available()) {
+        line = file.readStringUntil('\n');
+        line.trim();
+
+        // Skip empty lines and comments
+        if (line.length() == 0 || line.startsWith("#")) {
+            continue;
+        }
+
+        // Parse name
+        if (line.startsWith("name=")) {
+            String name = line.substring(5);
+            name.trim();
+            strncpy(anim->name, name.c_str(), sizeof(anim->name) - 1);
+        }
+        // Parse loop
+        else if (line.startsWith("loop=")) {
+            String value = line.substring(5);
+            value.trim();
+            anim->loop = (value == "true" || value == "1");
+        }
+        // Parse frame
+        else if (line.startsWith("frame=")) {
+            if (anim->frameCount >= 16) {
+                LOG_WARN("HAL_LEDMatrix_8x8: Too many frames, max 16");
+                continue;
+            }
+
+            String frameData = line.substring(6);
+            frameData.trim();
+
+            // Parse frame: 8 bytes + delay
+            // Format: 11111111,10000001,10000001,10000001,10000001,10000001,10000001,11111111,100
+            int commaCount = 0;
+            int startIdx = 0;
+            uint8_t byteIdx = 0;
+
+            for (unsigned int i = 0; i <= frameData.length(); i++) {
+                if (i == frameData.length() || frameData.charAt(i) == ',') {
+                    String token = frameData.substring(startIdx, i);
+                    token.trim();
+
+                    if (byteIdx < 8) {
+                        // Parse frame byte (binary string)
+                        anim->frames[anim->frameCount][byteIdx] = (uint8_t)strtol(token.c_str(), NULL, 2);
+                        byteIdx++;
+                    } else {
+                        // Parse delay (last value)
+                        anim->frameDelays[anim->frameCount] = (uint16_t)token.toInt();
+                    }
+
+                    startIdx = i + 1;
+                }
+            }
+
+            anim->frameCount++;
+        }
+    }
+
+    file.close();
+
+    // Validate animation
+    if (anim->frameCount == 0 || strlen(anim->name) == 0) {
+        LOG_ERROR("HAL_LEDMatrix_8x8: Invalid animation file (no frames or name)");
+        delete anim;
+        return false;
+    }
+
+    // Store animation
+    m_customAnimations[m_customAnimationCount++] = anim;
+
+    LOG_INFO("HAL_LEDMatrix_8x8: Loaded custom animation '%s' (%d frames)",
+             anim->name, anim->frameCount);
+
+    return true;
+#else
+    // Mock mode: simulate successful load
+    LOG_INFO("HAL_LEDMatrix_8x8: MOCK - Would load animation from: %s", filepath);
+
+    // Create mock animation
+    HAL_LEDMatrix_8x8::CustomAnimation* anim = new HAL_LEDMatrix_8x8::CustomAnimation();
+    if (!anim) {
+        return false;
+    }
+
+    memset(anim, 0, sizeof(HAL_LEDMatrix_8x8::CustomAnimation));
+    strncpy(anim->name, "MockAnimation", sizeof(anim->name) - 1);
+    anim->loop = true;
+    anim->frameCount = 2;
+
+    // Simple test pattern
+    anim->frames[0][0] = 0b11111111;
+    anim->frameDelays[0] = 100;
+    anim->frames[1][0] = 0b00000000;
+    anim->frameDelays[1] = 100;
+
+    m_customAnimations[m_customAnimationCount++] = anim;
+
+    return true;
+#endif
 }
 
 bool HAL_LEDMatrix_8x8::playCustomAnimation(const char* name, uint32_t duration_ms) {
-    // Phase 2 implementation will:
-    // 1. Find animation by name in m_customAnimations
-    // 2. Set current pattern to ANIM_CUSTOM
-    // 3. Start animation with specified duration
-    // 4. updateAnimation() will handle frame progression
+    // Find animation by name
+    HAL_LEDMatrix_8x8::CustomAnimation* anim = findCustomAnimation(name);
+    if (!anim) {
+        LOG_ERROR("HAL_LEDMatrix_8x8: Custom animation not found: %s", name);
+        return false;
+    }
 
-    LOG_WARN("HAL_LEDMatrix_8x8: playCustomAnimation() not yet implemented (Phase 2)");
-    LOG_INFO("  Requested animation: %s", name);
-    LOG_INFO("  Duration: %u ms", duration_ms);
+    // Set as active custom animation
+    m_activeCustomAnimation = anim;
 
-    return false;  // Not implemented yet
+    // Start animation
+    m_currentPattern = ANIM_CUSTOM;
+    m_animationStartTime = millis();
+    m_animationDuration = duration_ms;
+    m_animationFrame = 0;
+    m_lastFrameTime = millis();
+
+    LOG_INFO("HAL_LEDMatrix_8x8: Playing custom animation '%s' (duration: %u ms)", name, duration_ms);
+
+    return true;
 }
 
 uint8_t HAL_LEDMatrix_8x8::getCustomAnimationCount() const {
-    // Phase 2 implementation will return count of loaded animations
-    return 0;  // No custom animations loaded yet
+    return m_customAnimationCount;
 }
 
 void HAL_LEDMatrix_8x8::clearCustomAnimations() {
-    // Phase 2 implementation will:
-    // 1. Free memory used by m_customAnimations
-    // 2. Reset custom animation count to 0
+    // Free all custom animations
+    for (uint8_t i = 0; i < m_customAnimationCount; i++) {
+        if (m_customAnimations[i]) {
+            delete m_customAnimations[i];
+            m_customAnimations[i] = nullptr;
+        }
+    }
 
-    LOG_INFO("HAL_LEDMatrix_8x8: clearCustomAnimations() called (no-op in Phase 1)");
+    m_customAnimationCount = 0;
+    m_activeCustomAnimation = nullptr;
+
+    LOG_INFO("HAL_LEDMatrix_8x8: Cleared all custom animations");
+}
+
+HAL_LEDMatrix_8x8::CustomAnimation* HAL_LEDMatrix_8x8::findCustomAnimation(const char* name) {
+    for (uint8_t i = 0; i < m_customAnimationCount; i++) {
+        if (m_customAnimations[i] && strcmp(m_customAnimations[i]->name, name) == 0) {
+            return m_customAnimations[i];
+        }
+    }
+    return nullptr;
+}
+
+void HAL_LEDMatrix_8x8::animateCustom() {
+    if (!m_activeCustomAnimation || m_activeCustomAnimation->frameCount == 0) {
+        return;
+    }
+
+    uint32_t now = millis();
+    uint8_t currentFrame = m_animationFrame % m_activeCustomAnimation->frameCount;
+    uint16_t frameDelay = m_activeCustomAnimation->frameDelays[currentFrame];
+
+    // Check if it's time to advance to next frame
+    if (now - m_lastFrameTime >= frameDelay) {
+        m_lastFrameTime = now;
+
+        // Draw current frame
+        drawFrame(m_activeCustomAnimation->frames[currentFrame]);
+
+        // Advance to next frame
+        m_animationFrame++;
+
+        // Handle looping
+        if (m_animationFrame >= m_activeCustomAnimation->frameCount) {
+            if (m_activeCustomAnimation->loop && m_animationDuration == 0) {
+                // Loop indefinitely
+                m_animationFrame = 0;
+            } else {
+                // Animation complete (will be stopped by duration check in update())
+            }
+        }
+    }
 }
