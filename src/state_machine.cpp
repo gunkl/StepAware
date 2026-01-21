@@ -9,6 +9,7 @@ StateMachine::StateMachine(HAL_MotionSensor* motionSensor,
     , m_hazardLED(hazardLED)
     , m_statusLED(statusLED)
     , m_button(button)
+    , m_ledMatrix(nullptr)
     , m_currentMode(OFF)
     , m_previousMode(OFF)
     , m_initialized(false)
@@ -225,10 +226,14 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
     m_warningStartTime = millis();
     m_warningDuration = duration_ms;
 
-    // Start hazard LED pattern
-    m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
-
-    LOG_INFO("StateMachine: Warning triggered (%u ms)", duration_ms);
+    // Use LED matrix if available, otherwise fall back to hazard LED
+    if (m_ledMatrix && m_ledMatrix->isReady()) {
+        m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, duration_ms);
+        LOG_INFO("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
+    } else {
+        m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
+        LOG_INFO("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
+    }
 }
 
 void StateMachine::stopWarning() {
@@ -237,6 +242,11 @@ void StateMachine::stopWarning() {
     }
 
     m_warningActive = false;
+
+    // Stop both LED matrix and hazard LED
+    if (m_ledMatrix) {
+        m_ledMatrix->stopAnimation();
+    }
     m_hazardLED->stopPattern();
 
     LOG_INFO("StateMachine: Warning stopped");
@@ -375,5 +385,15 @@ void StateMachine::updateWarning() {
         if (millis() - m_warningStartTime >= m_warningDuration) {
             handleEvent(EVENT_TIMER_EXPIRED);
         }
+    }
+}
+
+void StateMachine::setLEDMatrix(HAL_LEDMatrix_8x8* matrix) {
+    m_ledMatrix = matrix;
+
+    if (matrix) {
+        LOG_INFO("StateMachine: LED matrix display enabled");
+    } else {
+        LOG_INFO("StateMachine: LED matrix display disabled");
     }
 }

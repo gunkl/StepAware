@@ -18,6 +18,7 @@
 #include "sensor_factory.h"
 #include "hal_led.h"
 #include "hal_button.h"
+#include "hal_ledmatrix_8x8.h"
 #include "config_manager.h"
 #include "serial_config.h"
 #include "wifi_manager.h"
@@ -30,6 +31,8 @@
 // Motion sensor (created via factory for runtime flexibility)
 HAL_MotionSensor* motionSensor = nullptr;
 
+// Display components (Issue #12)
+HAL_LEDMatrix_8x8* ledMatrix = nullptr;  // 8x8 LED matrix display
 HAL_LED hazardLED(PIN_HAZARD_LED, LED_PWM_CHANNEL, MOCK_HARDWARE);
 HAL_LED statusLED(PIN_STATUS_LED, LED_PWM_CHANNEL + 1, MOCK_HARDWARE);
 HAL_Button modeButton(PIN_BUTTON, BUTTON_DEBOUNCE_MS, 1000, MOCK_HARDWARE);
@@ -359,6 +362,66 @@ void processSerialCommand() {
 }
 
 // ============================================================================
+// Display Abstraction Helpers (Issue #12)
+// ============================================================================
+
+/**
+ * @brief Trigger warning display on configured output device
+ *
+ * This function abstracts the display hardware - uses LED matrix if available,
+ * otherwise falls back to hazard LED.
+ *
+ * @param duration_ms Warning duration in milliseconds
+ */
+void triggerWarningDisplay(uint32_t duration_ms) {
+    if (ledMatrix && ledMatrix->isReady()) {
+        // Use LED matrix motion alert animation
+        ledMatrix->startAnimation(
+            HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT,
+            duration_ms
+        );
+        LOG_INFO("Triggered matrix motion alert (duration: %u ms)", duration_ms);
+    } else {
+        // Fall back to hazard LED warning pattern
+        hazardLED.startPattern(
+            HAL_LED::PATTERN_BLINK_WARNING,
+            duration_ms
+        );
+        LOG_INFO("Triggered LED warning (duration: %u ms)", duration_ms);
+    }
+}
+
+/**
+ * @brief Show battery status on display
+ *
+ * @param percentage Battery percentage (0-100)
+ */
+void showBatteryStatus(uint8_t percentage) {
+    if (ledMatrix && ledMatrix->isReady() && percentage < 30) {
+        // Show low battery animation on matrix
+        ledMatrix->startAnimation(
+            HAL_LEDMatrix_8x8::ANIM_BATTERY_LOW,
+            2000
+        );
+        LOG_INFO("Showing battery low on matrix (%u%%)", percentage);
+    } else if (percentage < 30) {
+        // Blink hazard LED slowly for low battery
+        hazardLED.startPattern(HAL_LED::PATTERN_BLINK_SLOW, 2000);
+        LOG_INFO("Showing battery low on LED (%u%%)", percentage);
+    }
+}
+
+/**
+ * @brief Stop all display animations
+ */
+void stopDisplayAnimations() {
+    if (ledMatrix) {
+        ledMatrix->stopAnimation();
+    }
+    hazardLED.stopPattern();
+}
+
+// ============================================================================
 // Boot-Time Reset Functions
 // ============================================================================
 
@@ -557,6 +620,53 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Initialize LED matrix display (Issue #12)
+    const ConfigManager::DisplaySlotConfig& displayCfg = cfg.displays[0];
+
+    if (displayCfg.active && displayCfg.enabled &&
+        displayCfg.type == DISPLAY_TYPE_MATRIX_8X8) {
+
+        Serial.println("[Setup] Initializing 8x8 LED Matrix...");
+        Serial.printf("[Setup]   I2C Address: 0x%02X\n", displayCfg.i2cAddress);
+        Serial.printf("[Setup]   SDA Pin: GPIO %d\n", displayCfg.sdaPin);
+        Serial.printf("[Setup]   SCL Pin: GPIO %d\n", displayCfg.sclPin);
+        Serial.printf("[Setup]   Brightness: %d/15\n", displayCfg.brightness);
+        Serial.printf("[Setup]   Rotation: %d°\n", displayCfg.rotation * 90);
+
+        // Create LED matrix instance
+        ledMatrix = new HAL_LEDMatrix_8x8(
+            displayCfg.i2cAddress,
+            displayCfg.sdaPin,
+            displayCfg.sclPin,
+            MOCK_HARDWARE
+        );
+
+        // Initialize LED matrix
+        if (ledMatrix && ledMatrix->begin()) {
+            // Apply configuration settings
+            ledMatrix->setBrightness(displayCfg.brightness);
+            ledMatrix->setRotation(displayCfg.rotation);
+
+            // Show boot animation
+            ledMatrix->startAnimation(
+                HAL_LEDMatrix_8x8::ANIM_BOOT_STATUS,
+                MATRIX_BOOT_DISPLAY_MS
+            );
+
+            Serial.println("[Setup] ✓ LED Matrix initialized successfully");
+        } else {
+            // Matrix initialization failed - will fall back to hazard LED only
+            Serial.println("[Setup] WARNING: LED Matrix initialization failed");
+            Serial.println("[Setup]          Using hazard LED for warnings");
+            if (ledMatrix) {
+                delete ledMatrix;
+                ledMatrix = nullptr;
+            }
+        }
+    } else {
+        Serial.println("[Setup] LED Matrix not configured, using hazard LED only");
+    }
+
     // Check if button is held during boot for reset operations
     modeButton.update();  // Read current button state
     if (modeButton.isPressed()) {
@@ -569,6 +679,12 @@ void setup() {
     if (!stateMachine) {
         Serial.println("[Setup] ERROR: Failed to allocate state machine");
         while (1) { delay(1000); }
+    }
+
+    // Assign LED matrix to state machine (Issue #12)
+    if (ledMatrix && ledMatrix->isReady()) {
+        stateMachine->setLEDMatrix(ledMatrix);
+        Serial.println("[Setup] State machine will use LED matrix for warnings");
     }
 
     // Get default mode from config
@@ -638,6 +754,11 @@ void setup() {
 void loop() {
     // Update motion sensor (required for sensors that need polling)
     motionSensor->update();
+
+    // Update LED matrix (handles animations)
+    if (ledMatrix) {
+        ledMatrix->update();
+    }
 
     // Update state machine (handles all hardware and logic)
     stateMachine->update();
