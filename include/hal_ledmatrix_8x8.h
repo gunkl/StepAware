@@ -195,50 +195,49 @@ public:
     };
 
     /**
-     * @brief Load custom animation from file (Phase 2 - STUB)
+     * @brief Load custom animation from file
      *
-     * Loads a custom animation definition from a text file.
+     * Loads a custom animation definition from a text file stored on LittleFS.
      * File format:
      *   name=MyAnimation
      *   loop=true
      *   frame=11111111,10000001,10000001,10000001,10000001,10000001,10000001,11111111,100
      *   frame=...
      *
-     * @param filepath Path to animation definition file
-     * @return true if animation loaded successfully
+     * Each frame consists of 8 binary bytes (one per row) plus a delay in milliseconds.
+     * Maximum 16 frames per animation. Maximum 8 custom animations can be loaded.
      *
-     * @note Phase 2 implementation - currently a stub
+     * @param filepath Path to animation definition file (e.g., "/animations/heart.txt")
+     * @return true if animation loaded successfully, false on error
      */
     bool loadCustomAnimation(const char* filepath);
 
     /**
-     * @brief Play custom animation by name (Phase 2 - STUB)
+     * @brief Play custom animation by name
      *
-     * Plays a previously loaded custom animation.
+     * Plays a previously loaded custom animation. The animation must have been
+     * loaded using loadCustomAnimation() first.
      *
-     * @param name Animation name
-     * @param duration_ms Animation duration (0 = loop indefinitely)
-     * @return true if animation started successfully
-     *
-     * @note Phase 2 implementation - currently a stub
+     * @param name Animation name (matches name= field in animation file)
+     * @param duration_ms Animation duration (0 = loop indefinitely if loop=true)
+     * @return true if animation started successfully, false if animation not found
      */
     bool playCustomAnimation(const char* name, uint32_t duration_ms = 0);
 
     /**
-     * @brief Get number of loaded custom animations (Phase 2 - STUB)
+     * @brief Get number of loaded custom animations
      *
-     * @return uint8_t Number of custom animations loaded
+     * Returns the count of currently loaded custom animations.
      *
-     * @note Phase 2 implementation - currently a stub
+     * @return uint8_t Number of custom animations loaded (0-8)
      */
     uint8_t getCustomAnimationCount() const;
 
     /**
-     * @brief Clear all custom animations (Phase 2 - STUB)
+     * @brief Clear all custom animations
      *
-     * Frees memory used by custom animations.
-     *
-     * @note Phase 2 implementation - currently a stub
+     * Frees memory used by all loaded custom animations. Use this to
+     * clear animations before loading a different set.
      */
     void clearCustomAnimations();
 
@@ -264,6 +263,12 @@ private:
     uint32_t m_animationDuration;
     uint32_t m_lastFrameTime;
     uint8_t m_animationFrame;
+
+    // Custom animations (Phase 2)
+    static const uint8_t MAX_CUSTOM_ANIMATIONS = 8;
+    CustomAnimation* m_customAnimations[MAX_CUSTOM_ANIMATIONS];
+    uint8_t m_customAnimationCount;
+    CustomAnimation* m_activeCustomAnimation;
 
     // Mock mode
     uint8_t m_mockFrame[8];
@@ -308,6 +313,19 @@ private:
      * @brief Write current frame to hardware
      */
     void writeDisplay();
+
+    /**
+     * @brief Animate custom animation (Phase 2)
+     */
+    void animateCustom();
+
+    /**
+     * @brief Find custom animation by name (Phase 2)
+     *
+     * @param name Animation name
+     * @return CustomAnimation* Pointer to animation or nullptr if not found
+     */
+    CustomAnimation* findCustomAnimation(const char* name);
 };
 
 #endif // STEPAWARE_HAL_LEDMATRIX_8X8_H
