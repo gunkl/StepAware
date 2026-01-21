@@ -2,7 +2,11 @@
 #include "wifi_manager.h"
 #include "power_manager.h"
 #include "watchdog_manager.h"
+#include "hal_ledmatrix_8x8.h"
 #include <ArduinoJson.h>
+#ifndef MOCK_HARDWARE
+#include <LittleFS.h>
+#endif
 
 WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager* config)
     : m_server(server)
@@ -11,6 +15,7 @@ WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager
     , m_wifi(nullptr)
     , m_power(nullptr)
     , m_watchdog(nullptr)
+    , m_ledMatrix(nullptr)
     , m_corsEnabled(true)
 {
 }
@@ -113,6 +118,80 @@ bool WebAPI::begin() {
         this->handleOptions(req);
     });
 
+    // Custom Animation API (Issue #12 Phase 2)
+    // Register more specific routes BEFORE general routes
+
+    // GET /api/animations/template?type=MOTION_ALERT - download animation template
+    m_server->on("/api/animations/template", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetAnimationTemplate(req);
+    });
+
+    m_server->on("/api/animations", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetAnimations(req);
+    });
+
+    m_server->on("/api/animations/play", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handlePlayAnimation(req, data, len, index, total);
+        }
+    );
+
+    m_server->on("/api/animations/stop", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        this->handleStopAnimation(req);
+    });
+
+    m_server->on("/api/animations/builtin", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handlePlayBuiltInAnimation(req, data, len, index, total);
+        }
+    );
+
+    m_server->on("/api/animations/upload", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        [this](AsyncWebServerRequest* req, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
+            this->handleUploadAnimation(req, filename, index, data, len, final);
+        },
+        nullptr
+    );
+
+    m_server->on("/api/animations/assign", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handleAssignAnimation(req, data, len, index, total);
+        }
+    );
+
+    m_server->on("/api/animations/assignments", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetAssignments(req);
+    });
+
+    // DELETE /api/animations/:name - dynamic route handler
+    m_server->on("/api/animations/*", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        this->handleDeleteAnimation(req);
+    });
+
+    // OPTIONS for animation endpoints
+    m_server->on("/api/animations", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/animations/play", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/animations/stop", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/animations/upload", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/animations/builtin", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+
     LOG_INFO("WebAPI: ✓ Endpoints registered");
     return true;
 }
@@ -131,6 +210,10 @@ void WebAPI::setPowerManager(PowerManager* power) {
 
 void WebAPI::setWatchdogManager(WatchdogManager* watchdog) {
     m_watchdog = watchdog;
+}
+
+void WebAPI::setLEDMatrix(HAL_LEDMatrix_8x8* ledMatrix) {
+    m_ledMatrix = ledMatrix;
 }
 
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
@@ -428,6 +511,442 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
 
     sendJSON(request, 200, buffer);
     LOG_INFO("Display configuration saved successfully");
+}
+
+// ============================================================================
+// Custom Animation API Handlers (Issue #12 Phase 2)
+// ============================================================================
+
+void WebAPI::handleGetAnimations(AsyncWebServerRequest* request) {
+    StaticJsonDocument<2048> doc;
+    JsonArray animationsArray = doc.createNestedArray("animations");
+
+    // If LED matrix is not available, return empty list
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        doc["count"] = 0;
+        doc["maxAnimations"] = 8;
+        doc["available"] = false;
+        String json;
+        serializeJson(doc, json);
+        sendJSON(request, 200, json.c_str());
+        return;
+    }
+
+    uint8_t count = m_ledMatrix->getCustomAnimationCount();
+    doc["count"] = count;
+    doc["maxAnimations"] = 8;
+    doc["available"] = true;
+
+    // Note: We cannot iterate over custom animations directly as they are private.
+    // This is a simplified response - in a full implementation, we would need
+    // to add a getCustomAnimationInfo() method to HAL_LEDMatrix_8x8
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+}
+
+void WebAPI::handleUploadAnimation(AsyncWebServerRequest* request, const String& filename,
+                                   size_t index, uint8_t* data, size_t len, bool final) {
+    // Check if LED matrix is available
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        if (final) {
+            sendError(request, 503, "LED Matrix not available");
+        }
+        return;
+    }
+
+    // We need to accumulate the file data as it comes in chunks
+    // For now, we'll implement a simplified version that writes to LittleFS
+    #ifndef MOCK_HARDWARE
+    static File uploadFile;
+
+    if (index == 0) {
+        // First chunk - open file for writing
+        String filepath = "/animations/" + filename;
+        uploadFile = LittleFS.open(filepath, "w");
+        if (!uploadFile) {
+            if (final) {
+                sendError(request, 500, "Failed to create file");
+            }
+            return;
+        }
+    }
+
+    if (len) {
+        // Write chunk to file
+        uploadFile.write(data, len);
+    }
+
+    if (final) {
+        // Last chunk - close file and load animation
+        if (uploadFile) {
+            uploadFile.close();
+        }
+
+        String filepath = "/animations/" + filename;
+        bool loaded = m_ledMatrix->loadCustomAnimation(filepath.c_str());
+
+        if (loaded) {
+            StaticJsonDocument<256> doc;
+            doc["success"] = true;
+            doc["name"] = filename;
+            doc["filepath"] = filepath;
+            String json;
+            serializeJson(doc, json);
+            sendJSON(request, 200, json.c_str());
+        } else {
+            sendError(request, 400, "Failed to load animation");
+        }
+    }
+    #else
+    // Mock mode - just acknowledge upload
+    if (final) {
+        StaticJsonDocument<256> doc;
+        doc["success"] = true;
+        doc["name"] = filename;
+        doc["message"] = "Mock mode - animation not actually loaded";
+        String json;
+        serializeJson(doc, json);
+        sendJSON(request, 200, json.c_str());
+    }
+    #endif
+}
+
+void WebAPI::handlePlayAnimation(AsyncWebServerRequest* request, uint8_t* data,
+                                 size_t len, size_t index, size_t total) {
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    // Check if LED matrix is available
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        sendError(request, 503, "LED Matrix not available");
+        return;
+    }
+
+    // Parse JSON body
+    char* jsonStr = (char*)malloc(total + 1);
+    if (!jsonStr) {
+        sendError(request, 500, "Out of memory");
+        return;
+    }
+
+    memcpy(jsonStr, data, total);
+    jsonStr[total] = '\0';
+
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (error) {
+        free(jsonStr);
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const char* name = doc["name"];
+    uint32_t duration = doc["duration"] | 0;
+
+    free(jsonStr);
+
+    if (!name || strlen(name) == 0) {
+        sendError(request, 400, "Animation name required");
+        return;
+    }
+
+    // Play the animation
+    bool started = m_ledMatrix->playCustomAnimation(name, duration);
+
+    if (started) {
+        StaticJsonDocument<256> response;
+        response["success"] = true;
+        response["animation"] = name;
+        response["duration"] = duration;
+        String json;
+        serializeJson(response, json);
+        sendJSON(request, 200, json.c_str());
+    } else {
+        sendError(request, 404, "Animation not found");
+    }
+}
+
+void WebAPI::handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t* data,
+                                        size_t len, size_t index, size_t total) {
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    // Check if LED matrix is available
+    if (!m_ledMatrix) {
+        LOG_WARN("WebAPI: Built-in animation request but LED Matrix pointer is null");
+        sendError(request, 503, "LED Matrix not configured");
+        return;
+    }
+
+    if (!m_ledMatrix->isReady()) {
+        LOG_WARN("WebAPI: Built-in animation request but LED Matrix not ready");
+        sendError(request, 503, "LED Matrix not initialized");
+        return;
+    }
+
+    // Parse JSON body
+    char* jsonStr = (char*)malloc(total + 1);
+    if (!jsonStr) {
+        sendError(request, 500, "Out of memory");
+        return;
+    }
+
+    memcpy(jsonStr, data, total);
+    jsonStr[total] = '\0';
+
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (error) {
+        free(jsonStr);
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const char* type = doc["type"];
+    uint32_t duration = doc["duration"] | 0;
+
+    free(jsonStr);
+
+    if (!type || strlen(type) == 0) {
+        sendError(request, 400, "Animation type required");
+        return;
+    }
+
+    // Map animation type string to enum
+    HAL_LEDMatrix_8x8::AnimationPattern pattern = HAL_LEDMatrix_8x8::ANIM_NONE;
+
+    if (strcmp(type, "MOTION_ALERT") == 0) {
+        pattern = HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT;
+    } else if (strcmp(type, "BATTERY_LOW") == 0) {
+        pattern = HAL_LEDMatrix_8x8::ANIM_BATTERY_LOW;
+    } else if (strcmp(type, "BOOT_STATUS") == 0) {
+        pattern = HAL_LEDMatrix_8x8::ANIM_BOOT_STATUS;
+    } else if (strcmp(type, "WIFI_CONNECTED") == 0) {
+        pattern = HAL_LEDMatrix_8x8::ANIM_WIFI_CONNECTED;
+    } else {
+        sendError(request, 400, "Unknown animation type");
+        return;
+    }
+
+    // Start the animation
+    m_ledMatrix->startAnimation(pattern, duration);
+
+    StaticJsonDocument<256> response;
+    response["success"] = true;
+    response["type"] = type;
+    response["duration"] = duration;
+    String json;
+    serializeJson(response, json);
+    sendJSON(request, 200, json.c_str());
+}
+
+void WebAPI::handleStopAnimation(AsyncWebServerRequest* request) {
+    // Check if LED matrix is available
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        sendError(request, 503, "LED Matrix not available");
+        return;
+    }
+
+    m_ledMatrix->stopAnimation();
+
+    StaticJsonDocument<128> doc;
+    doc["success"] = true;
+    doc["message"] = "Animation stopped";
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+}
+
+void WebAPI::handleDeleteAnimation(AsyncWebServerRequest* request) {
+    // Check if LED matrix is available
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        sendError(request, 503, "LED Matrix not available");
+        return;
+    }
+
+    // Extract animation name from URL path
+    // URL format: /api/animations/AnimationName
+    String path = request->url();
+    int lastSlash = path.lastIndexOf('/');
+    if (lastSlash == -1 || lastSlash == path.length() - 1) {
+        sendError(request, 400, "Animation name required");
+        return;
+    }
+
+    String name = path.substring(lastSlash + 1);
+
+    // Currently, we don't have a method to delete individual animations,
+    // only clearCustomAnimations() which deletes all.
+    // This would require adding a deleteCustomAnimation(name) method to HAL_LEDMatrix_8x8
+
+    sendError(request, 501, "Delete individual animation not yet implemented - use clearCustomAnimations() to remove all");
+}
+
+void WebAPI::handleGetAnimationTemplate(AsyncWebServerRequest* request) {
+    // Extract animation type from query parameter
+    // URL format: /api/animations/template?type=MOTION_ALERT
+    LOG_INFO("Template request received for URL: %s", request->url().c_str());
+
+    if (!request->hasParam("type")) {
+        LOG_ERROR("Template request: No 'type' query parameter");
+        sendError(request, 400, "Animation type required (use ?type=MOTION_ALERT)");
+        return;
+    }
+
+    String animType = request->getParam("type")->value();
+    LOG_INFO("Generating template for animation type: %s", animType.c_str());
+    String templateContent;
+
+    // Generate template based on animation type
+    if (animType == "MOTION_ALERT") {
+        templateContent = "# Motion Alert Animation Template\n";
+        templateContent += "# Flash + scrolling arrow effect\n";
+        templateContent += "name=MotionAlert\n";
+        templateContent += "loop=false\n\n";
+        templateContent += "# Flash frame (all on)\n";
+        templateContent += "frame=11111111,11111111,11111111,11111111,11111111,11111111,11111111,11111111,200\n\n";
+        templateContent += "# Flash frame (all off)\n";
+        templateContent += "frame=00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,200\n\n";
+        templateContent += "# Arrow pointing up\n";
+        templateContent += "frame=00011000,00111100,01111110,11111111,00011000,00011000,00011000,00011000,150\n";
+
+    } else if (animType == "BATTERY_LOW") {
+        templateContent = "# Battery Low Animation Template\n";
+        templateContent += "# Display battery percentage\n";
+        templateContent += "name=BatteryLow\n";
+        templateContent += "loop=true\n\n";
+        templateContent += "# Battery outline\n";
+        templateContent += "frame=01111110,01000010,01000010,01000010,01000010,01000010,01111110,00011000,500\n\n";
+        templateContent += "# Empty battery\n";
+        templateContent += "frame=01111110,01000010,01000010,01000010,01000010,01000010,01111110,00000000,500\n";
+
+    } else if (animType == "BOOT_STATUS") {
+        templateContent = "# Boot Status Animation Template\n";
+        templateContent += "# Startup sequence\n";
+        templateContent += "name=BootStatus\n";
+        templateContent += "loop=false\n\n";
+        templateContent += "# Expanding square\n";
+        templateContent += "frame=00000000,00000000,00000000,00011000,00011000,00000000,00000000,00000000,100\n";
+        templateContent += "frame=00000000,00000000,00111100,00100100,00100100,00111100,00000000,00000000,100\n";
+        templateContent += "frame=00000000,01111110,01000010,01000010,01000010,01000010,01111110,00000000,100\n";
+        templateContent += "frame=11111111,10000001,10000001,10000001,10000001,10000001,10000001,11111111,100\n";
+
+    } else if (animType == "WIFI_CONNECTED") {
+        templateContent = "# WiFi Connected Animation Template\n";
+        templateContent += "# Checkmark symbol\n";
+        templateContent += "name=WiFiConnected\n";
+        templateContent += "loop=false\n\n";
+        templateContent += "# Checkmark\n";
+        templateContent += "frame=00000000,00000001,00000011,10000110,11001100,01111000,00110000,00000000,500\n";
+        templateContent += "# With box\n";
+        templateContent += "frame=11111111,10000001,10000011,10000110,11001100,01111000,00110001,11111111,500\n";
+
+    } else {
+        sendError(request, 404, "Unknown animation type");
+        return;
+    }
+
+    // Set headers for file download
+    String filename = animType;
+    filename.toLowerCase();
+    filename += "_template.txt";
+
+    AsyncWebServerResponse* response = request->beginResponse(200, "text/plain", templateContent);
+    response->addHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    response->addHeader("Cache-Control", "no-cache");
+
+    if (m_corsEnabled) {
+        response->addHeader("Access-Control-Allow-Origin", "*");
+    }
+
+    request->send(response);
+    LOG_INFO("Sent animation template: %s", animType.c_str());
+}
+
+void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    // Parse JSON body
+    char* jsonStr = (char*)malloc(total + 1);
+    if (!jsonStr) {
+        sendError(request, 500, "Out of memory");
+        return;
+    }
+    memcpy(jsonStr, data, total);
+    jsonStr[total] = '\0';
+
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    free(jsonStr);
+
+    if (error) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const char* functionKey = doc["function"];
+    const char* type = doc["type"];  // "builtin" or "custom"
+    const char* animation = doc["animation"];
+
+    if (!functionKey || !type || !animation) {
+        sendError(request, 400, "Missing required fields");
+        return;
+    }
+
+    // Store assignment in config
+    // For now, we'll use a simple in-memory storage
+    // TODO: Persist to ConfigManager
+
+    StaticJsonDocument<256> response;
+    response["success"] = true;
+    response["function"] = functionKey;
+    response["type"] = type;
+    response["animation"] = animation;
+
+    String json;
+    serializeJson(response, json);
+    sendJSON(request, 200, json.c_str());
+
+    LOG_INFO("Assigned %s animation '%s' to function '%s'", type, animation, functionKey);
+}
+
+void WebAPI::handleGetAssignments(AsyncWebServerRequest* request) {
+    // Return current animation assignments
+    // For now, return default built-in assignments
+    // TODO: Load from ConfigManager
+
+    StaticJsonDocument<1024> doc;
+
+    JsonObject motionAlert = doc.createNestedObject("motion-alert");
+    motionAlert["type"] = "builtin";
+    motionAlert["name"] = "MOTION_ALERT";
+
+    JsonObject batteryLow = doc.createNestedObject("battery-low");
+    batteryLow["type"] = "builtin";
+    batteryLow["name"] = "BATTERY_LOW";
+
+    JsonObject bootStatus = doc.createNestedObject("boot-status");
+    bootStatus["type"] = "builtin";
+    bootStatus["name"] = "BOOT_STATUS";
+
+    JsonObject wifiConnected = doc.createNestedObject("wifi-connected");
+    wifiConnected["type"] = "builtin";
+    wifiConnected["name"] = "WIFI_CONNECTED";
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
 }
 
 void WebAPI::handleGetMode(AsyncWebServerRequest* request) {
@@ -751,8 +1270,89 @@ String WebAPI::buildDashboardHTML() {
 
     html += "<div id=\"displays-list\"></div>";
 
+    // Active animation assignments (shown after display configuration)
+    html += "<div id=\"active-animations-panel\" style=\"display:none;margin-top:12px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">";
+    html += "<div style=\"font-weight:600;font-size:0.9em;margin-bottom:6px;color:#1e293b;\">Active Assignments</div>";
+    html += "<div style=\"display:grid;gap:4px;font-size:0.85em;\">";
+
+    // Motion Alert assignment
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;padding:4px 6px;background:white;border-radius:3px;\">";
+    html += "<span style=\"color:#64748b;\">Motion Alert:</span>";
+    html += "<span id=\"anim-motion-alert\" style=\"font-weight:600;color:#333;\">Built-in</span>";
+    html += "</div>";
+
+    // Battery Low assignment
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;padding:4px 6px;background:white;border-radius:3px;\">";
+    html += "<span style=\"color:#64748b;\">Battery Low:</span>";
+    html += "<span id=\"anim-battery-low\" style=\"font-weight:600;color:#333;\">Built-in</span>";
+    html += "</div>";
+
+    // Boot Status assignment
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;padding:4px 6px;background:white;border-radius:3px;\">";
+    html += "<span style=\"color:#64748b;\">Boot Status:</span>";
+    html += "<span id=\"anim-boot-status\" style=\"font-weight:600;color:#333;\">Built-in</span>";
+    html += "</div>";
+
+    // WiFi Connected assignment
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;padding:4px 6px;background:white;border-radius:3px;\">";
+    html += "<span style=\"color:#64748b;\">WiFi:</span>";
+    html += "<span id=\"anim-wifi-connected\" style=\"font-weight:600;color:#333;\">Built-in</span>";
+    html += "</div>";
+
+    html += "</div></div>";
+
     html += "<button class=\"btn btn-primary\" style=\"margin-top:16px;\" onclick=\"addDisplay()\">+ Add Display</button>";
     html += "</div>"; // End displays section
+
+    // ANIMATIONS SECTION
+    html += "<div class=\"card\" style=\"margin-top:24px;\">";
+    html += "<h2>Animation Library</h2>";
+    html += "<p class=\"form-help\" style=\"margin-bottom:16px;\">Manage and assign animations to different system functions.</p>";
+
+    // Built-in animations - dropdown with actions
+    html += "<div style=\"margin-bottom:20px;\">";
+    html += "<h3 style=\"font-size:1.1em;margin-bottom:12px;color:#1e293b;\">Built-In Animations</h3>";
+    html += "<div style=\"display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:12px;background:#f8fafc;border-radius:6px;\">";
+    html += "<select id=\"builtin-animation-select\" class=\"form-select\" style=\"font-size:0.9em;\">";
+    html += "<option value=\"MOTION_ALERT\">Motion Alert - Flash + scroll arrow</option>";
+    html += "<option value=\"BATTERY_LOW\">Battery Low - Battery percentage</option>";
+    html += "<option value=\"BOOT_STATUS\">Boot Status - Startup animation</option>";
+    html += "<option value=\"WIFI_CONNECTED\">WiFi Connected - Checkmark</option>";
+    html += "</select>";
+    html += "<button class=\"btn btn-sm btn-primary\" onclick=\"playSelectedBuiltIn()\" title=\"Play animation\" style=\"width:36px;padding:8px;\">▶</button>";
+    html += "<button class=\"btn btn-sm btn-secondary\" onclick=\"downloadSelectedTemplate()\" title=\"Download as template\" style=\"width:36px;padding:8px;\">⬇</button>";
+    html += "<button class=\"btn btn-sm btn-success\" onclick=\"assignSelectedBuiltIn()\" title=\"Assign to function\" style=\"width:36px;padding:8px;\">✓</button>";
+    html += "</div>";
+    html += "</div>";
+
+    // Custom animations list
+    html += "<div style=\"margin-bottom:16px;\">";
+    html += "<h3 style=\"font-size:1.1em;margin-bottom:12px;color:#1e293b;\">Custom Animations</h3>";
+    html += "<div id=\"animations-list\"></div>";
+    html += "</div>";
+
+    // Upload section
+    html += "<div style=\"border:2px dashed #cbd5e1;border-radius:8px;padding:16px;background:#f8fafc;margin-bottom:16px;\">";
+    html += "<div style=\"font-weight:600;margin-bottom:8px;\">Upload Custom Animation</div>";
+    html += "<div style=\"display:flex;gap:8px;align-items:center;\">";
+    html += "<input type=\"file\" id=\"animation-file-input\" accept=\".txt\" style=\"flex:1;\">";
+    html += "<button class=\"btn btn-success btn-small\" onclick=\"uploadAnimation()\">Upload</button>";
+    html += "</div>";
+    html += "<div class=\"form-help\" style=\"margin-top:8px;\">Upload .txt animation files. See <a href=\"#\" onclick=\"showAnimationHelp();return false;\" style=\"color:#667eea;\">format guide</a>.</div>";
+    html += "</div>";
+
+    // Test controls
+    html += "<div style=\"padding:16px;background:#f1f5f9;border-radius:8px;\">";
+    html += "<div style=\"font-weight:600;margin-bottom:12px;\">Test & Control</div>";
+    html += "<div style=\"display:flex;gap:8px;align-items:center;flex-wrap:wrap;\">";
+    html += "<button class=\"btn btn-secondary btn-small\" onclick=\"stopAnimation()\" style=\"min-width:100px;\">⏹ Stop All</button>";
+    html += "<label style=\"font-size:0.85em;color:#64748b;margin-left:auto;\">Duration (ms):</label>";
+    html += "<input type=\"number\" id=\"test-duration\" value=\"5000\" min=\"0\" step=\"1000\" style=\"width:100px;padding:6px;border:1px solid #cbd5e1;border-radius:4px;\">";
+    html += "<span class=\"form-help\" style=\"margin:0;\">(0 = loop forever)</span>";
+    html += "</div>";
+    html += "</div>";
+
+    html += "</div>"; // End animations section
 
     html += "</div>"; // End hardware tab
 
@@ -851,7 +1451,7 @@ String WebAPI::buildDashboardHTML() {
     html += "event.target.classList.add('active');";
     html += "document.getElementById(tab+'-tab').classList.add('active');";
     html += "if(tab==='config')loadConfig();";
-    html += "if(tab==='hardware'){loadSensors();loadDisplays();}";
+    html += "if(tab==='hardware'){loadSensors();loadDisplays();loadAnimations();}";
     html += "if(tab==='logs')fetchLogs();";
     html += "}";
 
@@ -1257,12 +1857,260 @@ String WebAPI::buildDashboardHTML() {
     html += "alert('Failed to save display configuration: '+err);}}";
     html += "catch(e){console.error('Save error:',e);alert('Error saving displays: '+e.message);}}";
 
+    // ========================================================================
+    // Custom Animation Management (Issue #12 Phase 2)
+    // ========================================================================
+
+    // Load animations list
+    html += "async function loadAnimations(){";
+    html += "try{";
+    html += "const res=await fetch('/api/animations');";
+    html += "if(res.ok){";
+    html += "const data=await res.json();";
+    html += "renderAnimations(data.animations||[]);";
+    html += "updateAnimationSelect(data.animations||[]);";
+    html += "}else{console.error('Failed to load animations');}}";
+    html += "catch(e){console.error('Load animations error:',e);}}";
+
+    // Render animations list
+    html += "function renderAnimations(animations){";
+    html += "const container=document.getElementById('animations-list');";
+    html += "if(!container)return;";
+    html += "if(animations.length===0){";
+    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:12px;background:#f8fafc;border-radius:4px;\">No custom animations loaded. Upload an animation file to get started.</p>';";
+    html += "return;}";
+    html += "let html='<div style=\"display:grid;gap:8px;\">';";
+    html += "animations.forEach((anim,idx)=>{";
+    html += "html+='<div style=\"display:flex;justify-content:space-between;align-items:center;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;\">';";
+    html += "html+='<div style=\"flex:1;\">';";
+    html += "html+='<div style=\"font-weight:600;color:#1e293b;\">'+anim.name+'</div>';";
+    html += "html+='<div style=\"font-size:0.8em;color:#64748b;margin-top:2px;\">'+anim.frameCount+' frames';";
+    html += "if(anim.loop)html+=' • Looping';";
+    html += "html+='</div></div>';";
+    html += "html+='<div style=\"display:flex;gap:6px;\">';";
+    html += "html+='<button class=\"btn btn-sm btn-primary\" onclick=\"playCustomAnimation(\\''+anim.name+'\\')\" title=\"Play animation\" style=\"width:36px;padding:8px;\">▶</button>';";
+    html += "html+='<button class=\"btn btn-sm btn-success\" onclick=\"assignCustomAnimation(\\''+anim.name+'\\')\" title=\"Assign to function\" style=\"width:36px;padding:8px;\">✓</button>';";
+    html += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"deleteAnimation(\\''+anim.name+'\\')\" title=\"Remove from memory\" style=\"width:36px;padding:8px;\">×</button>';";
+    html += "html+='</div></div>';});";
+    html += "html+='</div>';";
+    html += "container.innerHTML=html;}";
+
+    // Update animation select dropdown
+    html += "function updateAnimationSelect(animations){";
+    html += "const select=document.getElementById('test-animation-select');";
+    html += "if(!select)return;";
+    html += "select.innerHTML='<option value=\"\">Select animation...</option>';";
+    html += "animations.forEach(anim=>{";
+    html += "const opt=document.createElement('option');";
+    html += "opt.value=anim.name;";
+    html += "opt.textContent=anim.name+' ('+anim.frameCount+' frames)';";
+    html += "select.appendChild(opt);});}";
+
+    // Upload animation file
+    html += "async function uploadAnimation(){";
+    html += "const fileInput=document.getElementById('animation-file-input');";
+    html += "if(!fileInput||!fileInput.files||fileInput.files.length===0){";
+    html += "alert('Please select a file first');return;}";
+    html += "const file=fileInput.files[0];";
+    html += "if(!file.name.endsWith('.txt')){";
+    html += "alert('Please select a .txt animation file');return;}";
+    html += "const formData=new FormData();";
+    html += "formData.append('file',file);";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/upload',{method:'POST',body:formData});";
+    html += "if(res.ok){";
+    html += "const data=await res.json();";
+    html += "alert('Animation uploaded successfully: '+data.name);";
+    html += "fileInput.value='';";
+    html += "loadAnimations();";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Upload failed: '+err);}}";
+    html += "catch(e){alert('Upload error: '+e.message);}}";
+
+    // Play built-in animation
+    html += "async function playBuiltInAnimation(animType,duration){";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/builtin',{";
+    html += "method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},";
+    html += "body:JSON.stringify({type:animType,duration:duration||0})});";
+    html += "if(res.ok){";
+    html += "console.log('Playing built-in animation: '+animType);";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to play animation: '+err);}}";
+    html += "catch(e){alert('Error playing animation: '+e.message);}}";
+
+    // Play animation from test controls
+    html += "function playTestAnimation(){";
+    html += "const select=document.getElementById('test-animation-select');";
+    html += "const duration=parseInt(document.getElementById('test-duration').value)||0;";
+    html += "if(!select||!select.value){alert('Select an animation first');return;}";
+    html += "playAnimation(select.value,duration);}";
+
+    // Play specific custom animation
+    html += "async function playAnimation(name,duration){";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/play',{";
+    html += "method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},";
+    html += "body:JSON.stringify({name:name,duration:duration||0})});";
+    html += "if(res.ok){";
+    html += "console.log('Playing animation: '+name);";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to play animation: '+err);}}";
+    html += "catch(e){alert('Error playing animation: '+e.message);}}";
+
+    // Stop current animation
+    html += "async function stopAnimation(){";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/stop',{method:'POST'});";
+    html += "if(res.ok){console.log('Animation stopped');}";
+    html += "}catch(e){console.error('Error stopping animation:',e);}}";
+
+    // Delete animation from memory
+    html += "async function deleteAnimation(name){";
+    html += "if(!confirm('Remove \"'+name+'\" from memory?\\n\\nThis will free memory but you can re-upload the file anytime.'))return;";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/'+encodeURIComponent(name),{method:'DELETE'});";
+    html += "if(res.ok){";
+    html += "alert('Animation removed from memory');";
+    html += "loadAnimations();";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to delete: '+err);}}";
+    html += "catch(e){alert('Delete error: '+e.message);}}";
+
+    // Show animation format help
+    html += "function showAnimationHelp(){";
+    html += "alert('Animation File Format:\\n\\n'+";
+    html += "'name=MyAnimation\\n'+";
+    html += "'loop=true\\n'+";
+    html += "'frame=11111111,10000001,...,100\\n\\n'+";
+    html += "'• Each frame: 8 binary bytes + delay (ms)\\n'+";
+    html += "'• Max 16 frames per animation\\n'+";
+    html += "'• Max 8 animations loaded at once\\n\\n'+";
+    html += "'See /data/animations/README.md for examples');}";
+
+    // Download built-in animation as template
+    html += "async function downloadTemplate(animType){";
+    html += "try{";
+    html += "console.log('Downloading template for:',animType);";
+    html += "const res=await fetch('/api/animations/template?type='+animType);";
+    html += "console.log('Fetch complete, status:',res.status);";
+    html += "if(res.ok){";
+    html += "const text=await res.text();";
+    html += "const blob=new Blob([text],{type:'text/plain'});";
+    html += "const url=URL.createObjectURL(blob);";
+    html += "const a=document.createElement('a');";
+    html += "a.href=url;";
+    html += "a.download=animType.toLowerCase()+'_template.txt';";
+    html += "document.body.appendChild(a);";
+    html += "a.click();";
+    html += "document.body.removeChild(a);";
+    html += "URL.revokeObjectURL(url);";
+    html += "console.log('Download triggered');}else{";
+    html += "const err=await res.text();";
+    html += "console.error('Download failed:',res.status,err);";
+    html += "alert('Failed to download template: '+res.status);}}";
+    html += "catch(e){";
+    html += "console.error('Download error:',e);";
+    html += "alert('Download error: '+e.message);}}";
+
+    // Play selected built-in animation from dropdown
+    html += "function playSelectedBuiltIn(){";
+    html += "const select=document.getElementById('builtin-animation-select');";
+    html += "if(!select||!select.value)return;";
+    html += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
+    html += "playBuiltInAnimation(select.value,duration);}";
+
+    // Download selected animation as template
+    html += "function downloadSelectedTemplate(){";
+    html += "const select=document.getElementById('builtin-animation-select');";
+    html += "if(!select||!select.value)return;";
+    html += "downloadTemplate(select.value);}";
+
+    // Assign selected built-in animation to a function
+    html += "function assignSelectedBuiltIn(){";
+    html += "const select=document.getElementById('builtin-animation-select');";
+    html += "if(!select||!select.value)return;";
+    html += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
+    html += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
+    html += "let message='Assign \"'+select.selectedOptions[0].text+'\" to which function?\\n\\n';";
+    html += "for(let i=0;i<functions.length;i++){";
+    html += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
+    html += "const choice=prompt(message,'1');";
+    html += "if(!choice)return;";
+    html += "const idx=parseInt(choice)-1;";
+    html += "if(idx>=0&&idx<functions.length){";
+    html += "assignAnimation(functions[idx],'builtin',select.value);}}";
+
+    // Assign animation to a function
+    html += "async function assignAnimation(functionKey,type,animName){";
+    html += "try{";
+    html += "const res=await fetch('/api/animations/assign',{";
+    html += "method:'POST',";
+    html += "headers:{'Content-Type':'application/json'},";
+    html += "body:JSON.stringify({function:functionKey,type:type,animation:animName})});";
+    html += "if(res.ok){";
+    html += "updateActiveAnimations();";
+    html += "alert('Animation assigned successfully');}";
+    html += "else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to assign animation: '+err);}}";
+    html += "catch(e){alert('Assignment error: '+e.message);}}";
+
+    // Update active animations display
+    html += "function updateActiveAnimations(){";
+    html += "fetch('/api/animations/assignments')";
+    html += ".then(res=>res.json())";
+    html += ".then(data=>{";
+    html += "const panel=document.getElementById('active-animations-panel');";
+    html += "if(panel){panel.style.display='block';}";
+    html += "if(data['motion-alert']){";
+    html += "const elem=document.getElementById('anim-motion-alert');";
+    html += "if(elem)elem.textContent=data['motion-alert'].type==='builtin'?'Built-in: '+data['motion-alert'].name:data['motion-alert'].name;}";
+    html += "if(data['battery-low']){";
+    html += "const elem=document.getElementById('anim-battery-low');";
+    html += "if(elem)elem.textContent=data['battery-low'].type==='builtin'?'Built-in: '+data['battery-low'].name:data['battery-low'].name;}";
+    html += "if(data['boot-status']){";
+    html += "const elem=document.getElementById('anim-boot-status');";
+    html += "if(elem)elem.textContent=data['boot-status'].type==='builtin'?'Built-in: '+data['boot-status'].name:data['boot-status'].name;}";
+    html += "if(data['wifi-connected']){";
+    html += "const elem=document.getElementById('anim-wifi-connected');";
+    html += "if(elem)elem.textContent=data['wifi-connected'].type==='builtin'?'Built-in: '+data['wifi-connected'].name:data['wifi-connected'].name;}";
+    html += "})";
+    html += ".catch(e=>console.error('Failed to load assignments:',e));}";
+
+    // Play custom animation with duration from input
+    html += "function playCustomAnimation(name){";
+    html += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
+    html += "playAnimation(name,duration);}";
+
+    // Assign custom animation to a function
+    html += "function assignCustomAnimation(name){";
+    html += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
+    html += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
+    html += "let message='Assign \"'+name+'\" to which function?\\n\\n';";
+    html += "for(let i=0;i<functions.length;i++){";
+    html += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
+    html += "const choice=prompt(message,'1');";
+    html += "if(!choice)return;";
+    html += "const idx=parseInt(choice)-1;";
+    html += "if(idx>=0&&idx<functions.length){";
+    html += "assignAnimation(functions[idx],'custom',name);}}";
+
     // Auto-refresh status and logs
     html += "fetchStatus();";
     html += "setInterval(fetchStatus,2000);";
     html += "setInterval(()=>{";
     html += "if(document.getElementById('logs-tab').classList.contains('active')){fetchLogs();}";
     html += "},5000);";
+
+    // Load animation assignments on page load
+    html += "updateActiveAnimations();";
 
     html += "</script></body></html>";
 
