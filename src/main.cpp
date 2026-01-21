@@ -77,6 +77,12 @@ void startWebAPI() {
         webAPI->setWiFiManager(&wifiManager);
     }
 
+    // Always update LED matrix reference (may be initialized after WebAPI)
+    if (ledMatrix && ledMatrix->isReady()) {
+        webAPI->setLEDMatrix(ledMatrix);
+        Serial.println("[WebAPI] LED Matrix reference set");
+    }
+
     if (webAPI && webAPI->begin()) {
         webServer.begin();
         webServerStarted = true;
@@ -667,7 +673,25 @@ void setup() {
             }
         }
     } else {
-        Serial.println("[Setup] LED Matrix not configured, using hazard LED only");
+        Serial.println("[Setup] LED Matrix not configured in settings");
+
+        #ifdef MOCK_HARDWARE
+        // In mock mode, create LED matrix anyway for testing animations via web UI
+        Serial.println("[Setup] Creating LED Matrix in mock mode for testing...");
+        ledMatrix = new HAL_LEDMatrix_8x8(0x70, 8, 9, true);
+        if (ledMatrix && ledMatrix->begin()) {
+            ledMatrix->setBrightness(5);
+            Serial.println("[Setup] ✓ Mock LED Matrix created for testing");
+        } else {
+            Serial.println("[Setup] WARNING: Failed to create mock LED Matrix");
+            if (ledMatrix) {
+                delete ledMatrix;
+                ledMatrix = nullptr;
+            }
+        }
+        #else
+        Serial.println("[Setup] Using hazard LED only (enable LED Matrix in Hardware tab)");
+        #endif
     }
 
     // Check if button is held during boot for reset operations

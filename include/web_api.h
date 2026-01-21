@@ -65,6 +65,13 @@ public:
     void setWatchdogManager(class WatchdogManager* watchdog);
 
     /**
+     * @brief Set LED Matrix reference (optional)
+     *
+     * @param ledMatrix LED Matrix instance for animation control
+     */
+    void setLEDMatrix(class HAL_LEDMatrix_8x8* ledMatrix);
+
+    /**
      * @brief Destructor
      */
     ~WebAPI();
@@ -92,6 +99,7 @@ private:
     class WiFiManager* m_wifi;             ///< WiFi Manager reference (optional)
     class PowerManager* m_power;           ///< Power Manager reference (optional)
     class WatchdogManager* m_watchdog;     ///< Watchdog Manager reference (optional)
+    class HAL_LEDMatrix_8x8* m_ledMatrix;  ///< LED Matrix reference (optional, Issue #12)
     bool m_corsEnabled;                    ///< CORS enabled flag
 
     // Endpoint handlers
@@ -140,6 +148,51 @@ private:
      * @brief POST /api/displays - Update display configuration
      */
     void handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief GET /api/animations - Get loaded animations (Issue #12 Phase 2)
+     */
+    void handleGetAnimations(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/animations/upload - Upload animation file (Issue #12 Phase 2)
+     */
+    void handleUploadAnimation(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final);
+
+    /**
+     * @brief POST /api/animations/play - Play animation (Issue #12 Phase 2)
+     */
+    void handlePlayAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief POST /api/animations/builtin - Play built-in animation (Issue #12)
+     */
+    void handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief POST /api/animations/stop - Stop current animation (Issue #12 Phase 2)
+     */
+    void handleStopAnimation(AsyncWebServerRequest* request);
+
+    /**
+     * @brief DELETE /api/animations/:name - Remove animation from memory (Issue #12 Phase 2)
+     */
+    void handleDeleteAnimation(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/animations/template/:type - Download animation template (Issue #12)
+     */
+    void handleGetAnimationTemplate(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/animations/assign - Assign animation to function (Issue #12)
+     */
+    void handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief GET /api/animations/assignments - Get animation assignments (Issue #12)
+     */
+    void handleGetAssignments(AsyncWebServerRequest* request);
 
     /**
      * @brief POST /api/reset - Factory reset
