@@ -620,6 +620,9 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Get configuration for display and WiFi setup
+    const ConfigManager::Config& cfg = configManager.getConfig();
+
     // Initialize LED matrix display (Issue #12)
     const ConfigManager::DisplaySlotConfig& displayCfg = cfg.displays[0];
 
@@ -687,8 +690,7 @@ void setup() {
         Serial.println("[Setup] State machine will use LED matrix for warnings");
     }
 
-    // Get default mode from config
-    const ConfigManager::Config& cfg = configManager.getConfig();
+    // Get default mode from config (cfg already retrieved earlier)
     StateMachine::OperatingMode defaultMode = static_cast<StateMachine::OperatingMode>(cfg.defaultMode);
 
     Serial.println("[Setup] Initializing state machine...");
