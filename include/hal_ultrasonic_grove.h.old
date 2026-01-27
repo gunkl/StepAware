@@ -1,0 +1,417 @@
+#ifndef STEPAWARE_HAL_ULTRASONIC_GROVE_H
+#define STEPAWARE_HAL_ULTRASONIC_GROVE_H
+
+#include <Arduino.h>
+#include "config.h"
+#include "hal_motion_sensor.h"
+
+/**
+ * @brief Hardware Abstraction Layer for Grove Ultrasonic Distance Sensor v2.0
+ *
+ * Provides interface to Grove Ultrasonic Ranger v2.0 with distance measurement,
+ * threshold-based motion detection, and direction detection.
+ *
+ * Inherits from HAL_MotionSensor for polymorphic sensor usage.
+ *
+ * Technical Specifications (Grove Ultrasonic Ranger v2.0):
+ * - Detection Range: 2cm - 350cm
+ * - Accuracy: 1cm
+ * - Measuring Angle: 15 degrees
+ * - Trigger Pulse: 10us minimum
+ * - Echo Pulse: Width proportional to distance
+ * - Operating Voltage: 3.2V - 5.2V (excellent 3.3V compatibility!)
+ * - Current Draw: ~8mA during measurement (lower power than HC-SR04!)
+ *
+ * Key Difference from HC-SR04:
+ * - Single SIG pin shared for both trigger and echo (saves 1 GPIO pin!)
+ * - Better 3.3V voltage support
+ * - Lower power consumption (8mA vs 15mA)
+ *
+ * Distance Calculation:
+ *   distance_cm = (echo_duration_us / 2) / 29.1
+ *   distance_mm = (echo_duration_us / 2) / 2.91
+ *
+ * Protocol:
+ * 1. Set SIG pin to OUTPUT, send 10µs HIGH pulse (trigger)
+ * 2. Set SIG pin to INPUT, wait for echo HIGH pulse
+ * 3. Measure echo pulse width (proportional to distance)
+ */
+class HAL_Ultrasonic_Grove : public HAL_MotionSensor {
+public:
+    /**
+     * @brief Construct a new HAL_Ultrasonic_Grove object
+     *
+     * @param sigPin GPIO pin for combined trigger/echo signal
+     * @param mock_mode True to enable mock/simulation mode for testing
+     */
+    HAL_Ultrasonic_Grove(uint8_t sigPin, bool mock_mode = false);
+
+    /**
+     * @brief Destructor
+     */
+    ~HAL_Ultrasonic_Grove() override;
+
+    // =========================================================================
+    // HAL_MotionSensor Interface Implementation
+    // =========================================================================
+
+    /**
+     * @brief Initialize the ultrasonic sensor
+     *
+     * Configures GPIO pin for trigger/echo.
+     *
+     * @return true if initialization successful
+     */
+    bool begin() override;
+
+    /**
+     * @brief Update sensor state (call in main loop)
+     *
+     * Measures distance and updates motion detection state.
+     * Note: Measurement takes ~30ms, so update rate is limited.
+     */
+    void update() override;
+
+    /**
+     * @brief Check if motion is currently detected
+     *
+     * Motion is detected when distance crosses the threshold.
+     *
+     * @return true if object detected within threshold distance
+     */
+    bool motionDetected() const override;
+
+    /**
+     * @brief Check if sensor is ready
+     *
+     * Ultrasonic sensors don't require warmup.
+     *
+     * @return true (always ready after begin())
+     */
+    bool isReady() const override;
+
+    /**
+     * @brief Get sensor type
+     *
+     * @return SENSOR_TYPE_ULTRASONIC_GROVE
+     */
+    SensorType getSensorType() const override { return SENSOR_TYPE_ULTRASONIC_GROVE; }
+
+    /**
+     * @brief Get sensor capabilities
+     *
+     * @return Reference to Grove ultrasonic capabilities structure
+     */
+    const SensorCapabilities& getCapabilities() const override;
+
+    /**
+     * @brief Get remaining warm-up time
+     *
+     * @return 0 (no warmup required)
+     */
+    uint32_t getWarmupTimeRemaining() const override { return 0; }
+
+    /**
+     * @brief Get last motion event type
+     *
+     * @return Last motion event
+     */
+    MotionEvent getLastEvent() const override { return m_lastEvent; }
+
+    /**
+     * @brief Get total motion events detected
+     *
+     * @return Number of threshold crossing events
+     */
+    uint32_t getEventCount() const override { return m_eventCount; }
+
+    /**
+     * @brief Reset motion event counter
+     */
+    void resetEventCount() override;
+
+    /**
+     * @brief Get timestamp of last event
+     *
+     * @return Timestamp in milliseconds since boot
+     */
+    uint32_t getLastEventTime() const override { return m_lastEventTime; }
+
+    /**
+     * @brief Check if running in mock mode
+     *
+     * @return true if mock mode enabled
+     */
+    bool isMockMode() const override { return m_mockMode; }
+
+    // =========================================================================
+    // Extended Interface (Distance & Direction)
+    // =========================================================================
+
+    /**
+     * @brief Get current distance measurement
+     *
+     * @return Distance in millimeters, 0 if out of range
+     */
+    uint32_t getDistance() const override { return m_currentDistance; }
+
+    /**
+     * @brief Get motion direction
+     *
+     * Based on distance change over time.
+     *
+     * @return Motion direction (approaching, receding, stationary)
+     */
+    MotionDirection getDirection() const override { return m_direction; }
+
+    /**
+     * @brief Set detection threshold
+     *
+     * Objects closer than this distance trigger motion detection.
+     *
+     * @param threshold_mm Detection threshold in millimeters
+     */
+    void setDetectionThreshold(uint32_t threshold_mm) override;
+
+    /**
+     * @brief Get current detection threshold
+     *
+     * @return Detection threshold in millimeters
+     */
+    uint32_t getDetectionThreshold() const override { return m_detectionThreshold; }
+
+    /**
+     * @brief Enable or disable direction detection
+     *
+     * @param enable true to enable direction detection
+     */
+    void setDirectionDetection(bool enable) override;
+
+    /**
+     * @brief Check if direction detection is enabled
+     *
+     * @return true if direction detection is enabled
+     */
+    bool isDirectionDetectionEnabled() const override { return m_directionEnabled; }
+
+    /**
+     * @brief Set direction trigger mode
+     *
+     * @param mode 0=approaching only, 1=receding only, 2=both directions
+     */
+    void setDirectionTriggerMode(uint8_t mode) { m_directionTriggerMode = mode; }
+
+    /**
+     * @brief Get current direction trigger mode
+     *
+     * @return Direction trigger mode
+     */
+    uint8_t getDirectionTriggerMode() const { return m_directionTriggerMode; }
+
+    // =========================================================================
+    // Mock Mode Interface
+    // =========================================================================
+
+    /**
+     * @brief Inject mock motion state (mock mode only)
+     *
+     * @param detected Motion detected state to inject
+     */
+    void mockSetMotion(bool detected) override;
+
+    /**
+     * @brief Inject mock distance reading (mock mode only)
+     *
+     * @param distance_mm Distance in millimeters to inject
+     */
+    void mockSetDistance(uint32_t distance_mm) override;
+
+    /**
+     * @brief Mark sensor as ready (mock mode only)
+     *
+     * For ultrasonic, this is a no-op since no warmup needed.
+     */
+    void mockSetReady() override {}
+
+    // =========================================================================
+    // Ultrasonic-Specific Methods
+    // =========================================================================
+
+    /**
+     * @brief Perform a single distance measurement
+     *
+     * Blocks for up to 30ms during measurement.
+     *
+     * @return Distance in millimeters, 0 if timeout/out of range
+     */
+    uint32_t measureDistance();
+
+    /**
+     * @brief Set measurement interval
+     *
+     * Minimum time between measurements to reduce CPU load.
+     *
+     * @param interval_ms Measurement interval in milliseconds (min: 60ms)
+     */
+    void setMeasurementInterval(uint32_t interval_ms);
+
+    /**
+     * @brief Get current measurement interval
+     *
+     * @return Measurement interval in milliseconds
+     */
+    uint32_t getMeasurementInterval() const { return m_measurementInterval; }
+
+    /**
+     * @brief Set direction detection sensitivity
+     *
+     * Minimum distance change to register direction.
+     *
+     * @param sensitivity_mm Sensitivity in millimeters (default: 20mm)
+     */
+    void setDirectionSensitivity(uint32_t sensitivity_mm);
+
+    /**
+     * @brief Set distance range for detection (min/max thresholds)
+     *
+     * @param min_mm Minimum detection distance in millimeters
+     * @param max_mm Maximum detection distance in millimeters
+     */
+    void setDistanceRange(uint32_t min_mm, uint32_t max_mm) override;
+
+    /**
+     * @brief Get minimum detection distance
+     *
+     * @return Minimum detection distance in millimeters
+     */
+    uint32_t getMinDistance() const override { return m_minDistance; }
+
+    /**
+     * @brief Get maximum detection distance
+     *
+     * @return Maximum detection distance in millimeters
+     */
+    uint32_t getMaxDistance() const override { return m_maxDistance; }
+
+    /**
+     * @brief Enable rapid sampling mode for direction detection
+     *
+     * @param sample_count Number of samples to take (2-20)
+     * @param interval_ms Interval between samples in milliseconds
+     */
+    void setRapidSampling(uint8_t sample_count, uint16_t interval_ms) override;
+
+    /**
+     * @brief Trigger rapid sampling sequence
+     *
+     * Immediately takes rapid samples and updates direction.
+     */
+    void triggerRapidSample() override;
+
+private:
+    // Pin configuration
+    uint8_t m_sigPin;               ///< GPIO pin for trigger/echo (single pin!)
+    bool m_mockMode;                ///< Mock mode enabled
+    bool m_initialized;             ///< Initialization complete
+
+    // Measurement state
+    uint32_t m_currentDistance;     ///< Current distance reading (mm)
+    uint32_t m_lastDistance;        ///< Previous distance reading (mm)
+    uint32_t m_detectionThreshold;  ///< Distance threshold for detection (mm)
+    uint32_t m_minDistance;         ///< Minimum detection distance (mm)
+    uint32_t m_maxDistance;         ///< Maximum detection distance (mm)
+    bool m_objectDetected;          ///< Object within threshold
+
+    // Direction detection
+    bool m_directionEnabled;        ///< Direction detection enabled
+    MotionDirection m_direction;    ///< Current direction
+    uint32_t m_directionSensitivity;///< Min change for direction (mm)
+    uint8_t m_directionTriggerMode; ///< 0=approaching, 1=receding, 2=both
+
+    // Rapid sampling
+    uint8_t m_rapidSampleCount;     ///< Number of rapid samples
+    uint16_t m_rapidSampleMs;       ///< Interval between rapid samples
+
+    // Rolling window for movement detection
+    static constexpr uint8_t SAMPLE_WINDOW_SIZE = 10;  ///< Rolling window size
+    uint32_t m_sampleWindow[SAMPLE_WINDOW_SIZE];       ///< Distance sample buffer
+    uint8_t m_sampleWindowIndex;                       ///< Current write index
+    uint8_t m_sampleWindowCount;                       ///< Valid samples in window
+    uint32_t m_windowAverage;                          ///< Current window average
+    uint32_t m_lastWindowAverage;                      ///< Previous window average
+    bool m_windowFilled;                               ///< Window has enough samples
+
+    // Event tracking
+    MotionEvent m_lastEvent;        ///< Last event type
+    uint32_t m_eventCount;          ///< Total events
+    uint32_t m_lastEventTime;       ///< Timestamp of last event
+
+    // Timing
+    uint32_t m_lastMeasurementTime; ///< When last measurement was taken
+    uint32_t m_measurementInterval; ///< Min time between measurements (ms)
+
+    // Mock state
+    uint32_t m_mockDistance;        ///< Mock distance value
+
+    // Static capabilities
+    static const SensorCapabilities s_capabilities;
+
+    // Constants
+    static constexpr uint32_t MEASUREMENT_TIMEOUT_US = 30000;  // 30ms timeout
+    static constexpr uint32_t MIN_MEASUREMENT_INTERVAL_MS = 60; // 60ms min interval
+    static constexpr uint32_t DEFAULT_THRESHOLD_MM = 500;      // 50cm default
+    static constexpr uint32_t DEFAULT_SENSITIVITY_MM = 20;     // 2cm sensitivity
+    static constexpr uint32_t MOVEMENT_THRESHOLD_MM = 200;     // Minimum change to detect movement (20cm for human motion)
+    static constexpr float SOUND_SPEED_MM_PER_US = 0.343f;     // Speed of sound
+
+    /**
+     * @brief Update direction based on distance change
+     */
+    void updateDirection();
+
+    /**
+     * @brief Update direction based on multiple samples
+     *
+     * @param samples Array of distance samples
+     * @param count Number of samples
+     */
+    void updateDirectionFromSamples(const uint32_t* samples, uint8_t count);
+
+    /**
+     * @brief Check for threshold crossing events
+     */
+    void checkThresholdEvents();
+
+    /**
+     * @brief Add distance sample to rolling window
+     *
+     * @param distance_mm Distance measurement to add
+     */
+    void addSampleToWindow(uint32_t distance_mm);
+
+    /**
+     * @brief Calculate average of sample window
+     *
+     * @return Average distance in mm, 0 if window empty
+     */
+    uint32_t calculateWindowAverage() const;
+
+    /**
+     * @brief Check if movement detected based on window averages
+     *
+     * Uses rolling window analysis to distinguish actual movement from noise:
+     * - Compares current window average to previous window average
+     * - Requires significant change (≥200mm) to filter out sensor noise
+     * - Validates reading consistency (spread within window <100mm)
+     * - Prevents false triggers from static objects or small vibrations
+     *
+     * Movement detected when:
+     * - Change ≥200mm AND readings are consistent (spread <100mm), OR
+     * - Change ≥300mm (very large movement, regardless of consistency)
+     *
+     * @return true if significant movement detected (human motion pattern)
+     */
+    bool isMovementDetected() const;
+};
+
+#endif // STEPAWARE_HAL_ULTRASONIC_GROVE_H

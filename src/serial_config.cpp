@@ -6,8 +6,9 @@
 // External WiFi manager reference (defined in main.cpp)
 extern WiFiManager wifiManager;
 
-SerialConfigUI::SerialConfigUI(ConfigManager& configManager)
+SerialConfigUI::SerialConfigUI(ConfigManager& configManager, SensorManager& sensorManager)
     : m_configManager(configManager)
+    , m_sensorManager(sensorManager)
     , m_initialized(false)
     , m_configMode(false)
     , m_inputPos(0)
@@ -227,7 +228,9 @@ void SerialConfigUI::cmdHelp() {
     Serial.println();
     Serial.println("Sensor:");
     Serial.println("  sensor info       Show sensor information");
-    Serial.println("  sensor threshold <mm>  Set detection threshold");
+    Serial.println("  sensor list            List all configured sensors");
+    Serial.println("  sensor <slot> status   Show detailed sensor status");
+    Serial.println("  sensor <slot> ...      Configure sensor (see 'sensor' for details)");
     Serial.println();
     Serial.println("Configuration Keys (for 'get'/'set' commands):");
     Serial.println("  motion.duration   Warning duration (ms)");
@@ -510,37 +513,161 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
 
 void SerialConfigUI::cmdSensor(size_t argc, char** argv) {
     if (argc < 1) {
-        Serial.println("Usage: sensor <command> [value]");
-        Serial.println("Commands: info, threshold");
+        Serial.println("Usage: sensor <slot|command> [subcommand] [value]");
+        Serial.println("Commands:");
+        Serial.println("  sensor list                      - List all sensors");
+        Serial.println("  sensor <slot> status             - Show sensor status");
+        Serial.println("  sensor <slot> threshold <mm>     - Set warning trigger distance");
+        Serial.println("  sensor <slot> maxrange <mm>      - Set max detection distance");
+        Serial.println("  sensor <slot> direction <0|1>    - Enable/disable direction");
+        Serial.println("  sensor <slot> dirmode <0|1|2>    - 0=approach, 1=recede, 2=both");
+        Serial.println("  sensor <slot> samples <count>    - Set rapid sample count (2-20)");
+        Serial.println("  sensor <slot> interval <ms>      - Set sample interval (50-1000ms)");
         return;
     }
 
     const char* subcmd = argv[0];
 
-    if (strcmp(subcmd, "info") == 0) {
-        Serial.println("\nSensor Information:");
-        Serial.printf("  Active Type: %s\n", getSensorTypeName(ACTIVE_SENSOR_TYPE));
-        Serial.printf("  Supported: PIR, Ultrasonic\n");
-#if ACTIVE_SENSOR_TYPE == SENSOR_TYPE_ULTRASONIC
-        Serial.printf("  Threshold: %u mm\n", ULTRASONIC_THRESHOLD_MM);
-        Serial.printf("  Interval: %u ms\n", ULTRASONIC_INTERVAL_MS);
-#endif
+    // List all sensors
+    if (strcmp(subcmd, "list") == 0) {
+        Serial.println("\n=== Configured Sensors ===");
+        m_sensorManager.printStatus();
+        Serial.printf("Fusion Mode: %s\n",
+                     m_sensorManager.getFusionMode() == FUSION_MODE_ANY ? "ANY" :
+                     m_sensorManager.getFusionMode() == FUSION_MODE_ALL ? "ALL" : "TRIGGER_MEASURE");
+        Serial.printf("Active Count: %u\n", m_sensorManager.getActiveSensorCount());
+        return;
     }
-    else if (strcmp(subcmd, "threshold") == 0) {
-        if (argc < 2) {
-#if ACTIVE_SENSOR_TYPE == SENSOR_TYPE_ULTRASONIC
-            Serial.printf("Current threshold: %u mm\n", ULTRASONIC_THRESHOLD_MM);
-#else
-            Serial.println("Threshold not applicable for PIR sensor");
-#endif
-        } else {
-            Serial.println("Note: Sensor threshold requires recompilation.");
-            Serial.println("Edit config.h ULTRASONIC_THRESHOLD_MM and rebuild.");
+
+    // Slot-specific commands
+    uint8_t slot = atoi(subcmd);
+    if (slot > 3) {
+        Serial.printf("Invalid slot: %s (must be 0-3)\n", subcmd);
+        return;
+    }
+
+    HAL_MotionSensor* sensor = m_sensorManager.getSensor(slot);
+    if (!sensor) {
+        Serial.printf("No sensor in slot %u\n", slot);
+        return;
+    }
+
+    // Get configuration for this sensor
+    ConfigManager::Config cfg = m_configManager.getConfig();
+    ConfigManager::SensorSlotConfig& sensorCfg = cfg.sensors[slot];
+
+    if (argc < 2) {
+        Serial.printf("Missing subcommand for slot %u\n", slot);
+        return;
+    }
+
+    const char* action = argv[1];
+
+    // Status command
+    if (strcmp(action, "status") == 0) {
+        const SensorCapabilities& caps = sensor->getCapabilities();
+        Serial.printf("\n=== Sensor Slot %u ===\n", slot);
+        Serial.printf("Name: %s\n", sensorCfg.name);
+        Serial.printf("Type: %s\n", caps.sensorTypeName);
+        Serial.printf("Enabled: %s\n", sensorCfg.enabled ? "YES" : "NO");
+        Serial.printf("Primary: %s\n", sensorCfg.isPrimary ? "YES" : "NO");
+        Serial.printf("Ready: %s\n", sensor->isReady() ? "YES" : "NO");
+
+        if (caps.supportsDistanceMeasurement) {
+            Serial.printf("Current Distance: %u mm\n", sensor->getDistance());
+            Serial.printf("Max Detection Range: %u mm\n", sensorCfg.maxDetectionDistance);
+            Serial.printf("Warning Trigger At: %u mm\n", sensorCfg.detectionThreshold);
+            Serial.printf("Direction Detection: %s\n", sensorCfg.enableDirectionDetection ? "Enabled" : "Disabled");
+            if (sensorCfg.enableDirectionDetection) {
+                const char* triggerMode = (sensorCfg.directionTriggerMode == 0) ? "Approaching" :
+                                         (sensorCfg.directionTriggerMode == 1) ? "Receding" : "Both";
+                Serial.printf("Trigger Mode: %s\n", triggerMode);
+                Serial.printf("Rapid Samples: %u @ %u ms\n",
+                             sensorCfg.sampleWindowSize, sensorCfg.sampleRateMs);
+                const char* dirName = "Unknown";
+                switch (sensor->getDirection()) {
+                    case DIRECTION_STATIONARY: dirName = "Stationary"; break;
+                    case DIRECTION_APPROACHING: dirName = "Approaching"; break;
+                    case DIRECTION_RECEDING: dirName = "Receding"; break;
+                }
+                Serial.printf("Current Direction: %s\n", dirName);
+            }
         }
+        Serial.println();
+        return;
+    }
+
+    // Configuration commands (require value parameter)
+    if (argc < 3) {
+        Serial.println("Missing value parameter");
+        return;
+    }
+
+    const char* valueStr = argv[2];
+    uint32_t value = atoi(valueStr);
+
+    if (strcmp(action, "threshold") == 0) {
+        if (value < 10) {
+            Serial.println("Error: Threshold must be >= 10mm");
+            return;
+        }
+        sensorCfg.detectionThreshold = value;
+        sensor->setDetectionThreshold(value);
+        Serial.printf("Slot %u warning trigger distance set to %u mm\n", slot, value);
+    }
+    else if (strcmp(action, "maxrange") == 0) {
+        if (value < 100) {
+            Serial.println("Error: Max range must be >= 100mm");
+            return;
+        }
+        sensorCfg.maxDetectionDistance = value;
+        Serial.printf("Slot %u max detection range set to %u mm\n", slot, value);
+    }
+    else if (strcmp(action, "direction") == 0) {
+        bool enable = (value != 0);
+        sensorCfg.enableDirectionDetection = enable;
+        sensor->setDirectionDetection(enable);
+        Serial.printf("Slot %u direction detection %s\n", slot, enable ? "enabled" : "disabled");
+    }
+    else if (strcmp(action, "dirmode") == 0) {
+        if (value > 2) {
+            Serial.println("Error: Direction mode must be 0 (approach), 1 (recede), or 2 (both)");
+            return;
+        }
+        sensorCfg.directionTriggerMode = value;
+        const char* modeName = (value == 0) ? "approaching" : (value == 1) ? "receding" : "both";
+        Serial.printf("Slot %u direction trigger mode set to %s\n", slot, modeName);
+    }
+    else if (strcmp(action, "samples") == 0) {
+        if (value < 2 || value > 20) {
+            Serial.println("Error: Sample count must be 2-20");
+            return;
+        }
+        sensorCfg.sampleWindowSize = value;
+        sensor->setSampleWindowSize(value);
+        Serial.printf("Slot %u rapid sample count set to %u\n", slot, value);
+    }
+    else if (strcmp(action, "interval") == 0) {
+        if (value < 50 || value > 1000) {
+            Serial.println("Error: Interval must be 50-1000ms");
+            return;
+        }
+        sensorCfg.sampleRateMs = value;
+        // Note: Sample rate is set via setMeasurementInterval(), not implemented here yet
+        Serial.printf("Slot %u sample interval set to %u ms\n", slot, value);
     }
     else {
-        Serial.printf("Unknown sensor command: %s\n", subcmd);
+        Serial.printf("Unknown action: %s\n", action);
+        return;
     }
+
+    // Save updated configuration
+    if (!m_configManager.setConfig(cfg)) {
+        Serial.println("Error: Failed to update configuration");
+        return;
+    }
+
+    Serial.println("Configuration updated (use 'save' to persist)");
 }
 
 // ============================================================================

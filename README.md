@@ -21,6 +21,7 @@ Detect a human entering a specific area (e.g., hallway) and notify them of a haz
 #### Core Functionality
 - **Motion Detection**: AM312 PIR sensor with 12m range and 65° detection angle
 - **LED Warning**: Bright, visible, repeated blinking for 15+ seconds when motion detected
+- **8x8 LED Matrix Display** (Optional): Animated visual warnings and status displays with custom animation support
 - **Multiple Operating Modes**: OFF, Continuous ON, Motion Detection, Night Light modes
   - **OFF Mode**: Deep sleep with button wake capability (maximum power savings)
   - **Continuous ON**: Always flashing hazard warning
@@ -58,11 +59,12 @@ Detect a human entering a specific area (e.g., hallway) and notify them of a haz
 | **Resistors** | 220Ω (LED), 10kΩ (pull-up) | 2 |
 | **Pushbutton** | Momentary tactile switch | 1 |
 | **Photoresistor** | For ambient light sensing (optional) | 1 |
+| **8x8 LED Matrix** | Adafruit Mini w/I2C Backpack (optional) | 1 |
 | **LiPo Battery** | 1000mAh, 3.7V | 1 |
 | **Breadboard** | For prototyping | 1 |
 | **Jumper Wires** | Male-to-male | 20 |
 
-**Total Cost**: ~$33
+**Total Cost**: ~$33 (+ $8 for optional LED Matrix)
 
 ### Pin Connections (ESP32-C3)
 
@@ -74,6 +76,10 @@ Detect a human entering a specific area (e.g., hallway) and notify them of a haz
 | GPIO3 | Hazard LED | Main warning LED (PWM) |
 | GPIO4 | Light Sensor | Photoresistor (optional) |
 | GPIO5 | Battery Monitor | Built-in voltage divider |
+| GPIO7 | I2C SDA | LED Matrix data (optional) |
+| GPIO8 | Ultrasonic/IR | Distance sensor (optional) |
+| GPIO9 | Ultrasonic/IR | Distance sensor (optional) |
+| GPIO10 | I2C SCL | LED Matrix clock (optional) |
 
 See [docs/hardware/wiring_diagram.png](docs/hardware/) for complete wiring schematic.
 
@@ -132,6 +138,21 @@ Comprehensive system health monitoring with automatic recovery:
 - **Health Status Levels**: OK, Warning, Critical, Failed
 - **Automatic Recovery**: Attempts recovery when modules report Warning/Critical status
 - **Periodic Checks**: Configurable health check interval (default: 30 seconds)
+
+#### Optional Displays & Sensors
+- **8x8 LED Matrix**: Enhanced visual feedback with built-in and custom animations
+  - 4 built-in animations (Motion Alert, Battery Low, Boot Status, WiFi Connected)
+  - Custom animation support via text file upload
+  - Web-based animation management and template download
+  - Up to 8 custom animations loaded simultaneously
+  - Assign animations to system functions (motion, battery, boot, WiFi)
+- **Multi-Sensor Support** (PIR, IR, Ultrasonic): Advanced motion detection with sensor fusion
+  - Up to 4 sensors simultaneously with flexible fusion modes
+  - Distance-based motion detection (20mm to 4m range)
+  - Direction sensing (approaching vs. leaving)
+  - Configurable thresholds and modes per sensor
+  - Low-power trigger + high-power measurement combinations
+  - See [Multi-Sensor Documentation](docs/MULTI_SENSOR.md)
 
 ## Quick Start
 
@@ -354,6 +375,8 @@ All test outputs are stored in `test/reports/` and excluded from git. When using
 - **[Hardware Assembly Guide](docs/hardware/HARDWARE_ASSEMBLY.md)** - Step-by-step assembly instructions with wiring diagrams
 - **[Troubleshooting Guide](TROUBLESHOOTING.md)** - Common issues, diagnostic procedures, and recovery options
 - **[API Reference](docs/api/API.md)** - Complete REST API documentation with examples
+- **[LED Matrix Custom Animations](data/animations/README.md)** - Guide for creating and managing custom animations
+- **[Multi-Sensor Guide](docs/MULTI_SENSOR.md)** - Comprehensive guide for using multiple sensors with fusion modes
 - [Docker Guide](DOCKER_GUIDE.md) - Docker-based development environment
 - [PlatformIO Setup](SETUP_PLATFORMIO.md) - Native PlatformIO installation
 
@@ -363,6 +386,8 @@ All test outputs are stored in `test/reports/` and excluded from git. When using
 - [Power Manager Design](docs/POWER_MANAGER_DESIGN.md) - Battery and power management
 - [Watchdog System Design](docs/WATCHDOG_DESIGN.md) - Health monitoring and recovery
 - [Test Plan](docs/testing/test_plan.md) - Testing strategies and procedures
+- **[LED Matrix Implementation](ISSUE12_COMPLETE.md)** - Complete 8x8 LED Matrix support documentation
+- **[Multi-Sensor Implementation](ISSUE4_STATUS.md)** - Hardware universality and sensor support status (Issue #4)
 
 ## License
 

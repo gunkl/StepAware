@@ -1,5 +1,5 @@
-#ifndef STEPAWARE_HAL_ULTRASONIC_H
-#define STEPAWARE_HAL_ULTRASONIC_H
+#ifndef STEPAWARE_HAL_ULTRASONIC_GROVE_H
+#define STEPAWARE_HAL_ULTRASONIC_GROVE_H
 
 #include <Arduino.h>
 #include "config.h"
@@ -7,24 +7,29 @@
 #include "distance_sensor_base.h"
 
 /**
- * @brief Hardware Abstraction Layer for HC-SR04 Ultrasonic Distance Sensor
+ * @brief Hardware Abstraction Layer for Grove Ultrasonic Distance Sensor v2.0
  *
  * Refactored architecture:
  * 1. Hardware communication: Uses existing pulseIn-based implementation (works!)
  * 2. Inherits DistanceSensorBase for movement/direction detection logic (shared)
  * 3. Implements HAL_MotionSensor interface for StepAware product integration
  *
- * Technical Specifications (HC-SR04):
- * - Detection Range: 2cm - 400cm
- * - Accuracy: ~3mm
+ * Technical Specifications (Grove Ultrasonic Ranger v2.0):
+ * - Detection Range: 2cm - 350cm
+ * - Accuracy: 1cm
  * - Measuring Angle: 15 degrees
- * - Operating Voltage: 5V (works with 3.3V trigger)
- * - Current Draw: ~15mA during measurement
+ * - Operating Voltage: 3.2V - 5.2V (excellent 3.3V compatibility!)
+ * - Current Draw: ~8mA during measurement (lower power than HC-SR04!)
+ *
+ * Key Difference from HC-SR04:
+ * - Single SIG pin shared for both trigger and echo (saves 1 GPIO pin!)
+ * - Better 3.3V voltage support
+ * - Lower power consumption (8mA vs 15mA)
  */
-class HAL_Ultrasonic : public HAL_MotionSensor, public DistanceSensorBase {
+class HAL_Ultrasonic_Grove : public HAL_MotionSensor, public DistanceSensorBase {
 public:
-    HAL_Ultrasonic(uint8_t triggerPin, uint8_t echoPin, bool mock_mode = false);
-    ~HAL_Ultrasonic() override;
+    HAL_Ultrasonic_Grove(uint8_t sigPin, bool mock_mode = false);
+    ~HAL_Ultrasonic_Grove() override;
 
     // =========================================================================
     // HAL_MotionSensor Interface Implementation
@@ -34,7 +39,7 @@ public:
     void update() override;
     bool motionDetected() const override { return isMotionDetected(); }
     bool isReady() const override { return m_initialized; }
-    SensorType getSensorType() const override { return SENSOR_TYPE_ULTRASONIC; }
+    SensorType getSensorType() const override { return SENSOR_TYPE_ULTRASONIC_GROVE; }
     const SensorCapabilities& getCapabilities() const override;
     uint32_t getWarmupTimeRemaining() const override { return 0; }
 
@@ -99,18 +104,17 @@ public:
 
 protected:
     /**
-     * @brief Get raw distance reading from HC-SR04 sensor
+     * @brief Get raw distance reading from Grove ultrasonic sensor
      *
      * Implements DistanceSensorBase::getDistanceReading()
-     * Uses existing pulseIn-based implementation.
+     * Uses existing pulseIn-based implementation with single SIG pin.
      *
      * @return Distance in millimeters, 0 if error/timeout
      */
     uint32_t getDistanceReading() override;
 
 private:
-    uint8_t m_triggerPin;
-    uint8_t m_echoPin;
+    uint8_t m_sigPin;
     bool m_mockMode;
     bool m_initialized;
     uint32_t m_lastMeasurementTime;
@@ -122,4 +126,4 @@ private:
     static constexpr uint32_t MIN_MEASUREMENT_INTERVAL_MS = 60;
 };
 
-#endif // STEPAWARE_HAL_ULTRASONIC_H
+#endif // STEPAWARE_HAL_ULTRASONIC_GROVE_H

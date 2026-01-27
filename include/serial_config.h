@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "config_manager.h"
+#include "sensor_manager.h"
 
 /**
  * @file serial_config.h
@@ -25,11 +26,12 @@
 class SerialConfigUI {
 public:
     /**
-     * @brief Construct SerialConfigUI with ConfigManager reference
+     * @brief Construct SerialConfigUI with ConfigManager and SensorManager references
      *
      * @param configManager Reference to the configuration manager
+     * @param sensorManager Reference to the sensor manager
      */
-    SerialConfigUI(ConfigManager& configManager);
+    SerialConfigUI(ConfigManager& configManager, SensorManager& sensorManager);
 
     /**
      * @brief Initialize the serial configuration interface
@@ -75,6 +77,7 @@ public:
 
 private:
     ConfigManager& m_configManager;
+    SensorManager& m_sensorManager;
     bool m_initialized;
     bool m_configMode;
 

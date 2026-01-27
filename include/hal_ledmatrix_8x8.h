@@ -2,7 +2,7 @@
 #define STEPAWARE_HAL_LEDMATRIX_8X8_H
 
 #include <Arduino.h>
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     #include <Adafruit_LEDBackpack.h>
     #include <Adafruit_GFX.h>
 #endif
@@ -30,10 +30,12 @@ public:
      */
     enum AnimationPattern {
         ANIM_NONE,              // No animation
-        ANIM_MOTION_ALERT,      // Flash + scroll up arrow
-        ANIM_BATTERY_LOW,       // Show battery percentage
-        ANIM_BOOT_STATUS,       // Boot-time info display
-        ANIM_WIFI_CONNECTED,    // WiFi checkmark
+        ANIM_MOTION_ALERT,      // Flash arrow + scroll down
+        ANIM_BATTERY_LOW,       // Show battery draining animation
+        ANIM_BOOT_STATUS,       // Boot-time status (circle-check for success)
+        ANIM_ERROR,             // Error indicator (X icon)
+        ANIM_WIFI_CONNECTED,    // WiFi signal bars
+        ANIM_WIFI_DISCONNECTED, // Broken WiFi icon
         ANIM_CUSTOM             // For Phase 2
     };
 
@@ -243,7 +245,7 @@ public:
 
 private:
     // Hardware
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     Adafruit_8x8matrix* m_matrix;
 #endif
     uint8_t m_i2cAddress;

@@ -169,6 +169,13 @@ public:
     virtual uint32_t getDetectionThreshold() const { return 0; }
 
     /**
+     * @brief Set sample window size (for distance sensors with averaging)
+     *
+     * @param size Window size in samples (3-20)
+     */
+    virtual void setSampleWindowSize(uint8_t size) { (void)size; }
+
+    /**
      * @brief Enable or disable direction detection
      *
      * @param enable true to enable direction detection

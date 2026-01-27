@@ -32,12 +32,14 @@ public:
         uint8_t secondaryPin;             // Secondary GPIO pin (ultrasonic echo)
         bool enabled;                     // Sensor enabled
         bool isPrimary;                   // Primary sensor flag
-        uint32_t detectionThreshold;      // mm
+        uint32_t detectionThreshold;      // mm - warning trigger distance
+        uint32_t maxDetectionDistance;    // mm - max detection range (0=use threshold)
         uint32_t debounceMs;              // ms
         uint32_t warmupMs;                // ms
         bool enableDirectionDetection;    // Direction detection enabled
-        uint8_t rapidSampleCount;         // Rapid sample count
-        uint16_t rapidSampleMs;           // Rapid sample interval
+        uint8_t directionTriggerMode;     // 0=approaching, 1=receding, 2=both
+        uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
+        uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
     };
 
     /**
