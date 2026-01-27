@@ -3,9 +3,10 @@
 #include "power_manager.h"
 #include "watchdog_manager.h"
 #include "hal_ledmatrix_8x8.h"
+#include "sensor_manager.h"
 #include <ArduinoJson.h>
-#ifndef MOCK_HARDWARE
-#include <LittleFS.h>
+#if !MOCK_HARDWARE
+#include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
 #endif
 
 WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager* config)
@@ -16,6 +17,7 @@ WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager
     , m_power(nullptr)
     , m_watchdog(nullptr)
     , m_ledMatrix(nullptr)
+    , m_sensorManager(nullptr)
     , m_corsEnabled(true)
 {
 }
@@ -31,7 +33,10 @@ bool WebAPI::begin() {
 
     LOG_INFO("WebAPI: Registering endpoints");
 
-    // Root endpoint - full dashboard UI
+    // Root endpoint - inline dashboard UI
+    // NOTE: We use inline HTML (buildDashboardHTML) instead of filesystem-based UI
+    // because it includes all features (multi-sensor, LED matrix, animations) and
+    // is simpler to deploy (no filesystem upload required).
     m_server->on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
         this->handleRoot(req);
     });
@@ -216,6 +221,10 @@ void WebAPI::setLEDMatrix(HAL_LEDMatrix_8x8* ledMatrix) {
     m_ledMatrix = ledMatrix;
 }
 
+void WebAPI::setSensorManager(SensorManager* sensorManager) {
+    m_sensorManager = sensorManager;
+}
+
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
     StaticJsonDocument<2048> doc;
 
@@ -380,8 +389,8 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         currentConfig.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
         currentConfig.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
         currentConfig.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
-        currentConfig.sensors[slot].rapidSampleCount = sensorObj["rapidSampleCount"] | 5;
-        currentConfig.sensors[slot].rapidSampleMs = sensorObj["rapidSampleMs"] | 100;
+        currentConfig.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 5;
+        currentConfig.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
     }
 
     free(jsonStr);
@@ -395,6 +404,38 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
     if (!m_config->save()) {
         sendError(request, 500, "Failed to save sensor configuration");
         return;
+    }
+
+    // Apply configuration changes to live sensors (if sensor manager available)
+    if (m_sensorManager) {
+        for (uint8_t i = 0; i < 4; i++) {
+            HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+            if (sensor && currentConfig.sensors[i].active) {
+                // Apply threshold changes
+                if (currentConfig.sensors[i].detectionThreshold > 0) {
+                    sensor->setDetectionThreshold(currentConfig.sensors[i].detectionThreshold);
+                    LOG_INFO("Applied threshold %u mm to sensor %u",
+                             currentConfig.sensors[i].detectionThreshold, i);
+                }
+
+                // Apply direction detection setting
+                sensor->setDirectionDetection(currentConfig.sensors[i].enableDirectionDetection);
+
+                // Apply window size changes
+                if (currentConfig.sensors[i].sampleWindowSize > 0) {
+                    sensor->setSampleWindowSize(currentConfig.sensors[i].sampleWindowSize);
+                    LOG_INFO("Applied window size %u to sensor %u",
+                             currentConfig.sensors[i].sampleWindowSize, i);
+                }
+
+                // Apply distance range if sensor supports it
+                const SensorCapabilities& caps = sensor->getCapabilities();
+                if (caps.supportsDistanceMeasurement) {
+                    sensor->setDistanceRange(caps.minDetectionDistance, caps.maxDetectionDistance);
+                }
+            }
+        }
+        LOG_INFO("Sensor configuration applied to live sensors");
     }
 
     // Return updated sensor configuration
@@ -558,7 +599,7 @@ void WebAPI::handleUploadAnimation(AsyncWebServerRequest* request, const String&
 
     // We need to accumulate the file data as it comes in chunks
     // For now, we'll implement a simplified version that writes to LittleFS
-    #ifndef MOCK_HARDWARE
+    #if !MOCK_HARDWARE
     static File uploadFile;
 
     if (index == 0) {
@@ -1104,6 +1145,12 @@ void WebAPI::sendError(AsyncWebServerRequest* request, int code, const char* mes
 }
 
 void WebAPI::handleRoot(AsyncWebServerRequest* request) {
+    // Serve inline HTML dashboard
+    // Note: We use inline HTML instead of filesystem-based UI because:
+    // 1. All features are implemented (multi-sensor, LED matrix, animations)
+    // 2. Simpler deployment (no filesystem upload step)
+    // 3. No LittleFS mount/filesystem issues
+    // 4. For single-developer embedded projects, reflashing is acceptable
     String html = buildDashboardHTML();
     request->send(200, "text/html", html);
 }
@@ -1506,8 +1553,10 @@ String WebAPI::buildDashboardHTML() {
     html += "body:JSON.stringify({mode:mode})});if(res.ok)fetchStatus();}catch(e){}}";
 
     // Config loading
+    html += "let currentConfig={};";
     html += "async function loadConfig(){";
     html += "try{const res=await fetch('/api/config');const cfg=await res.json();";
+    html += "currentConfig=cfg;";
     html += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
     html += "document.getElementById('cfg-defaultMode').value=cfg.device?.defaultMode||0;";
     html += "document.getElementById('cfg-wifiSSID').value=cfg.wifi?.ssid||'';";
@@ -1516,11 +1565,6 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
     html += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
     html += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
-    html += "document.getElementById('cfg-sensorMinDistance').value=cfg.sensor?.minDistance||30;";
-    html += "document.getElementById('cfg-sensorMaxDistance').value=cfg.sensor?.maxDistance||200;";
-    html += "document.getElementById('cfg-sensorDirection').value=cfg.sensor?.directionEnabled?1:0;";
-    html += "document.getElementById('cfg-sensorSampleCount').value=cfg.sensor?.rapidSampleCount||5;";
-    html += "document.getElementById('cfg-sensorSampleInterval').value=cfg.sensor?.rapidSampleMs||100;";
     html += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
     html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
     html += "document.getElementById('cfg-logLevel').value=cfg.logging?.level||2;";
@@ -1531,20 +1575,23 @@ String WebAPI::buildDashboardHTML() {
     html += "async function saveConfig(e){";
     html += "e.preventDefault();";
     html += "const pwdField=document.getElementById('cfg-wifiPassword');";
-    html += "const cfg={device:{name:document.getElementById('cfg-deviceName').value,";
-    html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value)},";
-    html += "wifi:{ssid:document.getElementById('cfg-wifiSSID').value,enabled:true},";
-    html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000},";
-    html += "sensor:{minDistance:parseInt(document.getElementById('cfg-sensorMinDistance').value),";
-    html += "maxDistance:parseInt(document.getElementById('cfg-sensorMaxDistance').value),";
-    html += "directionEnabled:parseInt(document.getElementById('cfg-sensorDirection').value)===1,";
-    html += "rapidSampleCount:parseInt(document.getElementById('cfg-sensorSampleCount').value),";
-    html += "rapidSampleMs:parseInt(document.getElementById('cfg-sensorSampleInterval').value)},";
-    html += "led:{brightnessFull:parseInt(document.getElementById('cfg-ledBrightnessFull').value),";
-    html += "brightnessDim:parseInt(document.getElementById('cfg-ledBrightnessDim').value)},";
-    html += "logging:{level:parseInt(document.getElementById('cfg-logLevel').value)},";
-    html += "power:{savingEnabled:parseInt(document.getElementById('cfg-powerSaving').value)===1}};";
+    html += "const cfg=JSON.parse(JSON.stringify(currentConfig));";
+    html += "cfg.device=cfg.device||{};";
+    html += "cfg.device.name=document.getElementById('cfg-deviceName').value;";
+    html += "cfg.device.defaultMode=parseInt(document.getElementById('cfg-defaultMode').value);";
+    html += "cfg.wifi=cfg.wifi||{};";
+    html += "cfg.wifi.ssid=document.getElementById('cfg-wifiSSID').value;";
+    html += "cfg.wifi.enabled=true;";
     html += "if(pwdField.value.length>0){cfg.wifi.password=pwdField.value;}";
+    html += "cfg.motion=cfg.motion||{};";
+    html += "cfg.motion.warningDuration=parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000;";
+    html += "cfg.led=cfg.led||{};";
+    html += "cfg.led.brightnessFull=parseInt(document.getElementById('cfg-ledBrightnessFull').value);";
+    html += "cfg.led.brightnessDim=parseInt(document.getElementById('cfg-ledBrightnessDim').value);";
+    html += "cfg.logging=cfg.logging||{};";
+    html += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
+    html += "cfg.power=cfg.power||{};";
+    html += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
     html += "try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},";
     html += "body:JSON.stringify(cfg)});if(res.ok){";
     html += "document.getElementById('save-indicator').classList.add('show');";
@@ -1600,7 +1647,8 @@ String WebAPI::buildDashboardHTML() {
     html += "let sensorSlots=[null,null,null,null];";
     html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','debounce']},";
     html += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
-    html += "ULTRASONIC:{name:'Ultrasonic Distance',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
+    html += "ULTRASONIC:{name:'Ultrasonic (HC-SR04)',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']},";
+    html += "ULTRASONIC_GROVE:{name:'Ultrasonic (Grove)',pins:1,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
 
     // Load sensors from configuration
     html += "async function loadSensors(){";
@@ -1629,7 +1677,7 @@ String WebAPI::buildDashboardHTML() {
     html += "html+='<div class=\"sensor-header\">';";
     html += "html+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
     html += "html+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
-    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':'ULTRASONIC')+'</span>';";
+    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':sensor.type===4?'GROVE':'HC-SR04')+'</span>';";
     html += "html+='<span class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</span></div>';";
     html += "html+='<div class=\"sensor-actions\">';";
     html += "html+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
@@ -1650,12 +1698,18 @@ String WebAPI::buildDashboardHTML() {
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
 
-    // Ultrasonic wiring
+    // Ultrasonic HC-SR04 wiring (4-pin)
     html += "else if(sensor.type===2){";
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">5V</span></div>';";
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';";
     html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
+
+    // Grove Ultrasonic wiring (3-pin)
+    html += "else if(sensor.type===4){";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove VCC (Red) → <span style=\"color:#dc2626;font-weight:600;\">3.3V/5V</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove GND (Black) → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove SIG (Yellow) → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
 
     html += "html+='</div></div>';";
 
@@ -1665,10 +1719,15 @@ String WebAPI::buildDashboardHTML() {
     html += "if(sensor.type===0){";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Debounce:</span> <span>'+sensor.debounceMs+'ms</span></div>';}";
-    html += "else if(sensor.type===2){";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Range:</span> <span>'+sensor.detectionThreshold+'mm</span></div>';";
+    html += "else if(sensor.type===2||sensor.type===4){";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warn At:</span> <span>'+sensor.detectionThreshold+'mm</span></div>';";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Direction:</span> <span>'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}";
+    html += "if(sensor.enableDirectionDetection){";
+    html += "const dirMode=(sensor.directionTriggerMode===0?'Approaching':sensor.directionTriggerMode===1?'Receding':'Both');";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Trigger:</span> <span>'+dirMode+'</span></div>';";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}}";
     html += "html+='</div></div>';";
 
     html += "html+='</div>';";  // Close grid
@@ -1680,21 +1739,22 @@ String WebAPI::buildDashboardHTML() {
     html += "function addSensor(){";
     html += "const freeSlot=sensorSlots.findIndex(s=>s===null);";
     html += "if(freeSlot===-1){alert('Maximum 4 sensors allowed. Remove a sensor first.');return;}";
-    html += "const type=prompt('Select sensor type:\\n0 = PIR Motion\\n1 = IR Beam-Break\\n2 = Ultrasonic Distance','0');";
+    html += "const type=prompt('Select sensor type:\\n0 = PIR Motion\\n1 = IR Beam-Break\\n2 = Ultrasonic (HC-SR04 4-pin)\\n4 = Ultrasonic (Grove 3-pin)','0');";
     html += "if(type===null)return;";
     html += "const typeNum=parseInt(type);";
-    html += "if(typeNum<0||typeNum>2){alert('Invalid sensor type');return;}";
+    html += "if(typeNum<0||typeNum>4||typeNum===3){alert('Invalid sensor type');return;}";
     html += "const name=prompt('Enter sensor name:','Sensor '+(freeSlot+1));";
     html += "if(!name)return;";
     html += "const pin=parseInt(prompt('Enter primary pin (GPIO number):','5'));";
     html += "if(isNaN(pin)||pin<0||pin>48){alert('Invalid pin number');return;}";
     html += "const sensor={type:typeNum,name:name,primaryPin:pin,enabled:true,isPrimary:freeSlot===0,";
-    html += "warmupMs:60000,debounceMs:100,detectionThreshold:300,enableDirectionDetection:true,";
-    html += "rapidSampleCount:5,rapidSampleMs:200};";
+    html += "warmupMs:60000,debounceMs:100,detectionThreshold:1500,maxDetectionDistance:3000,enableDirectionDetection:true,";
+    html += "directionTriggerMode:0,rapidSampleCount:5,rapidSampleMs:200};";
     html += "if(typeNum===2){";
-    html += "const echoPin=parseInt(prompt('Enter echo pin (GPIO number):','14'));";
+    html += "const echoPin=parseInt(prompt('Enter echo pin for HC-SR04 (GPIO number):','9'));";
     html += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
     html += "sensor.secondaryPin=echoPin;}";
+    html += "if(typeNum===4){sensor.secondaryPin=0;}";
     html += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
 
     // Remove sensor
@@ -1718,20 +1778,26 @@ String WebAPI::buildDashboardHTML() {
     html += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
     html += "const debounce=parseInt(prompt('Debounce time (ms):',sensor.debounceMs));";
     html += "if(!isNaN(debounce)&&debounce>=10&&debounce<=1000)sensor.debounceMs=debounce;}";
-    html += "else if(sensor.type===2){";
-    html += "const minDist=parseInt(prompt('Min detection distance (mm):',sensor.detectionThreshold));";
-    html += "if(!isNaN(minDist)&&minDist>=10)sensor.detectionThreshold=minDist;";
-    html += "const dirEn=confirm('Enable direction detection?');sensor.enableDirectionDetection=dirEn;";
-    html += "const samples=parseInt(prompt('Rapid sample count:',sensor.rapidSampleCount));";
+    html += "else if(sensor.type===2||sensor.type===4){";
+    html += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
+    html += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
+    html += "const warnDist=parseInt(prompt('Warning trigger distance (mm)\\nWarning activates when person is within:',sensor.detectionThreshold||1500));";
+    html += "if(!isNaN(warnDist)&&warnDist>=10)sensor.detectionThreshold=warnDist;";
+    html += "const dirStr=prompt('Enable direction detection? (yes/no):',(sensor.enableDirectionDetection?'yes':'no'));";
+    html += "if(dirStr!==null){sensor.enableDirectionDetection=(dirStr.toLowerCase()==='yes'||dirStr==='1');}";
+    html += "if(sensor.enableDirectionDetection){";
+    html += "const dirMode=prompt('Trigger on:\\n0=Approaching (walking towards)\\n1=Receding (walking away)\\n2=Both directions',sensor.directionTriggerMode||0);";
+    html += "if(dirMode!==null&&!isNaN(parseInt(dirMode))){sensor.directionTriggerMode=parseInt(dirMode);}";
+    html += "const samples=parseInt(prompt('Rapid sample count (2-20):',sensor.rapidSampleCount||5));";
     html += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.rapidSampleCount=samples;";
-    html += "const interval=parseInt(prompt('Sample interval (ms):',sensor.rapidSampleMs));";
-    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.rapidSampleMs=interval;}";
+    html += "const interval=parseInt(prompt('Sample interval ms (50-1000):',sensor.rapidSampleMs||200));";
+    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.rapidSampleMs=interval;}}";
     html += "renderSensors();saveSensors();}";
 
     // Save sensors to backend
     html += "async function saveSensors(){";
     html += "try{";
-    html += "const activeSensors=sensorSlots.filter(s=>s!==null);";
+    html += "const activeSensors=sensorSlots.map((s,idx)=>s?{...s,slot:idx}:null).filter(s=>s!==null);";
     html += "const res=await fetch('/api/sensors',{method:'POST',";
     html += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeSensors)});";
     html += "if(res.ok){";

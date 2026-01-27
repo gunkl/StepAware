@@ -279,6 +279,14 @@ private:
     uint8_t findPrimarySlot();
 
     /**
+     * @brief Check if sensor motion matches configured direction filter
+     *
+     * @param slotIndex Sensor slot index
+     * @return true if sensor detects motion and direction matches filter
+     */
+    bool sensorMatchesDirectionFilter(uint8_t slotIndex);
+
+    /**
      * @brief Set error message
      *
      * @param error Error message

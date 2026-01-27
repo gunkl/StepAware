@@ -235,11 +235,13 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
             sensorObj["enabled"] = m_config.sensors[i].enabled;
             sensorObj["isPrimary"] = m_config.sensors[i].isPrimary;
             sensorObj["detectionThreshold"] = m_config.sensors[i].detectionThreshold;
+            sensorObj["maxDetectionDistance"] = m_config.sensors[i].maxDetectionDistance;
             sensorObj["debounceMs"] = m_config.sensors[i].debounceMs;
             sensorObj["warmupMs"] = m_config.sensors[i].warmupMs;
             sensorObj["enableDirectionDetection"] = m_config.sensors[i].enableDirectionDetection;
-            sensorObj["rapidSampleCount"] = m_config.sensors[i].rapidSampleCount;
-            sensorObj["rapidSampleMs"] = m_config.sensors[i].rapidSampleMs;
+            sensorObj["directionTriggerMode"] = m_config.sensors[i].directionTriggerMode;
+            sensorObj["sampleWindowSize"] = m_config.sensors[i].sampleWindowSize;
+            sensorObj["sampleRateMs"] = m_config.sensors[i].sampleRateMs;
         }
     }
 
@@ -380,11 +382,13 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].enabled = sensorObj["enabled"] | true;
                 m_config.sensors[slot].isPrimary = sensorObj["isPrimary"] | false;
                 m_config.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 0;
+                m_config.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 0;
                 m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
                 m_config.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
                 m_config.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
-                m_config.sensors[slot].rapidSampleCount = sensorObj["rapidSampleCount"] | 0;
-                m_config.sensors[slot].rapidSampleMs = sensorObj["rapidSampleMs"] | 0;
+                m_config.sensors[slot].directionTriggerMode = sensorObj["directionTriggerMode"] | 0;
+                m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 5;
+                m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
             }
         }
     }
@@ -562,11 +566,13 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].secondaryPin = 0;
     m_config.sensors[0].isPrimary = true;
     m_config.sensors[0].detectionThreshold = 0;  // N/A for PIR
+    m_config.sensors[0].maxDetectionDistance = 0;  // N/A for PIR
     m_config.sensors[0].debounceMs = 100;
     m_config.sensors[0].warmupMs = PIR_WARMUP_TIME_MS;
     m_config.sensors[0].enableDirectionDetection = false;
-    m_config.sensors[0].rapidSampleCount = 0;
-    m_config.sensors[0].rapidSampleMs = 0;
+    m_config.sensors[0].directionTriggerMode = 0;  // Approaching
+    m_config.sensors[0].sampleWindowSize = 5;   // Fast response for pedestrians
+    m_config.sensors[0].sampleRateMs = 60;      // HC-SR04 minimum
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
 

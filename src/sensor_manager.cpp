@@ -228,6 +228,50 @@ SensorFusionMode SensorManager::getFusionMode() const {
     return m_fusionMode;
 }
 
+// Helper function to check if sensor motion matches configured direction trigger mode
+bool SensorManager::sensorMatchesDirectionFilter(uint8_t slotIndex) {
+    if (!m_slots[slotIndex].sensor || !m_slots[slotIndex].enabled) {
+        return false;
+    }
+
+    HAL_MotionSensor* sensor = m_slots[slotIndex].sensor;
+    const SensorConfig& config = m_slots[slotIndex].config;
+
+    // Basic motion detection check
+    if (!sensor->motionDetected()) {
+        return false;
+    }
+
+    // If direction detection not enabled for this sensor, accept any motion
+    if (!config.enableDirectionDetection) {
+        return true;
+    }
+
+    // Check if sensor supports direction detection
+    if (!sensor->getCapabilities().supportsDirectionDetection) {
+        return true;  // Accept motion if sensor doesn't support direction
+    }
+
+    // Get current direction
+    MotionDirection direction = sensor->getDirection();
+
+    // Apply direction trigger mode filter
+    // 0 = approaching only, 1 = receding only, 2 = both directions
+    switch (config.directionTriggerMode) {
+        case 0:  // Approaching only
+            return (direction == DIRECTION_APPROACHING);
+
+        case 1:  // Receding only
+            return (direction == DIRECTION_RECEDING);
+
+        case 2:  // Both directions
+            return (direction == DIRECTION_APPROACHING || direction == DIRECTION_RECEDING);
+
+        default:
+            return true;  // Unknown mode, accept any motion
+    }
+}
+
 bool SensorManager::isMotionDetected() {
     if (!m_initialized || m_activeSensorCount == 0) {
         return false;
@@ -235,25 +279,23 @@ bool SensorManager::isMotionDetected() {
 
     switch (m_fusionMode) {
         case FUSION_MODE_ANY: {
-            // Any sensor detecting = motion
+            // Any sensor detecting with matching direction = motion
             for (uint8_t i = 0; i < MAX_SENSORS; i++) {
-                if (m_slots[i].sensor && m_slots[i].enabled) {
-                    if (m_slots[i].sensor->motionDetected()) {
-                        return true;
-                    }
+                if (sensorMatchesDirectionFilter(i)) {
+                    return true;
                 }
             }
             return false;
         }
 
         case FUSION_MODE_ALL: {
-            // All sensors must detect
+            // All sensors must detect with matching direction
             bool anyActive = false;
             for (uint8_t i = 0; i < MAX_SENSORS; i++) {
                 if (m_slots[i].sensor && m_slots[i].enabled) {
                     anyActive = true;
-                    if (!m_slots[i].sensor->motionDetected()) {
-                        return false;  // At least one not detecting
+                    if (!sensorMatchesDirectionFilter(i)) {
+                        return false;  // At least one not detecting with correct direction
                     }
                 }
             }
@@ -261,20 +303,18 @@ bool SensorManager::isMotionDetected() {
         }
 
         case FUSION_MODE_TRIGGER_MEASURE: {
-            // Primary/trigger sensor must detect
-            HAL_MotionSensor* primary = getPrimarySensor();
-            if (primary) {
-                return primary->motionDetected();
+            // Primary/trigger sensor must detect with matching direction
+            if (m_primarySlotIndex != 0xFF) {
+                return sensorMatchesDirectionFilter(m_primarySlotIndex);
             }
             return false;
         }
 
         case FUSION_MODE_INDEPENDENT:
         default: {
-            // Independent mode - check primary sensor
-            HAL_MotionSensor* primary = getPrimarySensor();
-            if (primary) {
-                return primary->motionDetected();
+            // Independent mode - check primary sensor with direction filter
+            if (m_primarySlotIndex != 0xFF) {
+                return sensorMatchesDirectionFilter(m_primarySlotIndex);
             }
             return false;
         }

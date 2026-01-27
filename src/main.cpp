@@ -13,9 +13,13 @@
  */
 
 #include <Arduino.h>
+#if !MOCK_HARDWARE
+#include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
+#endif
 #include "config.h"
 #include "state_machine.h"
 #include "sensor_factory.h"
+#include "sensor_manager.h"
 #include "hal_led.h"
 #include "hal_button.h"
 #include "hal_ledmatrix_8x8.h"
@@ -28,8 +32,8 @@
 // Global Hardware Objects
 // ============================================================================
 
-// Motion sensor (created via factory for runtime flexibility)
-HAL_MotionSensor* motionSensor = nullptr;
+// Multi-sensor manager (Issue #4 Phase 2, Issue #17)
+SensorManager sensorManager;
 
 // Display components (Issue #12)
 HAL_LEDMatrix_8x8* ledMatrix = nullptr;  // 8x8 LED matrix display
@@ -42,13 +46,16 @@ StateMachine* stateMachine = nullptr;
 
 // Configuration
 ConfigManager configManager;
-SerialConfigUI serialConfig(configManager);
+SerialConfigUI serialConfig(configManager, sensorManager);
 
 // WiFi and Web API
 WiFiManager wifiManager;
 AsyncWebServer webServer(80);
 WebAPI* webAPI = nullptr;
 bool webServerStarted = false;
+
+// Diagnostic Mode
+bool diagnosticMode = false;
 
 // ============================================================================
 // Web API Initialization (can be called at runtime)
@@ -75,6 +82,7 @@ void startWebAPI() {
     if (webAPI == nullptr) {
         webAPI = new WebAPI(&webServer, stateMachine, &configManager);
         webAPI->setWiFiManager(&wifiManager);
+        webAPI->setSensorManager(&sensorManager);
     }
 
     // Always update LED matrix reference (may be initialized after WebAPI)
@@ -122,30 +130,48 @@ void printStatus() {
     Serial.printf("Warning Active: %s\n", stateMachine->isWarningActive() ? "YES" : "NO");
     Serial.println();
 
-    // Sensor info (polymorphic)
-    const SensorCapabilities& caps = motionSensor->getCapabilities();
-    Serial.printf("Sensor: %s\n", caps.sensorTypeName);
-    Serial.printf("  Ready: %s\n", motionSensor->isReady() ? "YES" : "NO");
-    if (!motionSensor->isReady() && caps.requiresWarmup) {
-        Serial.printf("  Warmup remaining: %u seconds\n",
-                      motionSensor->getWarmupTimeRemaining() / 1000);
-    }
-    // Show distance if sensor supports it
-    if (caps.supportsDistanceMeasurement) {
-        Serial.printf("  Distance: %u mm\n", motionSensor->getDistance());
-        Serial.printf("  Threshold: %u mm\n", motionSensor->getDetectionThreshold());
-    }
-    // Show direction if sensor supports it
-    if (caps.supportsDirectionDetection) {
-        const char* dirName = "Unknown";
-        switch (motionSensor->getDirection()) {
-            case DIRECTION_STATIONARY: dirName = "Stationary"; break;
-            case DIRECTION_APPROACHING: dirName = "Approaching"; break;
-            case DIRECTION_RECEDING: dirName = "Receding"; break;
-            default: break;
+    // Sensor info (multi-sensor support)
+    Serial.printf("Sensors: %u active (fusion mode: %s)\n",
+                  sensorManager.getActiveSensorCount(),
+                  sensorManager.getFusionMode() == FUSION_MODE_ANY ? "ANY" :
+                  sensorManager.getFusionMode() == FUSION_MODE_ALL ? "ALL" : "TRIGGER_MEASURE");
+
+    // Iterate through all sensor slots
+    HAL_MotionSensor* primarySensor = sensorManager.getPrimarySensor();
+    for (uint8_t i = 0; i < 4; i++) {
+        HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+        if (sensor) {
+            const SensorCapabilities& caps = sensor->getCapabilities();
+            Serial.printf("  [%u] %s - %s\n", i,
+                         (sensor == primarySensor) ? "PRIMARY" : "secondary",
+                         caps.sensorTypeName);
+            Serial.printf("      Ready: %s\n", sensor->isReady() ? "YES" : "NO");
+
+            if (!sensor->isReady() && caps.requiresWarmup) {
+                Serial.printf("      Warmup remaining: %u seconds\n",
+                             sensor->getWarmupTimeRemaining() / 1000);
+            }
+
+            // Show distance if sensor supports it
+            if (caps.supportsDistanceMeasurement) {
+                Serial.printf("      Distance: %u mm\n", sensor->getDistance());
+                Serial.printf("      Threshold: %u mm\n", sensor->getDetectionThreshold());
+            }
+
+            // Show direction if sensor supports it
+            if (caps.supportsDirectionDetection) {
+                const char* dirName = "Unknown";
+                switch (sensor->getDirection()) {
+                    case DIRECTION_STATIONARY: dirName = "Stationary"; break;
+                    case DIRECTION_APPROACHING: dirName = "Approaching"; break;
+                    case DIRECTION_RECEDING: dirName = "Receding"; break;
+                    default: break;
+                }
+                Serial.printf("      Direction: %s\n", dirName);
+            }
         }
-        Serial.printf("  Direction: %s\n", dirName);
     }
+
     Serial.printf("  Motion Events: %u\n", stateMachine->getMotionEventCount());
     Serial.println();
 
@@ -196,8 +222,7 @@ void printBanner() {
     Serial.printf("Version: %s\n", FIRMWARE_VERSION);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
     Serial.printf("Board: ESP32-C3-DevKit-Lipo\n");
-    Serial.printf("Sensor: %s\n", motionSensor ?
-                  motionSensor->getCapabilities().sensorTypeName : "Not initialized");
+    Serial.printf("Sensors: %u configured\n", sensorManager.getActiveSensorCount());
     Serial.println();
 
 #if MOCK_HARDWARE
@@ -237,6 +262,10 @@ void printHelp() {
     Serial.println("  r - Reset statistics");
     Serial.println("  p - Enter configuration mode");
     Serial.println("  g - Show current configuration");
+    Serial.println("  l - List all configured sensors");
+    Serial.println("  f - Set sensor fusion mode (ANY/ALL/TRIGGER_MEASURE)");
+    Serial.println("  v - Toggle sensor diagnostic view (real-time)");
+
 #if MOCK_HARDWARE
     Serial.println();
     Serial.println("Mock Mode Commands:");
@@ -252,7 +281,7 @@ void printHelp() {
     Serial.println();
     Serial.println("Hardware:");
     Serial.println("  Button - Press to cycle modes");
-    Serial.printf("  Sensor - %s\n", motionSensor->getCapabilities().sensorTypeName);
+    Serial.printf("  Sensors - %u configured\n", sensorManager.getActiveSensorCount());
     Serial.println("  Hazard LED - Warning indicator");
     Serial.println("  Status LED - Mode indicator");
     Serial.println();
@@ -308,7 +337,13 @@ void processSerialCommand() {
         case 'r':
         case 'R':
             Serial.println("[Command] Resetting statistics");
-            motionSensor->resetEventCount();
+            // Reset event counts on all sensors
+            for (uint8_t i = 0; i < 4; i++) {
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+                if (sensor) {
+                    sensor->resetEventCount();
+                }
+            }
             modeButton.resetClickCount();
             break;
 
@@ -324,27 +359,101 @@ void processSerialCommand() {
             configManager.print();
             break;
 
+        case 'l':
+        case 'L':
+            // List all configured sensors
+            Serial.println("[Command] Configured Sensors:");
+            Serial.println("========================================");
+            sensorManager.printStatus();
+            Serial.println("========================================");
+            Serial.printf("Fusion Mode: %s\n",
+                         sensorManager.getFusionMode() == FUSION_MODE_ANY ? "ANY (OR)" :
+                         sensorManager.getFusionMode() == FUSION_MODE_ALL ? "ALL (AND)" : "TRIGGER_MEASURE");
+            Serial.printf("Active Sensors: %u\n", sensorManager.getActiveSensorCount());
+            {
+                HAL_MotionSensor* primary = sensorManager.getPrimarySensor();
+                if (primary) {
+                    for (uint8_t i = 0; i < 4; i++) {
+                        if (sensorManager.getSensor(i) == primary) {
+                            Serial.printf("Primary Sensor Slot: %u\n", i);
+                            break;
+                        }
+                    }
+                }
+            }
+            Serial.println();
+            break;
+
+        case 'f':
+        case 'F':
+            // Set sensor fusion mode
+            Serial.println("[Command] Select Fusion Mode:");
+            Serial.println("  0 = ANY (motion if ANY sensor detects)");
+            Serial.println("  1 = ALL (motion if ALL sensors detect)");
+            Serial.println("  2 = TRIGGER_MEASURE (first triggers, second measures)");
+            Serial.print("Enter mode (0-2): ");
+            while (!Serial.available()) { delay(10); }
+            {
+                char modeChar = Serial.read();
+                Serial.println(modeChar);
+                uint8_t mode = modeChar - '0';
+                if (mode <= 2) {
+                    sensorManager.setFusionMode((SensorFusionMode)mode);
+                    Serial.printf("Fusion mode set to: %s\n",
+                                 mode == 0 ? "ANY" : mode == 1 ? "ALL" : "TRIGGER_MEASURE");
+                } else {
+                    Serial.println("Invalid mode. Use 0, 1, or 2.");
+                }
+            }
+            break;
+
+        case 'v':
+        case 'V':
+            // Toggle diagnostic mode
+            diagnosticMode = !diagnosticMode;
+            if (diagnosticMode) {
+                Serial.println("\n[Diagnostic] Real-time sensor view ENABLED");
+                Serial.println("[Diagnostic] Press 'v' again to stop");
+                Serial.println("[Diagnostic] Format: [Dist] threshold motion dir | decision");
+                Serial.println();
+            } else {
+                Serial.println("\n[Diagnostic] Real-time sensor view DISABLED\n");
+            }
+            break;
+
 #if MOCK_HARDWARE
         case 'm':
         case 'M':
-            Serial.println("[Command] Triggering mock motion");
-            motionSensor->mockSetMotion(true);
+            Serial.println("[Command] Triggering mock motion on all sensors");
+            for (uint8_t i = 0; i < 4; i++) {
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+                if (sensor) {
+                    sensor->mockSetMotion(true);
+                }
+            }
             break;
 
         case 'c':
         case 'C':
-            Serial.println("[Command] Clearing mock motion");
-            motionSensor->mockSetMotion(false);
+            Serial.println("[Command] Clearing mock motion on all sensors");
+            for (uint8_t i = 0; i < 4; i++) {
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+                if (sensor) {
+                    sensor->mockSetMotion(false);
+                }
+            }
             break;
 
         case 'd':
         case 'D':
-            // Set mock distance (for ultrasonic testing)
-            if (motionSensor->getCapabilities().supportsDistanceMeasurement) {
-                Serial.println("[Command] Setting mock distance to 250mm");
-                motionSensor->mockSetDistance(250);
-            } else {
-                Serial.println("[Command] Distance not supported by this sensor");
+            // Set mock distance on distance-capable sensors
+            Serial.println("[Command] Setting mock distance to 250mm on distance sensors");
+            for (uint8_t i = 0; i < 4; i++) {
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+                if (sensor && sensor->getCapabilities().supportsDistanceMeasurement) {
+                    sensor->mockSetDistance(250);
+                    Serial.printf("  Set distance on sensor %u\n", i);
+                }
             }
             break;
 
@@ -477,9 +586,12 @@ void performFactoryReset() {
     // Note: Config Manager integration will be added when that component
     // is integrated into main.cpp
 
-    // Reset state machine counters
-    if (motionSensor) {
-        motionSensor->resetEventCount();
+    // Reset state machine and sensor counters
+    for (uint8_t i = 0; i < 4; i++) {
+        HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+        if (sensor) {
+            sensor->resetEventCount();
+        }
     }
     modeButton.resetClickCount();
 
@@ -577,6 +689,20 @@ void setup() {
 
     Serial.println("[Setup] Initializing StepAware...");
 
+#if !MOCK_HARDWARE
+    // Initialize LittleFS for user content (animations, etc.)
+    // NOTE: We do NOT use LittleFS for web UI files!
+    // The web UI is served as inline HTML (buildDashboardHTML).
+    // LittleFS is ONLY for user-uploaded animations and other user content.
+    Serial.println("[Setup] Initializing LittleFS for user content...");
+    if (!LittleFS.begin(true)) {  // true = format on fail
+        Serial.println("[Setup] WARNING: LittleFS mount failed!");
+        Serial.println("[Setup] Animation uploads will not work");
+    } else {
+        Serial.println("[Setup] LittleFS mounted successfully");
+    }
+#endif
+
     // Initialize configuration manager (loads from SPIFFS)
     Serial.println("[Setup] Initializing configuration manager...");
     if (!configManager.begin()) {
@@ -587,26 +713,72 @@ void setup() {
     Serial.println("[Setup] Initializing serial config interface...");
     serialConfig.begin();
 
-    // Create motion sensor via factory
-    Serial.printf("[Setup] Creating %s sensor...\n",
-                  getSensorTypeName(ACTIVE_SENSOR_TYPE));
-    motionSensor = SensorFactory::createFromType(ACTIVE_SENSOR_TYPE, MOCK_HARDWARE);
-    if (!motionSensor) {
-        Serial.println("[Setup] ERROR: Failed to create motion sensor");
-        Serial.printf("[Setup] Sensor type %d not supported\n", ACTIVE_SENSOR_TYPE);
-        while (1) { delay(1000); }
-    }
-
-    // Print startup banner (now that sensor is created)
+    // Print startup banner
     printBanner();
 
-    // Initialize motion sensor
-    Serial.printf("[Setup] Initializing %s...\n",
-                  motionSensor->getCapabilities().sensorTypeName);
-    if (!motionSensor->begin()) {
-        Serial.println("[Setup] ERROR: Failed to initialize motion sensor");
-        while (1) { delay(1000); }
+    // Initialize sensor manager (Issue #17 fix)
+    Serial.println("[Setup] Initializing sensor manager...");
+    if (!sensorManager.begin()) {
+        Serial.println("[Setup] WARNING: Sensor manager failed to initialize");
     }
+
+    // Load sensors from configuration (Issue #17 fix)
+    const ConfigManager::Config& cfg = configManager.getConfig();
+    bool sensorsLoaded = false;
+
+    Serial.println("[Setup] Loading sensor configuration...");
+    for (uint8_t i = 0; i < 4; i++) {
+        const ConfigManager::SensorSlotConfig& sensorCfg = cfg.sensors[i];
+
+        if (sensorCfg.active && sensorCfg.enabled) {
+            Serial.printf("[Setup] Loading sensor slot %d: %s (type %d)\n",
+                         i, sensorCfg.name, sensorCfg.type);
+
+            SensorConfig config;
+            config.type = static_cast<SensorType>(sensorCfg.type);
+            config.primaryPin = sensorCfg.primaryPin;
+            config.secondaryPin = sensorCfg.secondaryPin;
+            config.detectionThreshold = sensorCfg.detectionThreshold;
+            config.debounceMs = sensorCfg.debounceMs;
+            config.warmupMs = sensorCfg.warmupMs;
+            config.enableDirectionDetection = sensorCfg.enableDirectionDetection;
+            config.invertLogic = false;
+
+            if (sensorManager.addSensor(i, config, sensorCfg.name,
+                                       sensorCfg.isPrimary, MOCK_HARDWARE)) {
+                Serial.printf("[Setup] ✓ Loaded %s on slot %d\n", sensorCfg.name, i);
+                sensorsLoaded = true;
+            } else {
+                Serial.printf("[Setup] ✗ Failed to load sensor slot %d: %s\n",
+                             i, sensorManager.getLastError());
+            }
+        }
+    }
+
+    // Fallback: If no sensors loaded from config, create default PIR sensor
+    if (!sensorsLoaded) {
+        Serial.println("[Setup] No sensors in config, creating default PIR sensor...");
+        SensorConfig defaultConfig;
+        defaultConfig.type = SENSOR_TYPE_PIR;
+        defaultConfig.primaryPin = PIN_PIR_SENSOR;
+        defaultConfig.secondaryPin = 0;
+        defaultConfig.detectionThreshold = 0;
+        defaultConfig.debounceMs = 100;
+        defaultConfig.warmupMs = PIR_WARMUP_TIME_MS;
+        defaultConfig.enableDirectionDetection = false;
+        defaultConfig.invertLogic = false;
+
+        if (sensorManager.addSensor(0, defaultConfig, "Default PIR", true, MOCK_HARDWARE)) {
+            Serial.println("[Setup] ✓ Created default PIR sensor");
+        } else {
+            Serial.println("[Setup] ERROR: Failed to create default sensor!");
+            while (1) { delay(1000); }
+        }
+    }
+
+    // Print loaded sensors
+    Serial.println("[Setup] Sensor configuration:");
+    sensorManager.printStatus();
 
     Serial.println("[Setup] Initializing hazard LED...");
     if (!hazardLED.begin()) {
@@ -626,10 +798,8 @@ void setup() {
         while (1) { delay(1000); }
     }
 
-    // Get configuration for display and WiFi setup
-    const ConfigManager::Config& cfg = configManager.getConfig();
-
     // Initialize LED matrix display (Issue #12)
+    // (cfg already retrieved earlier for sensor initialization)
     const ConfigManager::DisplaySlotConfig& displayCfg = cfg.displays[0];
 
     if (displayCfg.active && displayCfg.enabled &&
@@ -675,7 +845,7 @@ void setup() {
     } else {
         Serial.println("[Setup] LED Matrix not configured in settings");
 
-        #ifdef MOCK_HARDWARE
+        #if MOCK_HARDWARE
         // In mock mode, create LED matrix anyway for testing animations via web UI
         Serial.println("[Setup] Creating LED Matrix in mock mode for testing...");
         ledMatrix = new HAL_LEDMatrix_8x8(0x70, 8, 9, true);
@@ -702,7 +872,7 @@ void setup() {
 
     // Create and initialize state machine
     Serial.println("[Setup] Creating state machine...");
-    stateMachine = new StateMachine(motionSensor, &hazardLED, &statusLED, &modeButton);
+    stateMachine = new StateMachine(&sensorManager, &hazardLED, &statusLED, &modeButton, &configManager);
     if (!stateMachine) {
         Serial.println("[Setup] ERROR: Failed to allocate state machine");
         while (1) { delay(1000); }
@@ -778,8 +948,8 @@ void setup() {
 }
 
 void loop() {
-    // Update motion sensor (required for sensors that need polling)
-    motionSensor->update();
+    // Update sensor manager (handles all sensors)
+    sensorManager.update();
 
     // Update LED matrix (handles animations)
     if (ledMatrix) {
@@ -823,6 +993,79 @@ void loop() {
     } else {
         // Power saving mode: keep status LED off
         statusLED.setBrightness(0);
+    }
+
+    // Diagnostic mode - real-time sensor view
+    if (diagnosticMode) {
+        static uint32_t lastDiagUpdate = 0;
+        if (now - lastDiagUpdate >= 200) {  // Update 5x per second
+            lastDiagUpdate = now;
+
+            // For each sensor, show real-time data (always read fresh from sensor)
+            for (uint8_t i = 0; i < 4; i++) {
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+                if (sensor) {
+                    // Re-read capabilities and state each time (picks up config changes)
+                    const SensorCapabilities& caps = sensor->getCapabilities();
+                    bool motion = sensor->motionDetected();
+
+                    // Build status line
+                    Serial.printf("[S%u] ", i);
+
+                    if (caps.supportsDistanceMeasurement) {
+                        // Read current values (not cached - responds to config changes)
+                        uint32_t dist = sensor->getDistance();
+                        uint32_t thresh = sensor->getDetectionThreshold();
+
+                        // Distance with visual indicator
+                        Serial.printf("Dist:%4u mm ", dist);
+
+                        // Threshold comparison
+                        if (dist > 0 && dist < thresh) {
+                            Serial.print("[NEAR] ");
+                        } else if (dist >= thresh) {
+                            Serial.print("[FAR ] ");
+                        } else {
+                            Serial.print("[NONE] ");
+                        }
+
+                        Serial.printf("(thresh:%u) ", thresh);
+                    }
+
+                    // Motion state
+                    Serial.printf("Motion:%s ", motion ? "YES" : "NO ");
+
+                    // Direction if supported
+                    if (caps.supportsDirectionDetection) {
+                        MotionDirection dir = sensor->getDirection();
+                        const char* dirStr = "???";
+                        switch (dir) {
+                            case DIRECTION_STATIONARY: dirStr = "STAT"; break;
+                            case DIRECTION_APPROACHING: dirStr = "APPR"; break;
+                            case DIRECTION_RECEDING: dirStr = "RECD"; break;
+                            default: dirStr = "UNKN"; break;
+                        }
+                        Serial.printf("Dir:%s ", dirStr);
+                    }
+
+                    // Final decision indicator
+                    if (motion) {
+                        Serial.print(">>> TRIGGER");
+                    } else {
+                        Serial.print("    (idle)");
+                    }
+
+                    Serial.println();
+                }
+            }
+
+            // Show combined fusion result (only if motion detected - saves space)
+            bool anyMotion = sensorManager.isMotionDetected();
+            if (anyMotion) {
+                Serial.println(">>> SYSTEM: MOTION DETECTED - WARNING ACTIVE <<<");
+            }
+            // Removed extra blank line for compactness
+        }
     }
 
     // Process serial commands

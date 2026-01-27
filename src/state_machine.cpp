@@ -1,15 +1,19 @@
 #include "state_machine.h"
+#include "sensor_manager.h"
+#include "config_manager.h"
 #include "logger.h"
 
-StateMachine::StateMachine(HAL_MotionSensor* motionSensor,
+StateMachine::StateMachine(SensorManager* sensorManager,
                            HAL_LED* hazardLED,
                            HAL_LED* statusLED,
-                           HAL_Button* button)
-    : m_motionSensor(motionSensor)
+                           HAL_Button* button,
+                           ConfigManager* config)
+    : m_sensorManager(sensorManager)
     , m_hazardLED(hazardLED)
     , m_statusLED(statusLED)
     , m_button(button)
     , m_ledMatrix(nullptr)
+    , m_config(config)
     , m_currentMode(OFF)
     , m_previousMode(OFF)
     , m_initialized(false)
@@ -42,7 +46,7 @@ bool StateMachine::begin(OperatingMode initialMode) {
     LOG_INFO("StateMachine: Initializing...");
 
     // Validate hardware pointers
-    if (!m_motionSensor || !m_hazardLED || !m_statusLED || !m_button) {
+    if (!m_sensorManager || !m_hazardLED || !m_statusLED || !m_button) {
         LOG_ERROR("StateMachine: Hardware HAL not initialized");
         return false;
     }
@@ -70,11 +74,14 @@ void StateMachine::update() {
     m_statusLED->update();
     m_button->update();
 
-    // Check if motion sensor is ready
-    if (!m_sensorReady && m_motionSensor->isReady()) {
+    // Update sensor manager
+    m_sensorManager->update();
+
+    // Check if all sensors are ready
+    if (!m_sensorReady && m_sensorManager->allSensorsReady()) {
         m_sensorReady = true;
-        LOG_INFO("StateMachine: %s warm-up complete",
-                 m_motionSensor->getCapabilities().sensorTypeName);
+        LOG_INFO("StateMachine: All sensors ready (%d active)",
+                 m_sensorManager->getActiveSensorCount());
     }
 
     // Check for button events
@@ -111,7 +118,12 @@ void StateMachine::handleEvent(SystemEvent event) {
 
             // Trigger warning in appropriate modes
             if (m_currentMode == MOTION_DETECT && m_sensorReady) {
-                triggerWarning();
+                // Use warning duration from config if available
+                uint32_t duration = MOTION_WARNING_DURATION_MS;
+                if (m_config) {
+                    duration = m_config->getConfig().motionWarningDuration;
+                }
+                triggerWarning(duration);
             }
             break;
 
@@ -360,7 +372,8 @@ void StateMachine::updateStatusLED() {
 }
 
 void StateMachine::handleMotionDetection() {
-    bool motionDetected = m_motionSensor->motionDetected();
+    // Check motion from sensor manager (Issue #17 fix)
+    bool motionDetected = m_sensorManager->isMotionDetected();
 
     // Detect rising edge (motion started)
     if (motionDetected && !m_lastMotionState) {

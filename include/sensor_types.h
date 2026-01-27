@@ -15,11 +15,12 @@
  * @brief Supported sensor types
  */
 enum SensorType {
-    SENSOR_TYPE_PIR = 0,        ///< Passive Infrared (motion detection)
-    SENSOR_TYPE_IR = 1,         ///< Infrared beam break sensor
-    SENSOR_TYPE_ULTRASONIC = 2, ///< Ultrasonic distance sensor (HC-SR04, etc.)
-    SENSOR_TYPE_PASSIVE_IR = 3, ///< Alternative passive IR implementation
-    SENSOR_TYPE_COUNT           ///< Number of sensor types (for iteration)
+    SENSOR_TYPE_PIR = 0,              ///< Passive Infrared (motion detection)
+    SENSOR_TYPE_IR = 1,               ///< Infrared beam break sensor
+    SENSOR_TYPE_ULTRASONIC = 2,       ///< Ultrasonic distance sensor (HC-SR04, 4-wire: VCC/GND/Trig/Echo)
+    SENSOR_TYPE_PASSIVE_IR = 3,       ///< Alternative passive IR implementation
+    SENSOR_TYPE_ULTRASONIC_GROVE = 4, ///< Grove Ultrasonic v2.0 (3-wire: VCC/GND/SIG, single pin)
+    SENSOR_TYPE_COUNT                 ///< Number of sensor types (for iteration)
 };
 
 /**
@@ -85,14 +86,18 @@ struct SensorStatus {
  * Runtime-configurable sensor parameters.
  */
 struct SensorConfig {
-    SensorType type;              ///< Sensor type
-    uint8_t primaryPin;           ///< Primary GPIO pin (motion/trigger)
-    uint8_t secondaryPin;         ///< Secondary GPIO pin (echo for ultrasonic)
-    uint32_t detectionThreshold;  ///< Distance threshold for detection (mm)
-    uint32_t debounceMs;          ///< Debounce time (ms)
-    uint32_t warmupMs;            ///< Warmup time override (ms), 0 = use default
-    bool enableDirectionDetection;///< Enable direction detection if supported
-    bool invertLogic;             ///< Invert detection logic (active low)
+    SensorType type;                ///< Sensor type
+    uint8_t primaryPin;             ///< Primary GPIO pin (motion/trigger)
+    uint8_t secondaryPin;           ///< Secondary GPIO pin (echo for ultrasonic)
+    uint32_t detectionThreshold;    ///< Distance threshold for warning trigger (mm)
+    uint32_t maxDetectionDistance;  ///< Maximum detection range (mm), 0 = use sensor max
+    uint32_t debounceMs;            ///< Debounce time (ms)
+    uint32_t warmupMs;              ///< Warmup time override (ms), 0 = use default
+    bool enableDirectionDetection;  ///< Enable direction detection if supported
+    uint8_t directionTriggerMode;   ///< Direction filter: 0=approaching, 1=receding, 2=both
+    bool invertLogic;               ///< Invert detection logic (active low)
+    uint8_t sampleWindowSize;       ///< Rolling window size for distance sensors (3-20, 0=default)
+    uint16_t sampleRateMs;          ///< Sample rate in ms (60+ for ultrasonic, 0=default)
 };
 
 /**
@@ -140,11 +145,25 @@ inline SensorCapabilities getDefaultCapabilities(SensorType type) {
             caps.requiresWarmup = false;
             caps.supportsDeepSleepWake = false; // Requires active measurement
             caps.minDetectionDistance = 20;     // 2cm minimum
-            caps.maxDetectionDistance = 4000;   // 4m maximum
+            caps.maxDetectionDistance = 4000;   // 4m maximum (HC-SR04)
             caps.detectionAngleDegrees = 15;    // Narrow cone
             caps.typicalWarmupMs = 0;
             caps.typicalCurrentMa = 15;         // ~15mA during measurement
-            caps.sensorTypeName = "Ultrasonic Distance Sensor";
+            caps.sensorTypeName = "Ultrasonic (HC-SR04 4-pin)";
+            break;
+
+        case SENSOR_TYPE_ULTRASONIC_GROVE:
+            caps.supportsBinaryDetection = true;
+            caps.supportsDistanceMeasurement = true;
+            caps.supportsDirectionDetection = true;
+            caps.requiresWarmup = false;
+            caps.supportsDeepSleepWake = false; // Requires active measurement
+            caps.minDetectionDistance = 20;     // 2cm minimum
+            caps.maxDetectionDistance = 3500;   // 3.5m maximum (Grove v2.0)
+            caps.detectionAngleDegrees = 15;    // Narrow cone
+            caps.typicalWarmupMs = 0;
+            caps.typicalCurrentMa = 8;          // ~8mA during measurement (more efficient!)
+            caps.sensorTypeName = "Ultrasonic (Grove 3-pin)";
             break;
 
         case SENSOR_TYPE_PASSIVE_IR:
@@ -179,8 +198,9 @@ inline const char* getSensorTypeName(SensorType type) {
     switch (type) {
         case SENSOR_TYPE_PIR: return "PIR";
         case SENSOR_TYPE_IR: return "IR";
-        case SENSOR_TYPE_ULTRASONIC: return "Ultrasonic";
+        case SENSOR_TYPE_ULTRASONIC: return "Ultrasonic (HC-SR04)";
         case SENSOR_TYPE_PASSIVE_IR: return "Passive IR";
+        case SENSOR_TYPE_ULTRASONIC_GROVE: return "Ultrasonic (Grove)";
         default: return "Unknown";
     }
 }

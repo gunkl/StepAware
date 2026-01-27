@@ -21,7 +21,33 @@ HAL_MotionSensor* SensorFactory::create(const SensorConfig& config, bool mockMod
             if (config.debounceMs > 0) {
                 sensor->setMeasurementInterval(config.debounceMs);
             }
+            if (config.sampleWindowSize > 0) {
+                sensor->setSampleWindowSize(config.sampleWindowSize);
+            }
             sensor->setDirectionDetection(config.enableDirectionDetection);
+            sensor->setDirectionTriggerMode(config.directionTriggerMode);
+
+            return sensor;
+        }
+
+        case SENSOR_TYPE_ULTRASONIC_GROVE: {
+            HAL_Ultrasonic_Grove* sensor = new HAL_Ultrasonic_Grove(
+                config.primaryPin,
+                mockMode
+            );
+
+            // Apply configuration
+            if (config.detectionThreshold > 0) {
+                sensor->setDetectionThreshold(config.detectionThreshold);
+            }
+            if (config.debounceMs > 0) {
+                sensor->setMeasurementInterval(config.debounceMs);
+            }
+            if (config.sampleWindowSize > 0) {
+                sensor->setSampleWindowSize(config.sampleWindowSize);
+            }
+            sensor->setDirectionDetection(config.enableDirectionDetection);
+            sensor->setDirectionTriggerMode(config.directionTriggerMode);
 
             return sensor;
         }
@@ -45,9 +71,15 @@ HAL_MotionSensor* SensorFactory::createPIR(uint8_t pin, bool mockMode) {
 
 HAL_MotionSensor* SensorFactory::createUltrasonic(uint8_t triggerPin, uint8_t echoPin,
                                                    bool mockMode) {
-    DEBUG_PRINTF("[SensorFactory] Creating Ultrasonic sensor (trigger: %d, echo: %d, mock: %s)\n",
+    DEBUG_PRINTF("[SensorFactory] Creating HC-SR04 Ultrasonic sensor (trigger: %d, echo: %d, mock: %s)\n",
                  triggerPin, echoPin, mockMode ? "yes" : "no");
     return new HAL_Ultrasonic(triggerPin, echoPin, mockMode);
+}
+
+HAL_MotionSensor* SensorFactory::createUltrasonicGrove(uint8_t sigPin, bool mockMode) {
+    DEBUG_PRINTF("[SensorFactory] Creating Grove Ultrasonic sensor (sig: %d, mock: %s)\n",
+                 sigPin, mockMode ? "yes" : "no");
+    return new HAL_Ultrasonic_Grove(sigPin, mockMode);
 }
 
 HAL_MotionSensor* SensorFactory::createFromType(SensorType type, bool mockMode) {
@@ -80,6 +112,14 @@ SensorConfig SensorFactory::getDefaultConfig(SensorType type) {
             config.debounceMs = 60;  // Min measurement interval
             break;
 
+        case SENSOR_TYPE_ULTRASONIC_GROVE:
+            config.primaryPin = PIN_ULTRASONIC_TRIGGER;  // Use same pin as trigger (single pin)
+            config.secondaryPin = 0;  // Not used for Grove (single-pin sensor)
+            config.detectionThreshold = 1200;  // 120cm default
+            config.enableDirectionDetection = true;
+            config.debounceMs = 60;  // Min measurement interval
+            break;
+
         case SENSOR_TYPE_IR:
             config.primaryPin = PIN_PIR_SENSOR;  // Placeholder
             config.secondaryPin = 0;
@@ -98,6 +138,7 @@ bool SensorFactory::isSupported(SensorType type) {
         case SENSOR_TYPE_PIR:
         case SENSOR_TYPE_PASSIVE_IR:
         case SENSOR_TYPE_ULTRASONIC:
+        case SENSOR_TYPE_ULTRASONIC_GROVE:
             return true;
 
         case SENSOR_TYPE_IR:
@@ -113,6 +154,7 @@ uint8_t SensorFactory::getSupportedTypes(SensorType* types, uint8_t maxTypes) {
 
     if (count < maxTypes) types[count++] = SENSOR_TYPE_PIR;
     if (count < maxTypes) types[count++] = SENSOR_TYPE_ULTRASONIC;
+    if (count < maxTypes) types[count++] = SENSOR_TYPE_ULTRASONIC_GROVE;
     // SENSOR_TYPE_IR not included until implemented
 
     return count;

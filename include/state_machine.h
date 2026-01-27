@@ -65,15 +65,17 @@ public:
     /**
      * @brief Construct a new StateMachine object
      *
-     * @param motionSensor Pointer to motion sensor HAL (polymorphic)
+     * @param sensorManager Pointer to sensor manager (multi-sensor support, Issue #17)
      * @param hazardLED Pointer to hazard LED HAL
      * @param statusLED Pointer to status LED HAL
      * @param button Pointer to button HAL
+     * @param config Pointer to config manager (for warning duration, etc.)
      */
-    StateMachine(HAL_MotionSensor* motionSensor,
+    StateMachine(class SensorManager* sensorManager,
                  HAL_LED* hazardLED,
                  HAL_LED* statusLED,
-                 HAL_Button* button);
+                 HAL_Button* button,
+                 class ConfigManager* config = nullptr);
 
     /**
      * @brief Destructor
@@ -193,11 +195,12 @@ public:
 
 private:
     // Hardware interfaces
-    HAL_MotionSensor* m_motionSensor; ///< Motion sensor (polymorphic)
-    HAL_LED* m_hazardLED;             ///< Hazard warning LED
-    HAL_LED* m_statusLED;             ///< Status indicator LED
-    HAL_Button* m_button;             ///< Mode button
-    HAL_LEDMatrix_8x8* m_ledMatrix;   ///< LED matrix display (Issue #12, optional)
+    class SensorManager* m_sensorManager; ///< Sensor manager (multi-sensor support, Issue #17)
+    HAL_LED* m_hazardLED;                 ///< Hazard warning LED
+    HAL_LED* m_statusLED;                 ///< Status indicator LED
+    HAL_Button* m_button;                 ///< Mode button
+    HAL_LEDMatrix_8x8* m_ledMatrix;       ///< LED matrix display (Issue #12, optional)
+    class ConfigManager* m_config;        ///< Config manager (for runtime config access)
 
     // State
     OperatingMode m_currentMode; ///< Current operating mode

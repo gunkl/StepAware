@@ -2,7 +2,7 @@
 #include "logger.h"
 #include <Wire.h>
 
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
 #include <LittleFS.h>
 #endif
 
@@ -15,37 +15,115 @@
 #endif
 
 // Animation frame data
-static const uint8_t ARROW_UP[] = {
-    0b00011000,
-    0b00111100,
-    0b01111110,
-    0b11111111,
-    0b00011000,
-    0b00011000,
-    0b00011000,
-    0b00011000
+static const uint8_t ARROW_DOWN[] = {
+    0b00011000,  //   ##
+    0b00011000,  //   ##
+    0b00011000,  //   ##
+    0b00011000,  //   ##
+    0b11111111,  // ########
+    0b01111110,  //  ######
+    0b00111100,  //   ####
+    0b00011000   //    ##
 };
 
-static const uint8_t CHECKMARK[] = {
+static const uint8_t ARROW_DOWN_INVERSE[] = {
+    0b11100111,  // ###  ###
+    0b11100111,  // ###  ###
+    0b11100111,  // ###  ###
+    0b11100111,  // ###  ###
+    0b00000000,  //
+    0b10000001,  // #      #
+    0b11000011,  // ##    ##
+    0b11100111   // ###  ###
+};
+
+static const uint8_t BOOT_OK[] = {
+    0b00000000,  //
+    0b00111101,  //   #### # (Circle with checkmark)
+    0b01000010,  //  #    #
+    0b10000101,  // #    #  #
+    0b10101001,  // # # #  #
+    0b01010010,  //  # #  #
+    0b00111100,  //   ####
+    0b00000000   //
+};
+
+static const uint8_t WIFI_CONNECTED[] = {
+    0b00000000,  //
+    0b00111100,  //   ####   (WiFi signal bars)
+    0b01000000,  //  #
+    0b10011000,  // #  ##
+    0b00100000,  //   #
+    0b00000100,  //      #
+    0b00001000,  //     #
+    0b00000000   //
+};
+
+static const uint8_t WIFI_DISCONNECTED[] = {
+    0b10000001,  // #      # (Broken WiFi)
+    0b01111110,  //  ######
+    0b00100000,  //   #
+    0b00011001,  //    ##  #
+    0b01100110,  //  ##  ##
+    0b10000100,  // #    #
+    0b01111000,  //  ####
+    0b10000010   // #     #
+};
+
+static const uint8_t ERROR_X[] = {
     0b00000000,
-    0b00000001,
-    0b00000011,
-    0b10000110,
-    0b11001100,
-    0b01111000,
-    0b00110000,
+    0b01100110,  // ##   ##
+    0b00111100,  //  ####
+    0b00011000,  //   ##
+    0b00011000,  //   ##
+    0b00111100,  //  ####
+    0b01100110,  // ##   ##
     0b00000000
 };
 
+// Battery animation frames - draining from ~1/3 full to empty
+static const uint8_t BATTERY_33[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01000010,  // │      │ (1/2 full)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_25[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │ (1/3 full)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_10[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │ (10% full)
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
 static const uint8_t BATTERY_EMPTY[] = {
-    0b00111100,
-    0b01000010,
-    0b01000010,
-    0b01000010,
-    0b01000010,
-    0b01000010,
-    0b01000010,
-    0b00111100
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01111110   // └──────┘
 };
 
 HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
@@ -64,7 +142,7 @@ HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
     , m_animationFrame(0)
     , m_customAnimationCount(0)
     , m_activeCustomAnimation(nullptr)
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     , m_matrix(nullptr)
 #endif
 {
@@ -77,7 +155,7 @@ HAL_LEDMatrix_8x8::~HAL_LEDMatrix_8x8() {
     // Free custom animations
     clearCustomAnimations();
 
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     if (m_matrix) {
         delete m_matrix;
         m_matrix = nullptr;
@@ -96,7 +174,7 @@ bool HAL_LEDMatrix_8x8::begin() {
         return true;
     }
 
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     // Initialize I2C
     Wire.begin(m_sdaPin, m_sclPin, I2C_FREQUENCY);
 
@@ -119,7 +197,7 @@ bool HAL_LEDMatrix_8x8::begin() {
              m_i2cAddress, m_sdaPin, m_sclPin);
     return true;
 #else
-    LOG_WARN("HAL_LEDMatrix_8x8: Compiled with MOCK_HARDWARE but mock_mode=false");
+    LOG_WARN("HAL_LEDMatrix_8x8: Compiled with MOCK_HARDWARE=1 but mock_mode=false");
     return false;
 #endif
 }
@@ -144,7 +222,7 @@ void HAL_LEDMatrix_8x8::clear() {
     if (m_mockMode) {
         memset(m_mockFrame, 0, sizeof(m_mockFrame));
     } else {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->clear();
             m_matrix->writeDisplay();
@@ -161,7 +239,7 @@ void HAL_LEDMatrix_8x8::setBrightness(uint8_t level) {
     m_brightness = level;
 
     if (!m_mockMode) {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->setBrightness(level);
             m_matrix->writeDisplay();
@@ -180,7 +258,7 @@ void HAL_LEDMatrix_8x8::setRotation(uint8_t rotation) {
     m_rotation = rotation;
 
     if (!m_mockMode) {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->setRotation(rotation);
             m_matrix->writeDisplay();
@@ -207,9 +285,11 @@ void HAL_LEDMatrix_8x8::startAnimation(AnimationPattern pattern, uint32_t durati
         case ANIM_NONE:           patternName = "NONE"; break;
         case ANIM_MOTION_ALERT:   patternName = "MOTION_ALERT"; break;
         case ANIM_BATTERY_LOW:    patternName = "BATTERY_LOW"; break;
-        case ANIM_BOOT_STATUS:    patternName = "BOOT_STATUS"; break;
-        case ANIM_WIFI_CONNECTED: patternName = "WIFI_CONNECTED"; break;
-        case ANIM_CUSTOM:         patternName = "CUSTOM"; break;
+        case ANIM_BOOT_STATUS:       patternName = "BOOT_STATUS"; break;
+        case ANIM_ERROR:             patternName = "ERROR"; break;
+        case ANIM_WIFI_CONNECTED:    patternName = "WIFI_CONNECTED"; break;
+        case ANIM_WIFI_DISCONNECTED: patternName = "WIFI_DISCONNECTED"; break;
+        case ANIM_CUSTOM:            patternName = "CUSTOM"; break;
     }
 
     LOG_INFO("HAL_LEDMatrix_8x8: Animation started: %s, duration: %u ms", patternName, duration_ms);
@@ -241,12 +321,13 @@ void HAL_LEDMatrix_8x8::drawFrame(const uint8_t frame[8]) {
     if (m_mockMode) {
         memcpy(m_mockFrame, frame, 8);
     } else {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->clear();
             for (int y = 0; y < 8; y++) {
                 for (int x = 0; x < 8; x++) {
-                    if (frame[y] & (1 << x)) {
+                    // Frame data is MSB-first: bit 7 = leftmost pixel (x=0)
+                    if (frame[y] & (1 << (7 - x))) {
                         m_matrix->drawPixel(x, y, LED_ON);
                     }
                 }
@@ -262,20 +343,23 @@ void HAL_LEDMatrix_8x8::setPixel(uint8_t x, uint8_t y, bool on) {
         return;
     }
 
+    // Frame buffer uses MSB-first format: bit 7 = leftmost pixel (x=0)
+    uint8_t bitMask = (1 << (7 - x));
+
     if (on) {
-        m_currentFrame[y] |= (1 << x);
+        m_currentFrame[y] |= bitMask;
     } else {
-        m_currentFrame[y] &= ~(1 << x);
+        m_currentFrame[y] &= ~bitMask;
     }
 
     if (m_mockMode) {
         if (on) {
-            m_mockFrame[y] |= (1 << x);
+            m_mockFrame[y] |= bitMask;
         } else {
-            m_mockFrame[y] &= ~(1 << x);
+            m_mockFrame[y] &= ~bitMask;
         }
     } else {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->drawPixel(x, y, on ? LED_ON : LED_OFF);
             m_matrix->writeDisplay();
@@ -302,7 +386,7 @@ void HAL_LEDMatrix_8x8::scrollText(const char* text, uint32_t speed_ms) {
         return;
     }
 
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     if (m_matrix) {
         // Text scrolling would be implemented here using Adafruit_GFX
         // For Phase 1, we'll keep this simple
@@ -348,8 +432,14 @@ void HAL_LEDMatrix_8x8::updateAnimation() {
         case ANIM_BOOT_STATUS:
             animateBootStatus("BOOT");
             break;
+        case ANIM_ERROR:
+            drawBitmap(ERROR_X);
+            break;
         case ANIM_WIFI_CONNECTED:
-            drawBitmap(CHECKMARK);
+            drawBitmap(WIFI_CONNECTED);
+            break;
+        case ANIM_WIFI_DISCONNECTED:
+            drawBitmap(WIFI_DISCONNECTED);
             break;
         case ANIM_CUSTOM:
             animateCustom();
@@ -369,26 +459,26 @@ void HAL_LEDMatrix_8x8::animateMotionAlert() {
             m_lastFrameTime = now;
             m_animationFrame++;
 
+            // Flash between arrow and inverse arrow
             if (m_animationFrame % 2 == 0) {
-                clear();
+                drawBitmap(ARROW_DOWN);
             } else {
-                // Fill display
-                uint8_t fullFrame[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                drawFrame(fullFrame);
+                drawBitmap(ARROW_DOWN_INVERSE);
             }
         }
     }
-    // Phase 2: Scroll arrow up (800ms - 1600ms)
+    // Phase 2: Scroll arrow down (800ms - 1600ms)
     else if (now - m_animationStartTime < 1600) {
         if (elapsed >= 100) { // 100ms per frame
             m_lastFrameTime = now;
             uint8_t scrollFrame = (now - m_animationStartTime - 800) / 100;
 
-            // Shift arrow up based on scroll frame
+            // Shift arrow down based on scroll frame
             uint8_t shiftedArrow[8];
             for (int i = 0; i < 8; i++) {
-                if (i + scrollFrame < 8) {
-                    shiftedArrow[i] = ARROW_UP[i + scrollFrame];
+                int sourceIdx = i - scrollFrame;
+                if (sourceIdx >= 0 && sourceIdx < 8) {
+                    shiftedArrow[i] = ARROW_DOWN[sourceIdx];
                 } else {
                     shiftedArrow[i] = 0;
                 }
@@ -404,7 +494,7 @@ void HAL_LEDMatrix_8x8::animateMotionAlert() {
             if ((m_animationFrame % 2) == 0) {
                 clear();
             } else {
-                drawBitmap(ARROW_UP);
+                drawBitmap(ARROW_DOWN);
             }
             m_animationFrame++;
         }
@@ -415,26 +505,45 @@ void HAL_LEDMatrix_8x8::animateBatteryLow(uint8_t percentage) {
     uint32_t now = millis();
     uint32_t elapsed = now - m_lastFrameTime;
 
-    // Blink battery icon
-    if (elapsed >= 500) {
+    // Animate battery draining from 33% to empty
+    // Frame duration: 400ms per frame = ~1.6s total animation
+    if (elapsed >= 400) {
         m_lastFrameTime = now;
+
+        // Cycle through 4 frames: 33%, 25%, 10%, empty
+        uint8_t frameIndex = (m_animationFrame % 4);
         m_animationFrame++;
 
-        if (m_animationFrame % 2 == 0) {
-            clear();
-        } else {
-            drawBitmap(BATTERY_EMPTY);
+        switch (frameIndex) {
+            case 0:
+                drawBitmap(BATTERY_33);
+                break;
+            case 1:
+                drawBitmap(BATTERY_25);
+                break;
+            case 2:
+                drawBitmap(BATTERY_10);
+                break;
+            case 3:
+                drawBitmap(BATTERY_EMPTY);
+                break;
         }
     }
 }
 
 void HAL_LEDMatrix_8x8::animateBootStatus(const char* status) {
-    // Simple boot animation: show checkmark
-    drawBitmap(CHECKMARK);
+    // Show checkmark for success, X for error
+    // Status strings like "ERROR", "FAIL", "FAILED" trigger error icon
+    if (status && (strstr(status, "ERROR") || strstr(status, "FAIL"))) {
+        drawBitmap(ERROR_X);
+    } else {
+        // Default: show OK icon for successful boot
+        drawBitmap(BOOT_OK);
+    }
 }
 
 void HAL_LEDMatrix_8x8::drawArrow() {
-    drawBitmap(ARROW_UP);
+    drawBitmap(ARROW_DOWN);
 }
 
 void HAL_LEDMatrix_8x8::flashDisplay(uint8_t times) {
@@ -449,7 +558,7 @@ void HAL_LEDMatrix_8x8::flashDisplay(uint8_t times) {
 
 void HAL_LEDMatrix_8x8::writeDisplay() {
     if (!m_mockMode) {
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         if (m_matrix) {
             m_matrix->writeDisplay();
         }
@@ -468,7 +577,7 @@ bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
         return false;
     }
 
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
     // Open file from LittleFS
     File file = LittleFS.open(filepath, "r");
     if (!file) {

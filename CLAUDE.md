@@ -13,6 +13,25 @@ Claude is a development assistant that helps with:
 
 **Important**: The human developer remains responsible for all code review, commits, and architectural decisions.
 
+## Critical Project Decisions
+
+### Web UI: Inline HTML Only (DO NOT CHANGE)
+
+**Decision**: StepAware uses inline HTML (`buildDashboardHTML()`) for the web UI, NOT filesystem-based files.
+
+**NEVER suggest switching to filesystem-based UI (LittleFS) unless**:
+1. You have read [WEB_UI_ARCHITECTURE_DECISION.md](WEB_UI_ARCHITECTURE_DECISION.md)
+2. ALL features have been ported (multi-sensor, LED matrix, animations, log filtering)
+3. You have explicit approval from the project owner
+
+**Why inline HTML?**
+- ✅ All features implemented (filesystem UI was missing 70%)
+- ✅ Simpler deployment (no filesystem upload step)
+- ✅ No LittleFS mount/caching bugs
+- ✅ Appropriate for single-developer embedded project
+
+See [WEB_UI_ARCHITECTURE_DECISION.md](WEB_UI_ARCHITECTURE_DECISION.md) for full rationale.
+
 ## Git Workflow
 
 ### Commits

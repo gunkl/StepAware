@@ -5,6 +5,7 @@
 #include "hal_motion_sensor.h"
 #include "hal_pir.h"
 #include "hal_ultrasonic.h"
+#include "hal_ultrasonic_grove.h"
 
 /**
  * @file sensor_factory.h
@@ -47,7 +48,7 @@ public:
     static HAL_MotionSensor* createPIR(uint8_t pin, bool mockMode = false);
 
     /**
-     * @brief Create an ultrasonic sensor
+     * @brief Create an ultrasonic sensor (HC-SR04, 4-pin)
      *
      * @param triggerPin GPIO pin for trigger
      * @param echoPin GPIO pin for echo
@@ -56,6 +57,16 @@ public:
      */
     static HAL_MotionSensor* createUltrasonic(uint8_t triggerPin, uint8_t echoPin,
                                                bool mockMode = false);
+
+    /**
+     * @brief Create a Grove ultrasonic sensor (v2.0, 3-pin)
+     *
+     * @param sigPin GPIO pin for combined trigger/echo signal
+     * @param mockMode Enable mock mode for testing
+     * @return Pointer to HAL_Ultrasonic_Grove instance
+     */
+    static HAL_MotionSensor* createUltrasonicGrove(uint8_t sigPin,
+                                                    bool mockMode = false);
 
     /**
      * @brief Create a sensor from type enum

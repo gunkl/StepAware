@@ -72,6 +72,13 @@ public:
     void setLEDMatrix(class HAL_LEDMatrix_8x8* ledMatrix);
 
     /**
+     * @brief Set Sensor Manager reference (optional)
+     *
+     * @param sensorManager Sensor Manager instance for live config updates
+     */
+    void setSensorManager(class SensorManager* sensorManager);
+
+    /**
      * @brief Destructor
      */
     ~WebAPI();
@@ -100,6 +107,7 @@ private:
     class PowerManager* m_power;           ///< Power Manager reference (optional)
     class WatchdogManager* m_watchdog;     ///< Watchdog Manager reference (optional)
     class HAL_LEDMatrix_8x8* m_ledMatrix;  ///< LED Matrix reference (optional, Issue #12)
+    class SensorManager* m_sensorManager;  ///< Sensor Manager reference (optional)
     bool m_corsEnabled;                    ///< CORS enabled flag
 
     // Endpoint handlers

@@ -27,9 +27,13 @@
 #define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
 #define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
 
-// Ultrasonic Sensor Pins (optional, for HC-SR04)
+// Ultrasonic Sensor Pins (optional)
+// HC-SR04 (4-pin): Separate trigger and echo pins
 #define PIN_ULTRASONIC_TRIGGER  8    // Ultrasonic trigger pin (GPIO8)
 #define PIN_ULTRASONIC_ECHO     9    // Ultrasonic echo pin (GPIO9)
+
+// Grove Ultrasonic v2.0 (3-pin): Single signal pin for trigger/echo
+#define PIN_ULTRASONIC_GROVE_SIG 8   // Grove ultrasonic signal pin (GPIO8, shared trigger/echo)
 
 // I2C Pins (for LED Matrix and other I2C devices)
 // Note: Using GPIO 7 and 10 to avoid conflict with ultrasonic sensor (GPIO 8/9)
@@ -41,7 +45,11 @@
 // Sensor Selection
 // ============================================================================
 // Select which motion sensor to use at compile time.
-// Options: SENSOR_TYPE_PIR, SENSOR_TYPE_ULTRASONIC
+// Options:
+//   SENSOR_TYPE_PIR              - AM312 PIR sensor (default)
+//   SENSOR_TYPE_ULTRASONIC       - HC-SR04 ultrasonic (4-pin: VCC/GND/Trig/Echo)
+//   SENSOR_TYPE_ULTRASONIC_GROVE - Grove Ultrasonic v2.0 (3-pin: VCC/GND/SIG)
+//
 // Default: SENSOR_TYPE_PIR (AM312 PIR sensor)
 
 #ifndef ACTIVE_SENSOR_TYPE
@@ -183,9 +191,12 @@
 #define LOG_LEVEL_ERROR    3
 #define LOG_LEVEL_NONE     4
 
-// Default Log Level (set to LOG_LEVEL_DEBUG for development)
+// Default Log Level
+// IMPORTANT: LOG_LEVEL_DEBUG can cause device bricking due to serial flooding!
+// Only use DEBUG level for specific troubleshooting, not for normal operation.
+// Override in platformio.ini with -D LOG_LEVEL=LOG_LEVEL_DEBUG if needed
 #ifndef LOG_LEVEL
-#define LOG_LEVEL LOG_LEVEL_DEBUG
+#define LOG_LEVEL LOG_LEVEL_INFO
 #endif
 
 // Circular Buffer Size (number of log entries)
@@ -249,7 +260,7 @@
 
 // Mock Hardware (set to 1 for development without physical hardware)
 #ifndef MOCK_HARDWARE
-#define MOCK_HARDWARE                1    // 0 = real hardware, 1 = mock
+#define MOCK_HARDWARE                0    // 0 = real hardware, 1 = mock
 #endif
 
 // ============================================================================
