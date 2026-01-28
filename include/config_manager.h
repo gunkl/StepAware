@@ -38,6 +38,7 @@ public:
         uint32_t warmupMs;                // ms
         bool enableDirectionDetection;    // Direction detection enabled
         uint8_t directionTriggerMode;     // 0=approaching, 1=receding, 2=both
+        uint16_t directionSensitivity;    // Direction change threshold (mm), 0 = auto (adaptive threshold)
         uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
     };
@@ -176,6 +177,17 @@ public:
      * @return true if configuration is valid
      */
     bool validate();
+
+    /**
+     * @brief Validate and correct configuration at boot
+     *
+     * Checks all configuration values for corruption or out-of-range values.
+     * Automatically corrects any invalid values with defaults and logs errors.
+     * Should be called after loading configuration from file.
+     *
+     * @return true if no corrections were needed, false if corrections were made
+     */
+    bool validateAndCorrect();
 
     /**
      * @brief Get current configuration

@@ -1,5 +1,6 @@
 #include "power_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 
 #ifndef MOCK_MODE
 #include <esp_sleep.h>
@@ -89,7 +90,7 @@ PowerManager::~PowerManager() {
 
 bool PowerManager::begin(const Config* config) {
     if (m_initialized) {
-        LOG_WARN("Power: Already initialized");
+        DEBUG_LOG_SYSTEM("Power: Already initialized");
         return true;
     }
 
@@ -98,7 +99,7 @@ bool PowerManager::begin(const Config* config) {
         m_config = *config;
     }
 
-    LOG_INFO("Power: Initializing");
+    DEBUG_LOG_SYSTEM("Power: Initializing");
 
 #ifndef MOCK_MODE
     // Configure ADC for battery voltage reading
@@ -120,9 +121,9 @@ bool PowerManager::begin(const Config* config) {
 
     // Try to restore state from RTC memory
     if (restoreStateFromRTC()) {
-        LOG_INFO("Power: Restored state from RTC memory (wake count: %u)", m_stats.wakeCount);
+        DEBUG_LOG_SYSTEM("Power: Restored state from RTC memory (wake count: %u)", m_stats.wakeCount);
     } else {
-        LOG_INFO("Power: Fresh boot, initializing RTC memory");
+        DEBUG_LOG_SYSTEM("Power: Fresh boot, initializing RTC memory");
         rtcMemory.magic = RTC_MAGIC;
         rtcMemory.wakeCount = 0;
         rtcMemory.deepSleepCount = 0;
@@ -133,13 +134,13 @@ bool PowerManager::begin(const Config* config) {
     // Initial battery check
     updateBatteryStatus();
 
-    LOG_INFO("Power: Initialized (battery: %.2fV, %u%%)",
+    DEBUG_LOG_SYSTEM("Power: Initialized (battery: %.2fV, %u%%)",
              m_batteryStatus.voltage, m_batteryStatus.percentage);
 
     // Critical battery boot protection
     // If battery is critical and not charging, show warning and shutdown
     if (m_batteryStatus.critical && !m_batteryStatus.charging) {
-        LOG_ERROR("Power: Critical battery detected on boot (%.2fV), shutting down", m_batteryStatus.voltage);
+        DEBUG_LOG_SYSTEM("Power: Critical battery detected on boot (%.2fV), shutting down", m_batteryStatus.voltage);
 
         #ifndef MOCK_MODE
         // Flash LED 3 times as shutdown warning
@@ -193,7 +194,7 @@ void PowerManager::updateBatteryStatus() {
 
     // Detect charging state change
     if (m_batteryStatus.charging && !wasCharging) {
-        LOG_INFO("Power: Charging started");
+        DEBUG_LOG_SYSTEM("Power: Charging started");
         if (m_onCharging) {
             m_onCharging();
         }
@@ -208,12 +209,12 @@ void PowerManager::updateBatteryStatus() {
 
     // Trigger callbacks on state changes
     if (m_batteryStatus.critical && !wasCritical) {
-        LOG_ERROR("Power: Critical battery! (%.2fV)", voltage);
+        DEBUG_LOG_SYSTEM("Power: Critical battery! (%.2fV)", voltage);
         if (m_onCriticalBattery) {
             m_onCriticalBattery();
         }
     } else if (m_batteryStatus.low && !wasLow) {
-        LOG_WARN("Power: Low battery (%.2fV)", voltage);
+        DEBUG_LOG_SYSTEM("Power: Low battery (%.2fV)", voltage);
         if (m_onLowBattery) {
             m_onLowBattery();
         }
@@ -362,7 +363,7 @@ void PowerManager::handlePowerState() {
                 setState(STATE_CHARGING);
             } else {
                 // Prepare for shutdown
-                LOG_ERROR("Power: Critical battery, entering deep sleep");
+                DEBUG_LOG_SYSTEM("Power: Critical battery, entering deep sleep");
                 saveStateToRTC();
                 enterDeepSleep(0); // Indefinite sleep until charged
             }
@@ -385,7 +386,7 @@ void PowerManager::handlePowerState() {
 
 void PowerManager::setState(PowerState newState) {
     if (m_state != newState) {
-        LOG_INFO("Power: State %s -> %s", getStateName(m_state), getStateName(newState));
+        DEBUG_LOG_SYSTEM("Power: State %s -> %s", getStateName(m_state), getStateName(newState));
         m_state = newState;
         m_stateEnterTime = millis();
     }
@@ -403,7 +404,7 @@ bool PowerManager::shouldEnterSleep() {
 }
 
 void PowerManager::enterLightSleep(uint32_t duration_ms) {
-    LOG_INFO("Power: Entering light sleep (%ums)", duration_ms);
+    DEBUG_LOG_SYSTEM("Power: Entering light sleep (%ums)", duration_ms);
 
     saveStateToRTC();
     setState(STATE_LIGHT_SLEEP);
@@ -439,7 +440,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms) {
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms) {
-    LOG_INFO("Power: Entering deep sleep (%ums)", duration_ms);
+    DEBUG_LOG_SYSTEM("Power: Entering deep sleep (%ums)", duration_ms);
 
     saveStateToRTC();
     setState(STATE_DEEP_SLEEP);
@@ -481,7 +482,7 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms) {
 }
 
 void PowerManager::wakeUp() {
-    LOG_INFO("Power: Wake up");
+    DEBUG_LOG_SYSTEM("Power: Wake up");
 
     m_stats.wakeCount++;
     m_lastActivity = millis();
@@ -492,24 +493,24 @@ void PowerManager::wakeUp() {
 
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_GPIO:  // ESP32-C3 GPIO wakeup (replaces EXT0/EXT1)
-            LOG_INFO("Power: Wake source = GPIO (motion or button)");
+            DEBUG_LOG_SYSTEM("Power: Wake source = GPIO (motion or button)");
             // For ESP32-C3, we can't easily distinguish which GPIO triggered the wake
             // Default to active state (user can check button state if needed)
             setState(STATE_ACTIVE);
             break;
 
         case ESP_SLEEP_WAKEUP_TIMER:  // Timer wake
-            LOG_INFO("Power: Wake source = Timer");
+            DEBUG_LOG_SYSTEM("Power: Wake source = Timer");
             setState(STATE_ACTIVE);
             break;
 
         case ESP_SLEEP_WAKEUP_UNDEFINED:  // Normal boot (not from sleep)
-            LOG_INFO("Power: Wake source = Normal boot");
+            DEBUG_LOG_SYSTEM("Power: Wake source = Normal boot");
             setState(STATE_ACTIVE);
             break;
 
         default:  // Unknown wake source
-            LOG_INFO("Power: Wake source = Unknown (%d)", (int)wakeup_reason);
+            DEBUG_LOG_SYSTEM("Power: Wake source = Unknown (%d)", (int)wakeup_reason);
             setState(STATE_ACTIVE);
             break;
     }
@@ -541,14 +542,14 @@ void PowerManager::setCPUFrequency(uint8_t mhz) {
     #endif
 
     setCpuFrequencyMhz(mhz);
-    LOG_INFO("Power: CPU frequency set to %uMHz", mhz);
+    DEBUG_LOG_SYSTEM("Power: CPU frequency set to %uMHz", mhz);
 #endif
 }
 
 void PowerManager::setLEDBrightness(uint8_t percentage) {
     // This will be called by LED HAL implementations
     // Just log for now
-    LOG_INFO("Power: LED brightness set to %u%%", percentage);
+    DEBUG_LOG_SYSTEM("Power: LED brightness set to %u%%", percentage);
 }
 
 void PowerManager::saveStateToRTC() {
@@ -567,7 +568,7 @@ bool PowerManager::restoreStateFromRTC() {
     m_stats.deepSleepCount = rtcMemory.deepSleepCount;
     rtcMemory.wakeCount = m_stats.wakeCount;
 
-    LOG_INFO("Power: Restored from deep sleep (wake #%u)", m_stats.wakeCount);
+    DEBUG_LOG_SYSTEM("Power: Restored from deep sleep (wake #%u)", m_stats.wakeCount);
 
     return true;
 }
@@ -620,7 +621,7 @@ void PowerManager::resetStats() {
     m_stats.avgCurrent = 0.0f;
 
     m_startTime = millis();
-    LOG_INFO("Power: Statistics reset");
+    DEBUG_LOG_SYSTEM("Power: Statistics reset");
 }
 
 const char* PowerManager::getStateName(PowerState state) {

@@ -31,8 +31,8 @@ class MockLEDMatrix8x8:
         self.initialized = False
 
         # Display state
-        self.brightness = 5  # Default brightness (0-15)
-        self.rotation = 0    # Default rotation (0-3)
+        self.brightness = 15  # Default brightness (0-15, max brightness)
+        self.rotation = 0     # Default rotation (0-3)
         self.frame = [0] * 8  # 8 rows of 8 pixels
 
         # Animation state

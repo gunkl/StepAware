@@ -135,10 +135,10 @@ class MockConfigManager:
             self.last_error = "Invalid battery voltage thresholds"
             return False
 
-        # Log level validation
+        # Log level validation (0=VERBOSE to 5=NONE)
         logging = self.config.get("logging", {})
         log_level = logging.get("level", 0)
-        if log_level > 4:  # LOG_LEVEL_NONE
+        if log_level > 5:  # LOG_LEVEL_NONE
             self.last_error = "Invalid log level"
             return False
 

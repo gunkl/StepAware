@@ -34,11 +34,12 @@ public:
      * @brief Log levels
      */
     enum LogLevel {
-        LEVEL_DEBUG = LOG_LEVEL_DEBUG,
-        LEVEL_INFO  = LOG_LEVEL_INFO,
-        LEVEL_WARN  = LOG_LEVEL_WARN,
-        LEVEL_ERROR = LOG_LEVEL_ERROR,
-        LEVEL_NONE  = LOG_LEVEL_NONE
+        LEVEL_VERBOSE = LOG_LEVEL_VERBOSE,
+        LEVEL_DEBUG   = LOG_LEVEL_DEBUG,
+        LEVEL_INFO    = LOG_LEVEL_INFO,
+        LEVEL_WARN    = LOG_LEVEL_WARN,
+        LEVEL_ERROR   = LOG_LEVEL_ERROR,
+        LEVEL_NONE    = LOG_LEVEL_NONE
     };
 
     /**
@@ -88,6 +89,14 @@ public:
      * @param enabled True to enable
      */
     void setFileEnabled(bool enabled);
+
+    /**
+     * @brief Log a verbose message
+     *
+     * @param format Printf-style format string
+     * @param ... Format arguments
+     */
+    void verbose(const char* format, ...);
 
     /**
      * @brief Log a debug message
@@ -224,6 +233,7 @@ private:
 extern Logger g_logger;
 
 // Convenience macros
+#define LOG_VERBOSE(...) g_logger.verbose(__VA_ARGS__)
 #define LOG_DEBUG(...) g_logger.debug(__VA_ARGS__)
 #define LOG_INFO(...)  g_logger.info(__VA_ARGS__)
 #define LOG_WARN(...)  g_logger.warn(__VA_ARGS__)

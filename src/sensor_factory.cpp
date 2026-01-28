@@ -1,5 +1,6 @@
 #include "sensor_factory.h"
 #include "config.h"
+#include "debug_logger.h"
 
 HAL_MotionSensor* SensorFactory::create(const SensorConfig& config, bool mockMode) {
     switch (config.type) {
@@ -18,12 +19,48 @@ HAL_MotionSensor* SensorFactory::create(const SensorConfig& config, bool mockMod
             if (config.detectionThreshold > 0) {
                 sensor->setDetectionThreshold(config.detectionThreshold);
             }
+            if (config.maxDetectionDistance > 0) {
+                sensor->setMaxDistance(config.maxDetectionDistance);
+            }
             if (config.debounceMs > 0) {
                 sensor->setMeasurementInterval(config.debounceMs);
             }
             if (config.sampleWindowSize > 0) {
                 sensor->setSampleWindowSize(config.sampleWindowSize);
             }
+
+            // Validate sample rate (should be 50-1000ms for ultrasonic sensors)
+            uint32_t sampleRate = config.sampleRateMs;
+            if (sampleRate == 0 || sampleRate > 1000) {
+                DEBUG_LOG_SENSOR("Invalid sampleRateMs %u detected, resetting to 75ms default", sampleRate);
+                sampleRate = 75;
+            }
+            sensor->setSampleInterval(sampleRate);
+
+            // Calculate adaptive threshold based on pedestrian walking speed (~1.4 m/s)
+            // At 1.4 m/s, person moves ~105mm per 75ms sample
+            // Use 75mm threshold (slightly lower for sensitivity while avoiding noise)
+            uint32_t adaptiveThreshold = (sampleRate * 75) / 75;  // 75ms → 75mm, 100ms → 100mm, etc.
+            DEBUG_LOG_SENSOR("Ultrasonic: sampleRate=%u, adaptiveThreshold=%u, config.dirSensitivity=%u",
+                           sampleRate, adaptiveThreshold, config.directionSensitivity);
+
+            // Validate direction sensitivity (should be 0 for auto, or reasonable value < 1000mm)
+            uint16_t validatedDirSensitivity = config.directionSensitivity;
+            if (validatedDirSensitivity > 1000) {
+                DEBUG_LOG_SENSOR("Invalid directionSensitivity %u detected, resetting to 0 (auto)", validatedDirSensitivity);
+                validatedDirSensitivity = 0;
+            }
+
+            // Apply direction sensitivity (min = adaptive threshold, or user override)
+            uint32_t dirSensitivity = (validatedDirSensitivity > 0) ?
+                                      validatedDirSensitivity : adaptiveThreshold;
+            // Ensure it's at least the adaptive threshold
+            if (dirSensitivity < adaptiveThreshold) {
+                dirSensitivity = adaptiveThreshold;
+            }
+            DEBUG_LOG_SENSOR("Ultrasonic: Setting directionSensitivity to %u", dirSensitivity);
+            sensor->setDirectionSensitivity(dirSensitivity);
+
             sensor->setDirectionDetection(config.enableDirectionDetection);
             sensor->setDirectionTriggerMode(config.directionTriggerMode);
 
@@ -40,12 +77,48 @@ HAL_MotionSensor* SensorFactory::create(const SensorConfig& config, bool mockMod
             if (config.detectionThreshold > 0) {
                 sensor->setDetectionThreshold(config.detectionThreshold);
             }
+            if (config.maxDetectionDistance > 0) {
+                sensor->setMaxDistance(config.maxDetectionDistance);
+            }
             if (config.debounceMs > 0) {
                 sensor->setMeasurementInterval(config.debounceMs);
             }
             if (config.sampleWindowSize > 0) {
                 sensor->setSampleWindowSize(config.sampleWindowSize);
             }
+
+            // Validate sample rate (should be 50-1000ms for ultrasonic sensors)
+            uint32_t sampleRate = config.sampleRateMs;
+            if (sampleRate == 0 || sampleRate > 1000) {
+                DEBUG_LOG_SENSOR("Invalid sampleRateMs %u detected, resetting to 75ms default", sampleRate);
+                sampleRate = 75;
+            }
+            sensor->setSampleInterval(sampleRate);
+
+            // Calculate adaptive threshold based on pedestrian walking speed (~1.4 m/s)
+            // At 1.4 m/s, person moves ~105mm per 75ms sample
+            // Use 75mm threshold (slightly lower for sensitivity while avoiding noise)
+            uint32_t adaptiveThreshold = (sampleRate * 75) / 75;  // 75ms → 75mm, 100ms → 100mm, etc.
+            DEBUG_LOG_SENSOR("Ultrasonic: sampleRate=%u, adaptiveThreshold=%u, config.dirSensitivity=%u",
+                           sampleRate, adaptiveThreshold, config.directionSensitivity);
+
+            // Validate direction sensitivity (should be 0 for auto, or reasonable value < 1000mm)
+            uint16_t validatedDirSensitivity = config.directionSensitivity;
+            if (validatedDirSensitivity > 1000) {
+                DEBUG_LOG_SENSOR("Invalid directionSensitivity %u detected, resetting to 0 (auto)", validatedDirSensitivity);
+                validatedDirSensitivity = 0;
+            }
+
+            // Apply direction sensitivity (min = adaptive threshold, or user override)
+            uint32_t dirSensitivity = (validatedDirSensitivity > 0) ?
+                                      validatedDirSensitivity : adaptiveThreshold;
+            // Ensure it's at least the adaptive threshold
+            if (dirSensitivity < adaptiveThreshold) {
+                dirSensitivity = adaptiveThreshold;
+            }
+            DEBUG_LOG_SENSOR("Ultrasonic: Setting directionSensitivity to %u", dirSensitivity);
+            sensor->setDirectionSensitivity(dirSensitivity);
+
             sensor->setDirectionDetection(config.enableDirectionDetection);
             sensor->setDirectionTriggerMode(config.directionTriggerMode);
 
@@ -92,8 +165,12 @@ SensorConfig SensorFactory::getDefaultConfig(SensorType type) {
     config.type = type;
     config.debounceMs = 50;
     config.warmupMs = 0;
-    config.enableDirectionDetection = false;
+    config.enableDirectionDetection = true;  // Default enabled for all sensors
     config.invertLogic = false;
+    config.directionTriggerMode = 0;  // APPROACHING
+    config.directionSensitivity = 0;  // 0 = auto (adaptive threshold)
+    config.sampleWindowSize = 3;  // Global default
+    config.sampleRateMs = 75;  // Global default (75ms for adaptive threshold)
 
     switch (type) {
         case SENSOR_TYPE_PIR:
@@ -101,29 +178,34 @@ SensorConfig SensorFactory::getDefaultConfig(SensorType type) {
             config.primaryPin = PIN_PIR_SENSOR;
             config.secondaryPin = 0;
             config.detectionThreshold = 0;  // Not applicable for PIR
+            config.maxDetectionDistance = 0;  // Not applicable for PIR
             config.warmupMs = PIR_WARMUP_TIME_MS;
+            config.enableDirectionDetection = false;  // PIR doesn't support direction
             break;
 
         case SENSOR_TYPE_ULTRASONIC:
             config.primaryPin = PIN_ULTRASONIC_TRIGGER;
             config.secondaryPin = PIN_ULTRASONIC_ECHO;
-            config.detectionThreshold = 500;  // 50cm default
+            config.detectionThreshold = 1100;  // 1100mm warn threshold
+            config.maxDetectionDistance = 3000;  // 3000mm max range
             config.enableDirectionDetection = true;
-            config.debounceMs = 60;  // Min measurement interval
+            config.debounceMs = 75;  // Sample interval (75ms for adaptive threshold)
             break;
 
         case SENSOR_TYPE_ULTRASONIC_GROVE:
             config.primaryPin = PIN_ULTRASONIC_TRIGGER;  // Use same pin as trigger (single pin)
             config.secondaryPin = 0;  // Not used for Grove (single-pin sensor)
-            config.detectionThreshold = 1200;  // 120cm default
+            config.detectionThreshold = 1100;  // 1100mm warn threshold
+            config.maxDetectionDistance = 3000;  // 3000mm max range
             config.enableDirectionDetection = true;
-            config.debounceMs = 60;  // Min measurement interval
+            config.debounceMs = 75;  // Sample interval (75ms for adaptive threshold)
             break;
 
         case SENSOR_TYPE_IR:
             config.primaryPin = PIN_PIR_SENSOR;  // Placeholder
             config.secondaryPin = 0;
             config.detectionThreshold = 0;
+            config.maxDetectionDistance = 0;
             break;
 
         default:

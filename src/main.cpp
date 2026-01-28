@@ -27,6 +27,7 @@
 #include "serial_config.h"
 #include "wifi_manager.h"
 #include "web_api.h"
+#include "debug_logger.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -104,7 +105,7 @@ void startWebAPI() {
  * @brief Callback when WiFi connects
  */
 void onWiFiConnected() {
-    LOG_INFO("WiFi: Connected callback - starting Web API if needed");
+    DEBUG_LOG_WIFI("Connected callback - starting Web API if needed");
     startWebAPI();
 }
 
@@ -495,14 +496,14 @@ void triggerWarningDisplay(uint32_t duration_ms) {
             HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT,
             duration_ms
         );
-        LOG_INFO("Triggered matrix motion alert (duration: %u ms)", duration_ms);
+        DEBUG_LOG_LED("Triggered matrix motion alert (duration: %u ms)", duration_ms);
     } else {
         // Fall back to hazard LED warning pattern
         hazardLED.startPattern(
             HAL_LED::PATTERN_BLINK_WARNING,
             duration_ms
         );
-        LOG_INFO("Triggered LED warning (duration: %u ms)", duration_ms);
+        DEBUG_LOG_LED("Triggered LED warning (duration: %u ms)", duration_ms);
     }
 }
 
@@ -518,11 +519,11 @@ void showBatteryStatus(uint8_t percentage) {
             HAL_LEDMatrix_8x8::ANIM_BATTERY_LOW,
             2000
         );
-        LOG_INFO("Showing battery low on matrix (%u%%)", percentage);
+        DEBUG_LOG_LED("Showing battery low on matrix (%u%%)", percentage);
     } else if (percentage < 30) {
         // Blink hazard LED slowly for low battery
         hazardLED.startPattern(HAL_LED::PATTERN_BLINK_SLOW, 2000);
-        LOG_INFO("Showing battery low on LED (%u%%)", percentage);
+        DEBUG_LOG_LED("Showing battery low on LED (%u%%)", percentage);
     }
 }
 
@@ -703,11 +704,45 @@ void setup() {
     }
 #endif
 
+    // Initialize debug logger EARLY (requires LittleFS) with minimal logging
+    Serial.println("[Setup] Initializing debug logger...");
+    if (!g_debugLogger.begin(DebugLogger::LEVEL_ERROR, DebugLogger::CAT_ALL)) {
+        Serial.println("[Setup] WARNING: Debug logger initialization failed");
+    }
+
     // Initialize configuration manager (loads from SPIFFS)
     Serial.println("[Setup] Initializing configuration manager...");
     if (!configManager.begin()) {
         Serial.println("[Setup] WARNING: Config manager failed, using defaults");
+        DEBUG_LOG_CONFIG("Config manager initialization FAILED - using defaults");
+    } else {
+        DEBUG_LOG_CONFIG("Config manager initialized successfully");
     }
+
+    // Validate and correct configuration for corruption/invalid values
+    Serial.println("[Setup] Validating configuration...");
+    if (!configManager.validateAndCorrect()) {
+        Serial.println("[Setup] WARNING: Configuration had errors and was corrected");
+        DEBUG_LOG_CONFIG("Configuration validation found and corrected errors");
+    } else {
+        Serial.println("[Setup] Configuration validation: PASSED");
+        DEBUG_LOG_CONFIG("Configuration validation: PASSED (no errors)");
+    }
+
+    // Apply log level from config to debug logger BEFORE writing boot info
+    const ConfigManager::Config& bootCfg = configManager.getConfig();
+    DebugLogger::LogLevel configLevel = static_cast<DebugLogger::LogLevel>(bootCfg.logLevel);
+    g_debugLogger.setLevel(configLevel);
+    Serial.printf("[Setup] Debug log level set to %u (%s) from config\n",
+                  bootCfg.logLevel, DebugLogger::getLevelName(configLevel));
+
+    // Now write boot info with correct log level
+    DEBUG_LOG_BOOT("=== StepAware Starting ===");
+    DEBUG_LOG_BOOT("Firmware: %s", FIRMWARE_VERSION);
+    DEBUG_LOG_BOOT("Build: %s %s", BUILD_DATE, BUILD_TIME);
+    DEBUG_LOG_BOOT("Board: ESP32-C3-DevKit-Lipo");
+    DEBUG_LOG_BOOT("Free Heap: %u bytes", ESP.getFreeHeap());
+    g_debugLogger.logConfigDump();
 
     // Initialize serial configuration interface
     Serial.println("[Setup] Initializing serial config interface...");
@@ -739,10 +774,15 @@ void setup() {
             config.primaryPin = sensorCfg.primaryPin;
             config.secondaryPin = sensorCfg.secondaryPin;
             config.detectionThreshold = sensorCfg.detectionThreshold;
+            config.maxDetectionDistance = sensorCfg.maxDetectionDistance;
             config.debounceMs = sensorCfg.debounceMs;
             config.warmupMs = sensorCfg.warmupMs;
             config.enableDirectionDetection = sensorCfg.enableDirectionDetection;
+            config.directionTriggerMode = sensorCfg.directionTriggerMode;
+            config.directionSensitivity = sensorCfg.directionSensitivity;
             config.invertLogic = false;
+            config.sampleWindowSize = sensorCfg.sampleWindowSize;
+            config.sampleRateMs = sensorCfg.sampleRateMs;
 
             if (sensorManager.addSensor(i, config, sensorCfg.name,
                                        sensorCfg.isPrimary, MOCK_HARDWARE)) {
@@ -850,7 +890,7 @@ void setup() {
         Serial.println("[Setup] Creating LED Matrix in mock mode for testing...");
         ledMatrix = new HAL_LEDMatrix_8x8(0x70, 8, 9, true);
         if (ledMatrix && ledMatrix->begin()) {
-            ledMatrix->setBrightness(5);
+            ledMatrix->setBrightness(MATRIX_BRIGHTNESS_DEFAULT);
             Serial.println("[Setup] ✓ Mock LED Matrix created for testing");
         } else {
             Serial.println("[Setup] WARNING: Failed to create mock LED Matrix");
@@ -924,6 +964,11 @@ void setup() {
 
     Serial.println("[Setup] ✓ Initialization complete!");
     Serial.println();
+
+    DEBUG_LOG_BOOT("=== Boot Complete ===");
+    DEBUG_LOG_BOOT("Sensors active: %u", sensorManager.getActiveSensorCount());
+    DEBUG_LOG_BOOT("WiFi: %s", cfg.wifiEnabled ? "enabled" : "disabled");
+    DEBUG_LOG_BOOT("LED Matrix: %s", (ledMatrix && ledMatrix->isReady()) ? "ready" : "not available");
 
     // Print help
     printHelp();

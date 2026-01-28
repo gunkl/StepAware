@@ -143,9 +143,19 @@ private:
     void handleGetLogs(AsyncWebServerRequest* request);
 
     /**
+     * @brief GET /api/sensors - Get sensor runtime status including error rates
+     */
+    void handleGetSensors(AsyncWebServerRequest* request);
+
+    /**
      * @brief POST /api/sensors - Update sensor configuration
      */
     void handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
+
+    /**
+     * @brief POST /api/sensors/:slot/errorrate - Check sensor error rate
+     */
+    void handleCheckSensorErrorRate(AsyncWebServerRequest* request);
 
     /**
      * @brief GET /api/displays - Get display configuration
@@ -208,6 +218,11 @@ private:
     void handlePostReset(AsyncWebServerRequest* request);
 
     /**
+     * @brief POST /api/reboot - Reboot device
+     */
+    void handlePostReboot(AsyncWebServerRequest* request);
+
+    /**
      * @brief GET /api/version - Version info
      */
     void handleGetVersion(AsyncWebServerRequest* request);
@@ -216,6 +231,31 @@ private:
      * @brief OPTIONS handler for CORS preflight
      */
     void handleOptions(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/debug/logs - List all debug logs
+     */
+    void handleGetDebugLogs(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/debug/logs/:file - Download specific log file
+     */
+    void handleDownloadDebugLog(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/debug/logs/clear - Clear all debug logs
+     */
+    void handleClearDebugLogs(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/debug/config - Get debug logger config
+     */
+    void handleGetDebugConfig(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/debug/config - Update debug logger config
+     */
+    void handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
 
     // Helper methods
 

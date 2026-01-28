@@ -265,6 +265,7 @@ private:
     uint8_t m_primarySlotIndex;         ///< Index of primary sensor
     bool m_initialized;                 ///< Initialization complete
     char m_lastError[128];              ///< Last error message
+    bool m_lastMotionState[MAX_SENSORS]; ///< Track motion state changes for debug logging
 
     /**
      * @brief Update active sensor count

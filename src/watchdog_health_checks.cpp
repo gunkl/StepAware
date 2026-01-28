@@ -2,6 +2,7 @@
 #include "state_machine.h"
 #include "config_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 #include "web_api.h"
 #include "wifi_manager.h"
 #include <Arduino.h>
@@ -200,12 +201,12 @@ bool recoverWiFi(WatchdogManager::RecoveryAction action) {
     switch (action) {
         case WatchdogManager::RECOVERY_SOFT:
             // Try reconnecting
-            LOG_INFO("Watchdog: Attempting WiFi soft recovery");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting WiFi soft recovery");
             return g_wifi.reconnect();
 
         case WatchdogManager::RECOVERY_MODULE_RESTART:
             // Restart WiFi subsystem
-            LOG_INFO("Watchdog: Attempting WiFi restart");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting WiFi restart");
             g_wifi.disconnect();
             delay(1000);
             return g_wifi.connect();
@@ -222,7 +223,7 @@ bool recoverMemory(WatchdogManager::RecoveryAction action) {
     switch (action) {
         case WatchdogManager::RECOVERY_SOFT:
             // Try to free memory
-            LOG_INFO("Watchdog: Attempting memory recovery");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting memory recovery");
 
             // Reduce logger buffer if possible
             // (Logger implementation would need a clearOldEntries() method)
@@ -244,7 +245,7 @@ bool recoverMemory(WatchdogManager::RecoveryAction action) {
 bool recoverStateMachine(WatchdogManager::RecoveryAction action) {
     switch (action) {
         case WatchdogManager::RECOVERY_SOFT:
-            LOG_INFO("Watchdog: Attempting state machine soft recovery");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting state machine soft recovery");
             // Reset to known good state
             g_stateMachine.setMode(StateMachine::OFF);
             g_modeEnterTime = millis();
@@ -252,7 +253,7 @@ bool recoverStateMachine(WatchdogManager::RecoveryAction action) {
             return true;
 
         case WatchdogManager::RECOVERY_MODULE_RESTART:
-            LOG_INFO("Watchdog: Attempting state machine restart");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting state machine restart");
             // Reinitialize state machine
             g_stateMachine.begin();
             g_modeEnterTime = millis();
@@ -270,12 +271,12 @@ bool recoverStateMachine(WatchdogManager::RecoveryAction action) {
 bool recoverConfigManager(WatchdogManager::RecoveryAction action) {
     switch (action) {
         case WatchdogManager::RECOVERY_SOFT:
-            LOG_INFO("Watchdog: Attempting config manager soft recovery");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting config manager soft recovery");
             // Reload configuration
             return g_config.load();
 
         case WatchdogManager::RECOVERY_MODULE_RESTART:
-            LOG_WARN("Watchdog: Performing config factory reset");
+            DEBUG_LOG_SYSTEM("Watchdog: Performing config factory reset");
             // Factory reset
             return g_config.reset(true);
 
@@ -290,12 +291,12 @@ bool recoverConfigManager(WatchdogManager::RecoveryAction action) {
 bool recoverLogger(WatchdogManager::RecoveryAction action) {
     switch (action) {
         case WatchdogManager::RECOVERY_SOFT:
-            LOG_INFO("Watchdog: Attempting logger soft recovery");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting logger soft recovery");
             // Could clear old logs if logger supports it
             return true;
 
         case WatchdogManager::RECOVERY_MODULE_RESTART:
-            LOG_INFO("Watchdog: Attempting logger restart");
+            DEBUG_LOG_SYSTEM("Watchdog: Attempting logger restart");
             // Reinitialize logger
             return g_logger.begin();
 
@@ -310,7 +311,7 @@ bool recoverLogger(WatchdogManager::RecoveryAction action) {
  * Call this during system initialization after all modules are initialized.
  */
 void registerWatchdogHealthChecks() {
-    LOG_INFO("Watchdog: Registering health checks");
+    DEBUG_LOG_SYSTEM("Watchdog: Registering health checks");
 
     g_watchdog.registerModule(
         WatchdogManager::MODULE_MEMORY,
@@ -366,5 +367,5 @@ void registerWatchdogHealthChecks() {
         recoverWiFi
     );
 
-    LOG_INFO("Watchdog: All health checks registered");
+    DEBUG_LOG_SYSTEM("Watchdog: All health checks registered");
 }

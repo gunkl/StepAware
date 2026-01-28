@@ -1,5 +1,6 @@
 #include "hal_pir.h"
 #include "logger.h"
+#include "debug_logger.h"
 
 // Static capabilities for PIR sensor
 const SensorCapabilities HAL_PIR::s_capabilities = {
@@ -41,22 +42,22 @@ bool HAL_PIR::begin() {
         return true;
     }
 
-    LOG_DEBUG("HAL_PIR: Initializing PIR sensor...");
+    DEBUG_LOG_SENSOR("HAL_PIR: Initializing PIR sensor...");
 
     if (!m_mockMode) {
         // Configure GPIO pin as input
         pinMode(m_pin, INPUT);
-        LOG_DEBUG("HAL_PIR: Pin %d configured as INPUT", m_pin);
+        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured as INPUT", m_pin);
     } else {
-        LOG_DEBUG("HAL_PIR: MOCK MODE - Simulating sensor");
+        DEBUG_LOG_SENSOR("HAL_PIR: MOCK MODE - Simulating sensor");
     }
 
     m_startTime = millis();
     m_initialized = true;
 
-    LOG_DEBUG("HAL_PIR: Warm-up period: %u ms (~%u seconds)",
+    DEBUG_LOG_SENSOR("HAL_PIR: Warm-up period: %u ms (~%u seconds)",
               m_warmupDuration, m_warmupDuration / 1000);
-    LOG_DEBUG("HAL_PIR: Initialization complete");
+    DEBUG_LOG_SENSOR("HAL_PIR: Initialization complete");
 
     return true;
 }
@@ -70,7 +71,7 @@ void HAL_PIR::update() {
     if (!m_sensorReady) {
         if (millis() - m_startTime >= m_warmupDuration) {
             m_sensorReady = true;
-            LOG_INFO("HAL_PIR: Warm-up complete - sensor ready");
+            DEBUG_LOG_SENSOR("HAL_PIR: Warm-up complete - sensor ready");
         }
     }
 
@@ -94,14 +95,14 @@ void HAL_PIR::update() {
         m_motionEventCount++;
         m_lastEventTime = millis();
         m_lastEvent = MOTION_EVENT_DETECTED;
-        LOG_INFO("HAL_PIR: Motion detected (event #%u)", m_motionEventCount);
+        DEBUG_LOG_SENSOR("HAL_PIR: Motion detected (event #%u)", m_motionEventCount);
     }
 
     // Detect falling edge (motion ended)
     if (!currentState && m_lastState) {
         m_lastEventTime = millis();
         m_lastEvent = MOTION_EVENT_CLEARED;
-        LOG_INFO("HAL_PIR: Motion cleared");
+        DEBUG_LOG_SENSOR("HAL_PIR: Motion cleared");
     }
 
     m_lastState = currentState;
@@ -135,7 +136,7 @@ uint32_t HAL_PIR::getWarmupTimeRemaining() const {
 
 void HAL_PIR::resetEventCount() {
     m_motionEventCount = 0;
-    LOG_DEBUG("HAL_PIR: Motion event counter reset");
+    DEBUG_LOG_SENSOR("HAL_PIR: Motion event counter reset");
 }
 
 // =========================================================================
@@ -144,28 +145,28 @@ void HAL_PIR::resetEventCount() {
 
 void HAL_PIR::mockSetMotion(bool detected) {
     if (!m_mockMode) {
-        LOG_WARN("HAL_PIR: mockSetMotion() called but mock mode not enabled");
+        DEBUG_LOG_SENSOR("HAL_PIR: mockSetMotion() called but mock mode not enabled");
         return;
     }
 
     m_motionDetected = detected;
     m_mockMotionEndTime = 0;
-    LOG_DEBUG("HAL_PIR: MOCK - Motion set to %s", detected ? "TRUE" : "FALSE");
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion set to %s", detected ? "TRUE" : "FALSE");
 }
 
 void HAL_PIR::mockSetReady() {
     if (!m_mockMode) {
-        LOG_WARN("HAL_PIR: mockSetReady() called but mock mode not enabled");
+        DEBUG_LOG_SENSOR("HAL_PIR: mockSetReady() called but mock mode not enabled");
         return;
     }
 
     m_sensorReady = true;
-    LOG_DEBUG("HAL_PIR: MOCK - Sensor marked as ready");
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor marked as ready");
 }
 
 void HAL_PIR::mockTriggerMotion(uint32_t duration_ms) {
     if (!m_mockMode) {
-        LOG_WARN("HAL_PIR: mockTriggerMotion() called but mock mode not enabled");
+        DEBUG_LOG_SENSOR("HAL_PIR: mockTriggerMotion() called but mock mode not enabled");
         return;
     }
 
@@ -173,30 +174,30 @@ void HAL_PIR::mockTriggerMotion(uint32_t duration_ms) {
 
     if (duration_ms > 0) {
         m_mockMotionEndTime = millis() + duration_ms;
-        LOG_DEBUG("HAL_PIR: MOCK - Motion triggered for %u ms", duration_ms);
+        DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion triggered for %u ms", duration_ms);
     } else {
         m_mockMotionEndTime = 0;
-        LOG_DEBUG("HAL_PIR: MOCK - Motion triggered (edge only)");
+        DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion triggered (edge only)");
     }
 }
 
 void HAL_PIR::mockClearMotion() {
     if (!m_mockMode) {
-        LOG_WARN("HAL_PIR: mockClearMotion() called but mock mode not enabled");
+        DEBUG_LOG_SENSOR("HAL_PIR: mockClearMotion() called but mock mode not enabled");
         return;
     }
 
     m_motionDetected = false;
     m_mockMotionEndTime = 0;
-    LOG_DEBUG("HAL_PIR: MOCK - Motion cleared");
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion cleared");
 }
 
 void HAL_PIR::mockSetReady(bool ready) {
     if (!m_mockMode) {
-        LOG_WARN("HAL_PIR: mockSetReady() called but mock mode not enabled");
+        DEBUG_LOG_SENSOR("HAL_PIR: mockSetReady() called but mock mode not enabled");
         return;
     }
 
     m_sensorReady = ready;
-    LOG_DEBUG("HAL_PIR: MOCK - Sensor ready state set to %s", ready ? "TRUE" : "FALSE");
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor ready state set to %s", ready ? "TRUE" : "FALSE");
 }

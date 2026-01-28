@@ -13,6 +13,40 @@
  * - Movement detection (distinguishes motion from static objects)
  * - Direction detection (approaching vs receding)
  * - Distance-based thresholding
+ * - Dual-mode approach detection (gradual vs sudden appearance)
+ *
+ * ## Dual-Mode Approach Detection
+ *
+ * The sensor uses two different detection modes to handle different scenarios:
+ *
+ * ### Mode 1: Gradual Approach (Normal Mode)
+ * Detects objects approaching from outside the detection range.
+ * - Readings start OUTSIDE detection range (distance > detectionThreshold)
+ * - Readings show APPROACHING direction (distance decreasing over time)
+ * - Object crosses INTO detection range (distance <= detectionThreshold)
+ * - **Triggers immediately** - no confirmation delay needed
+ * - Example: Person walking toward sensor from 2m away
+ *
+ * ### Mode 2: Sudden Appearance (Side/Hand Mode)
+ * Detects objects that appear within range without prior approach.
+ * - First valid readings are INSIDE detection range (distance <= detectionThreshold)
+ * - No prior readings from outside showing approach
+ * - Flags as "sudden appearance" requiring direction confirmation
+ * - Waits for DIRECTION_CONFIRMATION_WINDOW_CYCLES to build direction data
+ * - Only triggers if confirmed direction matches trigger mode
+ * - Example: Hand waved in front of sensor, person walking in from side
+ *
+ * ### Detection Logic
+ * 1. Track raw sensor readings (non-averaged) to detect sudden appearances
+ * 2. If 2 consecutive valid raw readings within range without prior outside approach
+ *    → Flag as sudden appearance, await direction confirmation
+ * 3. If readings show approach from outside range
+ *    → Flag as gradual approach, trigger immediately when entering range
+ * 4. During direction confirmation, wait for windowed averaging to stabilize
+ * 5. Only trigger if direction matches configured trigger mode
+ *
+ * This dual-mode approach prevents false alarms from objects appearing from
+ * the side while maintaining fast response to actual approaching targets.
  *
  * Subclasses only need to implement getDistanceReading() to provide
  * raw distance measurements from their specific hardware.
@@ -157,6 +191,13 @@ public:
     uint32_t getMaxDistance() const { return m_maxDistance; }
 
     /**
+     * @brief Set maximum detection distance
+     *
+     * @param maxDistance Maximum distance in millimeters
+     */
+    void setMaxDistance(uint32_t maxDistance) { m_maxDistance = maxDistance; }
+
+    /**
      * @brief Enable/disable direction detection
      *
      * @param enable true to enable direction-based filtering
@@ -200,6 +241,29 @@ public:
         m_directionSensitivity = sensitivity_mm;
     }
 
+    /**
+     * @brief Set sample interval for adaptive threshold calculation
+     *
+     * The movement threshold adapts based on sample rate:
+     * threshold = sampleInterval * VELOCITY_THRESHOLD (25 mm/ms)
+     *
+     * This ensures that fast movements aren't missed:
+     * - Faster sampling (e.g., 50ms) → lower threshold (1250mm) → more sensitive
+     * - Slower sampling (e.g., 100ms) → higher threshold (2500mm) → less sensitive
+     *
+     * @param interval_ms Sample interval in milliseconds (default: 75ms)
+     */
+    void setSampleInterval(uint32_t interval_ms) {
+        m_sampleIntervalMs = interval_ms;
+    }
+
+    /**
+     * @brief Get sample interval
+     *
+     * @return Sample interval in milliseconds
+     */
+    uint32_t getSampleInterval() const { return m_sampleIntervalMs; }
+
 protected:
     // =========================================================================
     // Protected Interface - Subclass Implementation Required
@@ -227,11 +291,21 @@ private:
     void addSampleToWindow(uint32_t distance_mm);
 
     /**
-     * @brief Calculate average of sample window
+     * @brief Calculate median of sample window (better outlier rejection than average)
      *
-     * @return Average distance in mm, 0 if window empty
+     * @return Median distance in mm, 0 if window empty
      */
     uint32_t calculateWindowAverage() const;
+
+    /**
+     * @brief Reset sample window with current distance
+     *
+     * Fills entire window buffer with specified distance to eliminate
+     * stale readings from before sudden appearance detection.
+     *
+     * @param distance_mm Distance to fill window with
+     */
+    void resetWindowWithDistance(uint32_t distance_mm, uint16_t previousAverage = 0);
 
     /**
      * @brief Check if movement detected based on window averages
@@ -256,6 +330,16 @@ private:
     void updateDirection();
 
     /**
+     * @brief Update dual-mode detection state based on raw reading
+     *
+     * Tracks whether object is approaching from outside range (gradual)
+     * or appeared suddenly within range (side/hand).
+     *
+     * @param rawDistance Current raw (non-averaged) distance reading
+     */
+    void updateDualModeDetectionState(uint32_t rawDistance);
+
+    /**
      * @brief Check for threshold crossing events
      */
     void checkThresholdEvents();
@@ -264,18 +348,47 @@ private:
     // Member Variables
     // =========================================================================
 
+protected:
+    // Distance range limits (accessible by derived classes for validation)
+    uint32_t m_minDistance;         ///< Minimum valid distance (mm)
+    uint32_t m_maxDistance;         ///< Maximum valid distance (mm)
+
+private:
     // Distance state
     uint32_t m_currentDistance;     ///< Current distance (window average, mm)
     uint32_t m_detectionThreshold;  ///< Detection threshold (mm)
-    uint32_t m_minDistance;         ///< Minimum valid distance (mm)
-    uint32_t m_maxDistance;         ///< Maximum valid distance (mm)
     bool m_objectDetected;          ///< Motion currently detected
 
     // Direction detection
     bool m_directionEnabled;        ///< Direction detection enabled
-    MotionDirection m_direction;    ///< Current direction
+    MotionDirection m_direction;    ///< Current confirmed direction
+    MotionDirection m_lastLoggedDirection; ///< Last logged direction (for change detection)
     uint32_t m_directionSensitivity;///< Min change for direction (mm)
     uint8_t m_directionTriggerMode; ///< 0=approaching, 1=receding, 2=both
+
+    // Direction stability tracking (require consistent direction before confirming)
+    static constexpr uint32_t DIRECTION_STABILITY_TIME_MS = 225; ///< Required stability time (225ms)
+    MotionDirection m_candidateDirection; ///< Pending direction being evaluated
+    uint8_t m_directionStabilityCount;    ///< Consecutive samples with same candidate direction
+
+    // Dual-mode approach detection constants (must be defined before use)
+    static constexpr uint8_t SUDDEN_APPEARANCE_READING_COUNT = 3;
+    static constexpr uint8_t DIRECTION_CONFIRMATION_WINDOW_CYCLES = 2;
+
+    // Dual-mode approach detection (gradual vs sudden appearance)
+    bool m_seenApproachingFromOutside;    ///< True when detected gradual approach from outside range
+    bool m_suddenAppearance;              ///< True when object appeared within range without approach
+    bool m_awaitingDirectionConfirmation; ///< True while waiting for direction window cycles
+    uint8_t m_confirmationCyclesRemaining;///< Window cycles remaining before triggering
+    uint8_t m_consecutiveInRangeCount;    ///< Count of consecutive raw readings within range
+    uint32_t m_lastRawDistance;           ///< Last raw (non-averaged) distance reading
+    uint32_t m_suddenAppearanceBuffer[SUDDEN_APPEARANCE_READING_COUNT]; ///< Buffer for 3 readings to average
+
+    // Debug tracking: last 5 raw readings for diagnostics
+    static constexpr uint8_t RAW_READING_HISTORY_SIZE = 5;
+    uint32_t m_rawReadingHistory[RAW_READING_HISTORY_SIZE]; ///< Last 5 raw readings
+    uint8_t m_rawReadingHistoryIndex; ///< Current write position in history buffer
+    uint8_t m_skipDirectionUpdateCount; ///< Skip N direction updates after wipe to preserve wipe-set candidate
 
     // Rolling window for movement detection
     static constexpr uint8_t MAX_SAMPLE_WINDOW_SIZE = 20;  ///< Maximum window size
@@ -288,15 +401,29 @@ private:
     uint32_t m_lastWindowAverage;
     bool m_windowFilled;
 
+    // Delta history for robust direction calculation (median of deltas)
+    static constexpr uint8_t DELTA_HISTORY_SIZE = 5;
+    int32_t m_deltaHistory[DELTA_HISTORY_SIZE]; ///< Last 5 delta values for median calculation
+    uint8_t m_deltaHistoryIndex;                ///< Current write position
+    uint8_t m_deltaHistoryCount;                ///< Number of valid deltas
+
     // Event tracking
     MotionEvent m_lastEvent;
     uint32_t m_eventCount;
     uint32_t m_lastEventTime;
 
+    // Movement detection - sample interval for adaptive threshold calculation
+    uint32_t m_sampleIntervalMs;    ///< Sample interval in milliseconds (for adaptive threshold)
+
     // Constants
     static constexpr uint32_t DEFAULT_THRESHOLD_MM = 500;      // 50cm
     static constexpr uint32_t DEFAULT_SENSITIVITY_MM = 20;     // 2cm
-    static constexpr uint32_t MOVEMENT_THRESHOLD_MM = 200;     // 20cm for human motion
+    static constexpr uint32_t MOVEMENT_THRESHOLD_MM = 200;     // 20cm for human motion (legacy, use adaptive)
+
+    // Adaptive threshold: Based on velocity = 1 mm/ms (~3.6 km/h, pedestrian walking speed)
+    // threshold = sampleInterval * VELOCITY_THRESHOLD ensures we detect pedestrian motion
+    // Example: 75ms interval → 75mm threshold, 100ms → 100mm, 50ms → 50mm
+    static constexpr uint32_t VELOCITY_THRESHOLD_MM_PER_MS = 1;  // ~3.6 km/h (1 m/s) pedestrian speed
 };
 
 #endif // STEPAWARE_DISTANCE_SENSOR_BASE_H

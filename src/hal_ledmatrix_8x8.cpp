@@ -1,5 +1,6 @@
 #include "hal_ledmatrix_8x8.h"
 #include "logger.h"
+#include "debug_logger.h"
 #include <Wire.h>
 
 #if !MOCK_HARDWARE
@@ -142,6 +143,10 @@ HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
     , m_animationFrame(0)
     , m_customAnimationCount(0)
     , m_activeCustomAnimation(nullptr)
+    , m_i2cTransactionCount(0)
+    , m_i2cFailureCount(0)
+    , m_errorRate(-1.0f)
+    , m_lastErrorRateUpdate(0)
 #if !MOCK_HARDWARE
     , m_matrix(nullptr)
 #endif
@@ -169,7 +174,7 @@ bool HAL_LEDMatrix_8x8::begin() {
     }
 
     if (m_mockMode) {
-        LOG_INFO("HAL_LEDMatrix_8x8: Initializing in MOCK mode (I2C addr: 0x%02X)", m_i2cAddress);
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Initializing in MOCK mode (I2C addr: 0x%02X)", m_i2cAddress);
         m_initialized = true;
         return true;
     }
@@ -181,23 +186,39 @@ bool HAL_LEDMatrix_8x8::begin() {
     // Create matrix object
     m_matrix = new Adafruit_8x8matrix();
     if (!m_matrix) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Failed to allocate matrix object");
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to allocate matrix object");
         return false;
     }
 
     // Initialize matrix
-    m_matrix->begin(m_i2cAddress);
+    bool beginSuccess = m_matrix->begin(m_i2cAddress);
+
+    // Track initial I2C transaction
+    m_i2cTransactionCount++;
+    if (!beginSuccess) {
+        m_i2cFailureCount++;
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to initialize HT16K33 at address 0x%02X (check wiring/address)",
+                  m_i2cAddress);
+        delete m_matrix;
+        m_matrix = nullptr;
+        return false;
+    }
+
     m_matrix->setRotation(m_rotation);
     m_matrix->setBrightness(m_brightness);
     m_matrix->clear();
     m_matrix->writeDisplay();
 
     m_initialized = true;
-    LOG_INFO("HAL_LEDMatrix_8x8: Initialized (I2C addr: 0x%02X, SDA: %d, SCL: %d)",
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Initialized (I2C addr: 0x%02X, SDA: %d, SCL: %d)",
              m_i2cAddress, m_sdaPin, m_sclPin);
+
+    // Perform initial error rate update
+    updateErrorRate();
+
     return true;
 #else
-    LOG_WARN("HAL_LEDMatrix_8x8: Compiled with MOCK_HARDWARE=1 but mock_mode=false");
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Compiled with MOCK_HARDWARE=1 but mock_mode=false");
     return false;
 #endif
 }
@@ -247,7 +268,7 @@ void HAL_LEDMatrix_8x8::setBrightness(uint8_t level) {
 #endif
     }
 
-    LOG_DEBUG("HAL_LEDMatrix_8x8: Brightness set to %d", level);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Brightness set to %d", level);
 }
 
 void HAL_LEDMatrix_8x8::setRotation(uint8_t rotation) {
@@ -266,7 +287,7 @@ void HAL_LEDMatrix_8x8::setRotation(uint8_t rotation) {
 #endif
     }
 
-    LOG_DEBUG("HAL_LEDMatrix_8x8: Rotation set to %d", rotation);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Rotation set to %d", rotation);
 }
 
 void HAL_LEDMatrix_8x8::startAnimation(AnimationPattern pattern, uint32_t duration_ms) {
@@ -292,12 +313,12 @@ void HAL_LEDMatrix_8x8::startAnimation(AnimationPattern pattern, uint32_t durati
         case ANIM_CUSTOM:            patternName = "CUSTOM"; break;
     }
 
-    LOG_INFO("HAL_LEDMatrix_8x8: Animation started: %s, duration: %u ms", patternName, duration_ms);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Animation started: %s, duration: %u ms", patternName, duration_ms);
 }
 
 void HAL_LEDMatrix_8x8::stopAnimation() {
     if (m_currentPattern != ANIM_NONE) {
-        LOG_DEBUG("HAL_LEDMatrix_8x8: Animation stopped");
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Animation stopped");
         m_currentPattern = ANIM_NONE;
         clear();
     }
@@ -379,7 +400,7 @@ void HAL_LEDMatrix_8x8::scrollText(const char* text, uint32_t speed_ms) {
 
     // This is a simplified implementation
     // For production, would need to use Adafruit_GFX text rendering
-    LOG_DEBUG("HAL_LEDMatrix_8x8: Scrolling text: %s (speed: %u ms)", text, speed_ms);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Scrolling text: %s (speed: %u ms)", text, speed_ms);
 
     if (m_mockMode) {
         // Mock mode: just log
@@ -560,7 +581,31 @@ void HAL_LEDMatrix_8x8::writeDisplay() {
     if (!m_mockMode) {
 #if !MOCK_HARDWARE
         if (m_matrix) {
+            // Track I2C transaction
+            m_i2cTransactionCount++;
+
+            DEBUG_LOG_LED("LED Matrix: I2C transaction #%u (failures: %u, current error rate: %.1f%%)",
+                      m_i2cTransactionCount, m_i2cFailureCount, m_errorRate);
+
+            // Write to display (writeDisplay returns void, not bool)
             m_matrix->writeDisplay();
+
+            // Track errors using Wire I2C status check
+            // Note: Adafruit_LEDBackpack::writeDisplay() doesn't return a status,
+            // so we verify I2C communication with a test transmission
+            Wire.beginTransmission(m_i2cAddress);
+            uint8_t error = Wire.endTransmission();
+            if (error != 0) {
+                m_i2cFailureCount++;
+                DEBUG_LOG_LED("LED Matrix: I2C error detected (code: %u), failure count: %u",
+                         error, m_i2cFailureCount);
+            }
+
+            // Update error rate periodically (every 10 transactions)
+            if (m_i2cTransactionCount % 10 == 0) {
+                DEBUG_LOG_LED("LED Matrix: Reached 10 transaction milestone, updating error rate...");
+                updateErrorRate();
+            }
         }
 #endif
     }
@@ -573,7 +618,7 @@ void HAL_LEDMatrix_8x8::writeDisplay() {
 bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
     // Check if we have room for more animations
     if (m_customAnimationCount >= MAX_CUSTOM_ANIMATIONS) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Cannot load animation, max limit reached (%d)", MAX_CUSTOM_ANIMATIONS);
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Cannot load animation, max limit reached (%d)", MAX_CUSTOM_ANIMATIONS);
         return false;
     }
 
@@ -581,14 +626,14 @@ bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
     // Open file from LittleFS
     File file = LittleFS.open(filepath, "r");
     if (!file) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Failed to open animation file: %s", filepath);
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to open animation file: %s", filepath);
         return false;
     }
 
     // Allocate new custom animation
     HAL_LEDMatrix_8x8::CustomAnimation* anim = new HAL_LEDMatrix_8x8::CustomAnimation();
     if (!anim) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Failed to allocate memory for animation");
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to allocate memory for animation");
         file.close();
         return false;
     }
@@ -624,7 +669,7 @@ bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
         // Parse frame
         else if (line.startsWith("frame=")) {
             if (anim->frameCount >= 16) {
-                LOG_WARN("HAL_LEDMatrix_8x8: Too many frames, max 16");
+                DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Too many frames, max 16");
                 continue;
             }
 
@@ -663,7 +708,7 @@ bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
 
     // Validate animation
     if (anim->frameCount == 0 || strlen(anim->name) == 0) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Invalid animation file (no frames or name)");
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Invalid animation file (no frames or name)");
         delete anim;
         return false;
     }
@@ -671,13 +716,13 @@ bool HAL_LEDMatrix_8x8::loadCustomAnimation(const char* filepath) {
     // Store animation
     m_customAnimations[m_customAnimationCount++] = anim;
 
-    LOG_INFO("HAL_LEDMatrix_8x8: Loaded custom animation '%s' (%d frames)",
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Loaded custom animation '%s' (%d frames)",
              anim->name, anim->frameCount);
 
     return true;
 #else
     // Mock mode: simulate successful load
-    LOG_INFO("HAL_LEDMatrix_8x8: MOCK - Would load animation from: %s", filepath);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: MOCK - Would load animation from: %s", filepath);
 
     // Create mock animation
     HAL_LEDMatrix_8x8::CustomAnimation* anim = new HAL_LEDMatrix_8x8::CustomAnimation();
@@ -706,7 +751,7 @@ bool HAL_LEDMatrix_8x8::playCustomAnimation(const char* name, uint32_t duration_
     // Find animation by name
     HAL_LEDMatrix_8x8::CustomAnimation* anim = findCustomAnimation(name);
     if (!anim) {
-        LOG_ERROR("HAL_LEDMatrix_8x8: Custom animation not found: %s", name);
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Custom animation not found: %s", name);
         return false;
     }
 
@@ -720,7 +765,7 @@ bool HAL_LEDMatrix_8x8::playCustomAnimation(const char* name, uint32_t duration_
     m_animationFrame = 0;
     m_lastFrameTime = millis();
 
-    LOG_INFO("HAL_LEDMatrix_8x8: Playing custom animation '%s' (duration: %u ms)", name, duration_ms);
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Playing custom animation '%s' (duration: %u ms)", name, duration_ms);
 
     return true;
 }
@@ -741,7 +786,7 @@ void HAL_LEDMatrix_8x8::clearCustomAnimations() {
     m_customAnimationCount = 0;
     m_activeCustomAnimation = nullptr;
 
-    LOG_INFO("HAL_LEDMatrix_8x8: Cleared all custom animations");
+    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Cleared all custom animations");
 }
 
 HAL_LEDMatrix_8x8::CustomAnimation* HAL_LEDMatrix_8x8::findCustomAnimation(const char* name) {
@@ -782,4 +827,51 @@ void HAL_LEDMatrix_8x8::animateCustom() {
             }
         }
     }
+}
+
+// ============================================================================
+// Error Rate Monitoring
+// ============================================================================
+
+float HAL_LEDMatrix_8x8::getErrorRate() const {
+    DEBUG_LOG_LED("LED Matrix: getErrorRate() called, returning %.1f%% "
+              "(%u failures / %u transactions, last update: %u ms ago)",
+              m_errorRate, m_i2cFailureCount, m_i2cTransactionCount,
+              millis() - m_lastErrorRateUpdate);
+    return m_errorRate;
+}
+
+void HAL_LEDMatrix_8x8::updateErrorRate() {
+    if (m_mockMode) {
+        // Mock mode - simulate perfect I2C communication
+        m_errorRate = 0.0f;
+        return;
+    }
+
+#if !MOCK_HARDWARE
+    // Calculate error rate from tracked transactions
+    if (m_i2cTransactionCount > 0) {
+        m_errorRate = ((float)m_i2cFailureCount / (float)m_i2cTransactionCount) * 100.0f;
+
+        uint32_t now = millis();
+        // Log error rate once per minute
+        if (now - m_lastErrorRateUpdate >= 60000) {
+            DEBUG_LOG_LED("LED Matrix I2C: Error rate = %.1f%% (%u failures / %u transactions)",
+                     m_errorRate, m_i2cFailureCount, m_i2cTransactionCount);
+            m_lastErrorRateUpdate = now;
+
+            // Reset counters periodically to prevent overflow and give recent error rate
+            // Keep last 1000 transactions worth of data
+            if (m_i2cTransactionCount > 1000) {
+                // Scale down by factor of 10
+                m_i2cTransactionCount /= 10;
+                m_i2cFailureCount /= 10;
+            }
+        }
+    } else {
+        m_errorRate = -1.0f;  // No data yet
+    }
+#else
+    m_errorRate = 0.0f;
+#endif
 }

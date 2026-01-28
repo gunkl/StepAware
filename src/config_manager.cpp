@@ -1,5 +1,6 @@
 #include "config_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 #include <ArduinoJson.h>
 
 // Use LittleFS instead of FILESYSTEM for better ESP32-C3 support
@@ -25,35 +26,35 @@ bool ConfigManager::begin() {
         return true;
     }
 
-    LOG_INFO("ConfigManager: Initializing...");
+    DEBUG_LOG_CONFIG("ConfigManager: Initializing...");
 
     // Mount FILESYSTEM
     if (!FILESYSTEM.begin(true)) {  // true = format on fail
         setError("Failed to mount FILESYSTEM");
-        LOG_ERROR("ConfigManager: Failed to mount FILESYSTEM");
+        DEBUG_LOG_CONFIG("ConfigManager: Failed to mount FILESYSTEM");
         return false;
     }
 
-    LOG_DEBUG("ConfigManager: FILESYSTEM mounted");
+    DEBUG_LOG_CONFIG("ConfigManager: FILESYSTEM mounted");
 
     // Load defaults first
     loadDefaults();
 
     // Try to load config from file
     if (FILESYSTEM.exists(CONFIG_FILE_PATH)) {
-        LOG_DEBUG("ConfigManager: Config file found, loading...");
+        DEBUG_LOG_CONFIG("ConfigManager: Config file found, loading...");
         if (!load()) {
-            LOG_WARN("ConfigManager: Failed to load config, using defaults");
+            DEBUG_LOG_CONFIG("ConfigManager: Failed to load config, using defaults");
             // Continue with defaults
         }
     } else {
-        LOG_INFO("ConfigManager: No config file found, using defaults");
+        DEBUG_LOG_CONFIG("ConfigManager: No config file found, using defaults");
         // Save defaults
         save();
     }
 
     m_initialized = true;
-    LOG_INFO("ConfigManager: Initialization complete");
+    DEBUG_LOG_CONFIG("ConfigManager: Initialization complete");
 
     return true;
 }
@@ -89,24 +90,66 @@ bool ConfigManager::load() {
     free(buffer);
 
     if (result) {
-        LOG_INFO("ConfigManager: Config loaded successfully");
+        DEBUG_LOG_CONFIG("ConfigManager: Config loaded successfully");
     } else {
-        LOG_ERROR("ConfigManager: Failed to parse config");
+        DEBUG_LOG_CONFIG("ConfigManager: Failed to parse config");
     }
 
     return result;
 }
 
 bool ConfigManager::save() {
+    DEBUG_LOG_CONFIG("Saving config to %s", CONFIG_FILE_PATH);
+    DEBUG_LOG_CONFIG("=== Saving Configuration ===");
+
+    // Log key config values being saved (VERBOSE level)
+    DEBUG_LOG_CONFIG("Device: %s, Mode: %d, WiFi: %s", m_config.deviceName, m_config.defaultMode,
+                m_config.wifiEnabled ? "enabled" : "disabled");
+    DEBUG_LOG_CONFIG("Motion: duration=%ums, PIR warmup=%ums", m_config.motionWarningDuration, m_config.pirWarmupTime);
+    DEBUG_LOG_CONFIG("Logging: level=%u, serial=%s, file=%s", m_config.logLevel,
+                m_config.serialLoggingEnabled ? "enabled" : "disabled",
+                m_config.fileLoggingEnabled ? "enabled" : "disabled");
+
+    // Count and log active sensors being saved
+    int sensorCount = 0;
+    for (int i = 0; i < 4; i++) {
+        if (m_config.sensors[i].active) {
+            sensorCount++;
+            DEBUG_LOG_CONFIG("Sensor[%d]: %s, type=%d, enabled=%s, directionMode=%u, threshold=%umm",
+                        i, m_config.sensors[i].name, m_config.sensors[i].type,
+                        m_config.sensors[i].enabled ? "yes" : "no",
+                        m_config.sensors[i].directionTriggerMode,
+                        m_config.sensors[i].detectionThreshold);
+        }
+    }
+    DEBUG_LOG_CONFIG("Total sensors: %d, Fusion mode: %d", sensorCount, m_config.fusionMode);
+
+    // Count and log active displays being saved
+    int displayCount = 0;
+    for (int i = 0; i < 2; i++) {
+        if (m_config.displays[i].active) {
+            displayCount++;
+            DEBUG_LOG_CONFIG("Display[%d]: %s, type=%d, enabled=%s, brightness=%u",
+                        i, m_config.displays[i].name, m_config.displays[i].type,
+                        m_config.displays[i].enabled ? "yes" : "no",
+                        m_config.displays[i].brightness);
+        }
+    }
+    DEBUG_LOG_CONFIG("Total displays: %d", displayCount);
+
     char buffer[2048];
     if (!toJSON(buffer, sizeof(buffer))) {
         setError("Failed to serialize config to JSON");
+        DEBUG_LOG_CONFIG("Config save FAILED: Failed to serialize to JSON");
+        DEBUG_LOG_CONFIG("=== Save Failed: JSON serialization error ===");
         return false;
     }
 
     File file = FILESYSTEM.open(CONFIG_FILE_PATH, "w");
     if (!file) {
         setError("Failed to open config file for writing");
+        DEBUG_LOG_CONFIG("Config save FAILED: Cannot open file for writing");
+        DEBUG_LOG_CONFIG("=== Save Failed: Cannot open file ===");
         return false;
     }
 
@@ -115,15 +158,19 @@ bool ConfigManager::save() {
 
     if (written == 0) {
         setError("Failed to write config to file");
+        DEBUG_LOG_CONFIG("Config save FAILED: Write returned 0 bytes");
+        DEBUG_LOG_CONFIG("=== Save Failed: Write error ===");
         return false;
     }
 
-    LOG_INFO("ConfigManager: Config saved successfully");
+    DEBUG_LOG_CONFIG("ConfigManager: Config saved successfully (%u bytes)", written);
+    DEBUG_LOG_CONFIG("Config saved successfully (%u bytes)", written);
+    DEBUG_LOG_CONFIG("=== Configuration Saved Successfully (%u bytes) ===", written);
     return true;
 }
 
 bool ConfigManager::reset(bool save) {
-    LOG_INFO("ConfigManager: Resetting to factory defaults");
+    DEBUG_LOG_CONFIG("ConfigManager: Resetting to factory defaults");
     loadDefaults();
 
     if (save) {
@@ -138,8 +185,216 @@ bool ConfigManager::validate() {
         return false;
     }
 
-    LOG_DEBUG("ConfigManager: Configuration validated");
+    DEBUG_LOG_CONFIG("ConfigManager: Configuration validated");
     return true;
+}
+
+bool ConfigManager::validateAndCorrect() {
+    bool hadErrors = false;
+    uint8_t sensorErrorCount = 0;
+    uint8_t displayErrorCount = 0;
+
+    DEBUG_LOG_CONFIG("=== Configuration Validation Check ===");
+
+    // Validate and correct sensor configurations
+    for (uint8_t i = 0; i < 4; i++) {
+        SensorSlotConfig& sensor = m_config.sensors[i];
+
+        if (!sensor.active) {
+            continue;  // Skip inactive slots
+        }
+
+        bool sensorHadError = false;
+
+        // Validate sensor type
+        if (sensor.type < SENSOR_TYPE_PIR || sensor.type > SENSOR_TYPE_ULTRASONIC_GROVE) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: INVALID type %u (valid: 0=PIR, 3=Ultrasonic, 4=Grove), DISABLING slot", i, sensor.type);
+            sensor.active = false;
+            sensorErrorCount++;
+            continue;
+        }
+
+        // Validate detection threshold (100mm to 5000mm reasonable range)
+        if (sensor.detectionThreshold < 100 || sensor.detectionThreshold > 5000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED detectionThreshold: %u mm → 1100 mm (out of range 100-5000)",
+                     i, sensor.detectionThreshold);
+            sensor.detectionThreshold = 1100;
+            sensorHadError = true;
+        }
+
+        // Validate max detection distance (200mm to 5000mm)
+        if (sensor.maxDetectionDistance < 200 || sensor.maxDetectionDistance > 5000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED maxDetectionDistance: %u mm → 3000 mm (out of range 200-5000)",
+                     i, sensor.maxDetectionDistance);
+            sensor.maxDetectionDistance = 3000;
+            sensorHadError = true;
+        }
+
+        // Validate debounce (10ms to 1000ms)
+        if (sensor.debounceMs < 10 || sensor.debounceMs > 1000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED debounceMs: %u ms → 75 ms (out of range 10-1000)",
+                     i, sensor.debounceMs);
+            sensor.debounceMs = 75;
+            sensorHadError = true;
+        }
+
+        // Validate warmup time (0 to 120000ms = 2 minutes)
+        if (sensor.warmupMs > 120000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED warmupMs: %u ms → 60000 ms (max 120000)",
+                     i, sensor.warmupMs);
+            sensor.warmupMs = 60000;
+            sensorHadError = true;
+        }
+
+        // Validate direction trigger mode (0=approaching, 1=receding, 2=both)
+        if (sensor.directionTriggerMode > 2) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED directionTriggerMode: %u → 0 (must be 0=approaching, 1=receding, or 2=both)",
+                     i, sensor.directionTriggerMode);
+            sensor.directionTriggerMode = 0;
+            sensorHadError = true;
+        }
+
+        // Validate direction sensitivity (0=auto, or 10mm to 1000mm)
+        if (sensor.directionSensitivity > 1000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED directionSensitivity: %u mm → 0 mm (auto) (max 1000)",
+                     i, sensor.directionSensitivity);
+            sensor.directionSensitivity = 0;
+            sensorHadError = true;
+        }
+
+        // Validate sample window size (3 to 20)
+        if (sensor.sampleWindowSize < 3 || sensor.sampleWindowSize > 20) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED sampleWindowSize: %u → 3 (range 3-20)",
+                     i, sensor.sampleWindowSize);
+            sensor.sampleWindowSize = 3;
+            sensorHadError = true;
+        }
+
+        // Validate sample rate (50ms to 1000ms)
+        if (sensor.sampleRateMs < 50 || sensor.sampleRateMs > 1000) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED sampleRateMs: %u ms → 75 ms (range 50-1000)",
+                     i, sensor.sampleRateMs);
+            sensor.sampleRateMs = 75;
+            sensorHadError = true;
+        }
+
+        // Validate GPIO pins (ESP32-C3 has GPIO 0-21)
+        if (sensor.primaryPin > 21) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: INVALID primaryPin %u (max 21), DISABLING slot",
+                     i, sensor.primaryPin);
+            sensor.active = false;
+            sensorErrorCount++;
+            continue;
+        }
+
+        if (sensor.secondaryPin > 21 && sensor.secondaryPin != 0) {
+            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED secondaryPin: %u → 0 (max 21)",
+                     i, sensor.secondaryPin);
+            sensor.secondaryPin = 0;
+            sensorHadError = true;
+        }
+
+        if (sensorHadError) {
+            sensorErrorCount++;
+        }
+    }
+
+    // Validate and correct display configurations
+    for (uint8_t i = 0; i < 2; i++) {
+        DisplaySlotConfig& display = m_config.displays[i];
+
+        if (!display.active) {
+            continue;  // Skip inactive slots
+        }
+
+        bool displayHadError = false;
+
+        // Validate display type
+        if (display.type < DISPLAY_TYPE_SINGLE_LED || display.type > DISPLAY_TYPE_MATRIX_8X8) {
+            DEBUG_LOG_CONFIG("Display[%u]: INVALID type %u (corrupted), DISABLING slot", i, display.type);
+            display.active = false;
+            displayErrorCount++;
+            continue;
+        }
+
+        // Validate I2C address (0x00 to 0x7F, typically 0x70-0x77 for HT16K33)
+        if (display.i2cAddress > 0x7F) {
+            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED i2cAddress: 0x%02X → 0x70 (max 0x7F)",
+                     i, display.i2cAddress);
+            display.i2cAddress = 0x70;
+            displayHadError = true;
+        }
+
+        // Validate I2C pins (GPIO 0-21)
+        if (display.sdaPin > 21) {
+            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sdaPin: %u → 7 (max 21)",
+                     i, display.sdaPin);
+            display.sdaPin = 7;
+            displayHadError = true;
+        }
+
+        if (display.sclPin > 21) {
+            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sclPin: %u → 10 (max 21)",
+                     i, display.sclPin);
+            display.sclPin = 10;
+            displayHadError = true;
+        }
+
+        // Validate brightness (0-15 for matrix, 0-255 for LED)
+        if (display.type == DISPLAY_TYPE_MATRIX_8X8) {
+            if (display.brightness > 15) {
+                DEBUG_LOG_CONFIG("Display[%u]: CORRECTED brightness: %u → 15 (8x8 matrix max 15)",
+                         i, display.brightness);
+                display.brightness = 15;
+                displayHadError = true;
+            }
+        } else {
+            if (display.brightness > 255) {
+                DEBUG_LOG_CONFIG("Display[%u]: CORRECTED brightness: %u → 255 (max 255)",
+                         i, display.brightness);
+                display.brightness = 255;
+                displayHadError = true;
+            }
+        }
+
+        // Validate rotation (0-3)
+        if (display.rotation > 3) {
+            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED rotation: %u → 0 (max 3)",
+                     i, display.rotation);
+            display.rotation = 0;
+            displayHadError = true;
+        }
+
+        if (displayHadError) {
+            displayErrorCount++;
+        }
+    }
+
+    // Validate fusion mode (0-2: ANY, ALL, PRIMARY_ONLY)
+    if (m_config.fusionMode > 2) {
+        DEBUG_LOG_CONFIG("CORRECTED fusionMode: %u → 0 (must be 0=ANY, 1=ALL, or 2=PRIMARY_ONLY)", m_config.fusionMode);
+        m_config.fusionMode = 0;
+        hadErrors = true;
+    }
+
+    // Report results
+    if (sensorErrorCount == 0 && displayErrorCount == 0 && !hadErrors) {
+        DEBUG_LOG_CONFIG("Configuration validation: PASSED (no errors detected)");
+        return true;
+    } else {
+        DEBUG_LOG_CONFIG("Configuration validation: FAILED - corrected %u sensor errors, %u display errors",
+                 sensorErrorCount, displayErrorCount);
+        hadErrors = true;
+
+        // Save corrected configuration
+        if (save()) {
+            DEBUG_LOG_CONFIG("Corrected configuration saved to filesystem");
+        } else {
+            DEBUG_LOG_CONFIG("Failed to save corrected configuration");
+        }
+
+        return false;
+    }
 }
 
 const ConfigManager::Config& ConfigManager::getConfig() const {
@@ -240,6 +495,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
             sensorObj["warmupMs"] = m_config.sensors[i].warmupMs;
             sensorObj["enableDirectionDetection"] = m_config.sensors[i].enableDirectionDetection;
             sensorObj["directionTriggerMode"] = m_config.sensors[i].directionTriggerMode;
+            sensorObj["directionSensitivity"] = m_config.sensors[i].directionSensitivity;
             sensorObj["sampleWindowSize"] = m_config.sensors[i].sampleWindowSize;
             sensorObj["sampleRateMs"] = m_config.sensors[i].sampleRateMs;
         }
@@ -284,11 +540,14 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 }
 
 bool ConfigManager::fromJSON(const char* json) {
+    DEBUG_LOG_CONFIG("Loading config from JSON (%u bytes)", strlen(json));
+
     StaticJsonDocument<4096> doc;
     DeserializationError error = deserializeJson(doc, json);
 
     if (error) {
         setError(error.c_str());
+        DEBUG_LOG_CONFIG("Config load FAILED: JSON parse error: %s", error.c_str());
         return false;
     }
 
@@ -381,14 +640,15 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].secondaryPin = sensorObj["secondaryPin"] | 0;
                 m_config.sensors[slot].enabled = sensorObj["enabled"] | true;
                 m_config.sensors[slot].isPrimary = sensorObj["isPrimary"] | false;
-                m_config.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 0;
-                m_config.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 0;
-                m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
+                m_config.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 1100;  // 1100mm warn threshold
+                m_config.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;  // 3000mm max range
+                m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 75;  // 75ms sample interval (ultrasonic) / 50ms debounce (PIR)
                 m_config.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
-                m_config.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
-                m_config.sensors[slot].directionTriggerMode = sensorObj["directionTriggerMode"] | 0;
-                m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 5;
-                m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
+                m_config.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | true;  // Direction enabled by default
+                m_config.sensors[slot].directionTriggerMode = sensorObj["directionTriggerMode"] | 0;  // APPROACHING
+                m_config.sensors[slot].directionSensitivity = sensorObj["directionSensitivity"] | 0;  // 0 = auto (adaptive threshold)
+                m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 3;  // 3 samples default
+                m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 75;  // 75ms sample interval (adaptive threshold)
             }
         }
     }
@@ -416,7 +676,7 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.displays[slot].sclPin = displayObj["sclPin"] | I2C_SCL_PIN;
                 m_config.displays[slot].enabled = displayObj["enabled"] | true;
                 m_config.displays[slot].brightness = displayObj["brightness"] | MATRIX_BRIGHTNESS_DEFAULT;
-                m_config.displays[slot].rotation = displayObj["rotation"] | 0;
+                m_config.displays[slot].rotation = displayObj["rotation"] | MATRIX_ROTATION;
                 m_config.displays[slot].useForStatus = displayObj["useForStatus"] | true;
             }
         }
@@ -432,7 +692,75 @@ bool ConfigManager::fromJSON(const char* json) {
         m_config.lastModified = doc["metadata"]["lastModified"] | 0;
     }
 
-    return validate();
+    bool valid = validate();
+    if (valid) {
+        DEBUG_LOG_CONFIG("Config loaded successfully");
+        DEBUG_LOG_CONFIG("Device: %s, Default mode: %d", m_config.deviceName, m_config.defaultMode);
+
+        // Log detailed config at INFO level for debugging
+        DEBUG_LOG_CONFIG("=== Configuration Loaded ===");
+        DEBUG_LOG_CONFIG("Device: %s, Mode: %d, WiFi: %s", m_config.deviceName, m_config.defaultMode,
+                 m_config.wifiEnabled ? "enabled" : "disabled");
+        DEBUG_LOG_CONFIG("Motion: duration=%ums, PIR warmup=%ums", m_config.motionWarningDuration, m_config.pirWarmupTime);
+        DEBUG_LOG_CONFIG("Battery: full=%umV, low=%umV, critical=%umV",
+                 m_config.batteryVoltageFull, m_config.batteryVoltageLow, m_config.batteryVoltageCritical);
+        DEBUG_LOG_CONFIG("Logging: level=%u, serial=%s, file=%s", m_config.logLevel,
+                 m_config.serialLoggingEnabled ? "enabled" : "disabled",
+                 m_config.fileLoggingEnabled ? "enabled" : "disabled");
+
+        // Count and log active sensors
+        int sensorCount = 0;
+        for (int i = 0; i < 4; i++) {
+            if (m_config.sensors[i].active) {
+                sensorCount++;
+                DEBUG_LOG_CONFIG("Sensor[%d]: %s, type=%d, enabled=%s, primary=%s", i,
+                         m_config.sensors[i].name,
+                         m_config.sensors[i].type,
+                         m_config.sensors[i].enabled ? "yes" : "no",
+                         m_config.sensors[i].isPrimary ? "yes" : "no");
+                DEBUG_LOG_CONFIG("  Pins: primary=%u, secondary=%u",
+                         m_config.sensors[i].primaryPin, m_config.sensors[i].secondaryPin);
+                DEBUG_LOG_CONFIG("  Detection: threshold=%umm, maxDist=%umm, debounce=%ums, warmup=%ums",
+                         m_config.sensors[i].detectionThreshold,
+                         m_config.sensors[i].maxDetectionDistance,
+                         m_config.sensors[i].debounceMs,
+                         m_config.sensors[i].warmupMs);
+                DEBUG_LOG_CONFIG("  Direction: enabled=%s, triggerMode=%u, sensitivity=%u, window=%u, sampleRate=%ums",
+                         m_config.sensors[i].enableDirectionDetection ? "yes" : "no",
+                         m_config.sensors[i].directionTriggerMode,
+                         m_config.sensors[i].directionSensitivity,
+                         m_config.sensors[i].sampleWindowSize,
+                         m_config.sensors[i].sampleRateMs);
+            }
+        }
+        DEBUG_LOG_CONFIG("Total sensors: %d, Fusion mode: %d", sensorCount, m_config.fusionMode);
+
+        // Count and log active displays
+        int displayCount = 0;
+        for (int i = 0; i < 2; i++) {
+            if (m_config.displays[i].active) {
+                displayCount++;
+                DEBUG_LOG_CONFIG("Display[%d]: %s, type=%d, enabled=%s, i2c=0x%02X", i,
+                         m_config.displays[i].name,
+                         m_config.displays[i].type,
+                         m_config.displays[i].enabled ? "yes" : "no",
+                         m_config.displays[i].i2cAddress);
+                DEBUG_LOG_CONFIG("  I2C pins: SDA=%u, SCL=%u", m_config.displays[i].sdaPin, m_config.displays[i].sclPin);
+                DEBUG_LOG_CONFIG("  Settings: brightness=%u, rotation=%u, useForStatus=%s",
+                         m_config.displays[i].brightness,
+                         m_config.displays[i].rotation,
+                         m_config.displays[i].useForStatus ? "yes" : "no");
+            }
+        }
+        DEBUG_LOG_CONFIG("Total displays: %d, Primary display slot: %d", displayCount, m_config.primaryDisplaySlot);
+        DEBUG_LOG_CONFIG("=== End Configuration ===");
+
+        DEBUG_LOG_CONFIG("Active sensors: %d, Fusion mode: %d", sensorCount, m_config.fusionMode);
+    } else {
+        DEBUG_LOG_CONFIG("Config validation FAILED");
+    }
+
+    return valid;
 }
 
 void ConfigManager::print() {
@@ -497,10 +825,10 @@ const char* ConfigManager::getLastError() const {
 }
 
 void ConfigManager::loadDefaults() {
-    LOG_DEBUG("ConfigManager: Loading factory defaults");
+    DEBUG_LOG_CONFIG("ConfigManager: Loading factory defaults");
 
     // Motion Detection
-    m_config.motionWarningDuration = MOTION_WARNING_DURATION_MS;
+    m_config.motionWarningDuration = 5000;  // 5 seconds (Issue #9 requirement)
     m_config.pirWarmupTime = PIR_WARMUP_TIME_MS;
 
     // Button
@@ -571,8 +899,9 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].warmupMs = PIR_WARMUP_TIME_MS;
     m_config.sensors[0].enableDirectionDetection = false;
     m_config.sensors[0].directionTriggerMode = 0;  // Approaching
-    m_config.sensors[0].sampleWindowSize = 5;   // Fast response for pedestrians
-    m_config.sensors[0].sampleRateMs = 60;      // HC-SR04 minimum
+    m_config.sensors[0].directionSensitivity = 0;  // 0 = auto (adaptive threshold)
+    m_config.sensors[0].sampleWindowSize = 3;   // Global default window size
+    m_config.sensors[0].sampleRateMs = 75;      // Global default sample interval (adaptive threshold)
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
 
@@ -586,7 +915,7 @@ void ConfigManager::loadDefaults() {
         m_config.displays[i].sdaPin = I2C_SDA_PIN;
         m_config.displays[i].sclPin = I2C_SCL_PIN;
         m_config.displays[i].brightness = MATRIX_BRIGHTNESS_DEFAULT;
-        m_config.displays[i].rotation = 0;
+        m_config.displays[i].rotation = MATRIX_ROTATION;
         m_config.displays[i].useForStatus = true;
     }
 
@@ -634,7 +963,7 @@ bool ConfigManager::validateParameters() {
         return false;
     }
 
-    // Log level
+    // Log level (0=VERBOSE to 5=NONE)
     if (m_config.logLevel > LOG_LEVEL_NONE) {
         setError("Invalid log level");
         return false;

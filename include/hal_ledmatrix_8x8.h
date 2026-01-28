@@ -243,6 +243,47 @@ public:
      */
     void clearCustomAnimations();
 
+    // ========================================================================
+    // Error Rate Monitoring
+    // ========================================================================
+
+    /**
+     * @brief Get I2C communication error rate as a percentage
+     *
+     * Returns the percentage of failed I2C transactions from the last check.
+     * Error rate is calculated by tracking I2C write failures during normal operation.
+     *
+     * @return Error rate percentage (0.0 - 100.0), or -1.0 if no data available yet
+     */
+    float getErrorRate() const;
+
+    /**
+     * @brief Update error rate statistics
+     *
+     * Called internally during I2C operations to track failures.
+     * Applications can read the error rate via getErrorRate().
+     */
+    void updateErrorRate();
+
+    /**
+     * @brief Get I2C transaction count
+     *
+     * Returns the number of I2C transactions performed since initialization.
+     *
+     * @return Transaction count
+     */
+    uint32_t getTransactionCount() const { return m_i2cTransactionCount; }
+
+    /**
+     * @brief Check if error rate data is available
+     *
+     * Error rate becomes available after first updateErrorRate() call,
+     * which happens automatically after 10 transactions.
+     *
+     * @return true if error rate is valid, false if still showing -1.0
+     */
+    bool isErrorRateAvailable() const { return m_errorRate >= 0.0f; }
+
 private:
     // Hardware
 #if !MOCK_HARDWARE
@@ -271,6 +312,12 @@ private:
     CustomAnimation* m_customAnimations[MAX_CUSTOM_ANIMATIONS];
     uint8_t m_customAnimationCount;
     CustomAnimation* m_activeCustomAnimation;
+
+    // Error rate tracking
+    uint32_t m_i2cTransactionCount;
+    uint32_t m_i2cFailureCount;
+    float m_errorRate;
+    uint32_t m_lastErrorRateUpdate;
 
     // Mock mode
     uint8_t m_mockFrame[8];

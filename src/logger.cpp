@@ -75,6 +75,18 @@ void Logger::setFileEnabled(bool enabled) {
     m_fileEnabled = enabled;
 }
 
+void Logger::verbose(const char* format, ...) {
+    if (m_level > LEVEL_VERBOSE) return;
+
+    va_list args;
+    va_start(args, format);
+    char buffer[128];
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    addEntry(LEVEL_VERBOSE, buffer);
+}
+
 void Logger::debug(const char* format, ...) {
     if (m_level > LEVEL_DEBUG) return;
 
@@ -223,6 +235,7 @@ void Logger::printAll() {
 
 const char* Logger::getLevelName(LogLevel level) {
     switch (level) {
+        case LEVEL_VERBOSE: return "VERBOSE";
         case LEVEL_DEBUG: return "DEBUG";
         case LEVEL_INFO:  return "INFO ";
         case LEVEL_WARN:  return "WARN ";
