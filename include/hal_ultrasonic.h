@@ -6,11 +6,15 @@
 #include "hal_motion_sensor.h"
 #include "distance_sensor_base.h"
 
+#if !MOCK_HARDWARE
+#include <NewPing.h>
+#endif
+
 /**
  * @brief Hardware Abstraction Layer for HC-SR04 Ultrasonic Distance Sensor
  *
  * Refactored architecture:
- * 1. Hardware communication: Uses existing pulseIn-based implementation (works!)
+ * 1. Hardware communication: Uses NewPing library (ping_cm method)
  * 2. Inherits DistanceSensorBase for movement/direction detection logic (shared)
  * 3. Implements HAL_MotionSensor interface for StepAware product integration
  *
@@ -97,12 +101,39 @@ public:
     void setRapidSampling(uint8_t sample_count, uint16_t interval_ms) override {}
     void triggerRapidSample() override {}
 
+    // =========================================================================
+    // Error Rate Monitoring (Rolling Buffer)
+    // =========================================================================
+
+    /**
+     * @brief Get hardware error rate as a percentage
+     *
+     * Returns the percentage of failed measurements from the rolling buffer.
+     * Error rate is continuously calculated from the last 100 measurements.
+     *
+     * A failure is counted when:
+     * - Distance reading returns 0 (no echo received)
+     * - Hardware timeout occurs
+     *
+     * @return Error rate percentage (0.0 - 100.0), or -1.0 if < 100 samples collected
+     */
+    float getErrorRate() const;
+
+    /**
+     * @brief Check if error rate data is available
+     *
+     * Error rate becomes available after the first 100 measurements.
+     *
+     * @return true if 100+ samples have been collected, false otherwise
+     */
+    bool isErrorRateAvailable() const { return m_errorRateValid; }
+
 protected:
     /**
      * @brief Get raw distance reading from HC-SR04 sensor
      *
      * Implements DistanceSensorBase::getDistanceReading()
-     * Uses existing pulseIn-based implementation.
+     * Uses NewPing library (ping_cm method).
      *
      * @return Distance in millimeters, 0 if error/timeout
      */
@@ -117,9 +148,23 @@ private:
     uint32_t m_measurementInterval;
     uint32_t m_mockDistance;
 
+#if !MOCK_HARDWARE
+    NewPing* m_sonar;  // NewPing library instance
+#endif
+
+    // Rolling buffer for error rate tracking
+    // Uses a counter instead of actual buffer for memory efficiency:
+    // - Increment counter on success (max 100)
+    // - Decrement counter on failure (min 0)
+    // - Error rate = 100 - counter value
+    int16_t m_successCounter;       // Rolling success counter (0-100)
+    uint16_t m_totalSamplesCollected; // Total samples collected (for warmup)
+    bool m_errorRateValid;          // True after 100 samples collected
+
     static const SensorCapabilities s_capabilities;
     static constexpr uint32_t MEASUREMENT_TIMEOUT_US = 30000;
     static constexpr uint32_t MIN_MEASUREMENT_INTERVAL_MS = 60;
+    static constexpr uint8_t ERROR_RATE_SAMPLE_COUNT = 100;  // Rolling buffer size
 };
 
 #endif // STEPAWARE_HAL_ULTRASONIC_H

@@ -95,6 +95,7 @@ struct SensorConfig {
     uint32_t warmupMs;              ///< Warmup time override (ms), 0 = use default
     bool enableDirectionDetection;  ///< Enable direction detection if supported
     uint8_t directionTriggerMode;   ///< Direction filter: 0=approaching, 1=receding, 2=both
+    uint16_t directionSensitivity;  ///< Direction change threshold (mm), 0 = auto (adaptive threshold)
     bool invertLogic;               ///< Invert detection logic (active low)
     uint8_t sampleWindowSize;       ///< Rolling window size for distance sensors (3-20, 0=default)
     uint16_t sampleRateMs;          ///< Sample rate in ms (60+ for ultrasonic, 0=default)

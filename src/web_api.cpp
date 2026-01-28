@@ -3,7 +3,10 @@
 #include "power_manager.h"
 #include "watchdog_manager.h"
 #include "hal_ledmatrix_8x8.h"
+#include "hal_ultrasonic.h"
+#include "hal_ultrasonic_grove.h"
 #include "sensor_manager.h"
+#include "debug_logger.h"
 #include <ArduinoJson.h>
 #if !MOCK_HARDWARE
 #include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
@@ -27,11 +30,11 @@ WebAPI::~WebAPI() {
 
 bool WebAPI::begin() {
     if (!m_server || !m_stateMachine || !m_config) {
-        LOG_ERROR("WebAPI: Invalid parameters");
+        DEBUG_LOG_API("WebAPI: Invalid parameters");
         return false;
     }
 
-    LOG_INFO("WebAPI: Registering endpoints");
+    DEBUG_LOG_API("WebAPI: Registering endpoints");
 
     // Root endpoint - inline dashboard UI
     // NOTE: We use inline HTML (buildDashboardHTML) instead of filesystem-based UI
@@ -81,6 +84,54 @@ bool WebAPI::begin() {
 
     m_server->on("/api/reset", HTTP_POST, [this](AsyncWebServerRequest* req) {
         this->handlePostReset(req);
+    });
+
+    m_server->on("/api/reboot", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        this->handlePostReboot(req);
+    });
+
+    // CRITICAL: Register specific routes BEFORE general routes
+    // POST /api/sensors/:slot/errorrate - trigger error rate check for a sensor
+    m_server->on("/api/sensors/0/errorrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 0 ERROR RATE POST HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/1/errorrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 1 ERROR RATE POST HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/2/errorrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 2 ERROR RATE POST HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/3/errorrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 3 ERROR RATE POST HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+
+    // Also register GET handlers for manual browser testing
+    m_server->on("/api/sensors/0/errorrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 0 ERROR RATE GET HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/1/errorrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 1 ERROR RATE GET HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/2/errorrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 2 ERROR RATE GET HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+    m_server->on("/api/sensors/3/errorrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        DEBUG_LOG_API("WebAPI: *** SLOT 3 ERROR RATE GET HANDLER CALLED ***");
+        this->handleCheckSensorErrorRate(req);
+    });
+
+    DEBUG_LOG_API("WebAPI: Registered error rate routes (GET+POST) for slots 0-3");
+
+    // NOW register the general /api/sensors routes (AFTER the specific ones)
+    m_server->on("/api/sensors", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetSensors(req);
     });
 
     m_server->on("/api/sensors", HTTP_POST,
@@ -197,7 +248,125 @@ bool WebAPI::begin() {
         this->handleOptions(req);
     });
 
-    LOG_INFO("WebAPI: ✓ Endpoints registered");
+    // Debug logging endpoints
+    // IMPORTANT: Register more specific routes BEFORE general routes
+    // to ensure ESPAsyncWebServer matches them correctly
+
+    m_server->on("/api/debug/logs/current", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/boot_current.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/boot_1", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/boot_1.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/boot_2", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/boot_2.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    // DELETE endpoints for individual log files
+    m_server->on("/api/debug/logs/current", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        // Don't delete current log - it's active, just clear it
+        if (LittleFS.exists("/logs/boot_current.log")) {
+            File f = LittleFS.open("/logs/boot_current.log", "w");
+            if (f) {
+                f.close();
+                this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Current log cleared\"}");
+            } else {
+                this->sendError(req, 500, "Failed to clear log file");
+            }
+        } else {
+            this->sendError(req, 404, "Log not found");
+        }
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/boot_1", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        if (LittleFS.exists("/logs/boot_1.log")) {
+            if (LittleFS.remove("/logs/boot_1.log")) {
+                this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
+            } else {
+                this->sendError(req, 500, "Failed to delete log file");
+            }
+        } else {
+            this->sendError(req, 404, "Log not found");
+        }
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/boot_2", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        if (LittleFS.exists("/logs/boot_2.log")) {
+            if (LittleFS.remove("/logs/boot_2.log")) {
+                this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
+            } else {
+                this->sendError(req, 500, "Failed to delete log file");
+            }
+        } else {
+            this->sendError(req, 404, "Log not found");
+        }
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/clear", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handleClearDebugLogs(req);
+        });
+
+    m_server->on("/api/debug/config", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetDebugConfig(req);
+    });
+
+    m_server->on("/api/debug/config", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+            this->handlePostDebugConfig(req, data, len, index, total);
+        });
+
+    // General metadata endpoint - MUST be registered AFTER specific routes
+    m_server->on("/api/debug/logs", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetDebugLogs(req);
+    });
+
+    // OPTIONS for debug endpoints
+    m_server->on("/api/debug/logs", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/debug/config", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+
+    // Add catch-all handler for debugging unmatched routes
+    m_server->onNotFound([](AsyncWebServerRequest *request) {
+        DEBUG_LOG_API("WebAPI: Unmatched request - Method: %s, URL: %s",
+                 request->methodToString(), request->url().c_str());
+        request->send(404, "text/plain", "Not Found: " + request->url());
+    });
+
+    DEBUG_LOG_API("WebAPI: ✓ Endpoints registered");
     return true;
 }
 
@@ -226,6 +395,7 @@ void WebAPI::setSensorManager(SensorManager* sensorManager) {
 }
 
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
+    DEBUG_LOG_API("GET /api/status");
     StaticJsonDocument<2048> doc;
 
     // System info
@@ -289,6 +459,14 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handleGetConfig(AsyncWebServerRequest* request) {
+    DEBUG_LOG_API("GET /api/config");
+
+    // Note: This endpoint returns CONFIGURATION only, not runtime status.
+    // Sensor error rates are NOT included here. They would need a separate
+    // /api/sensors endpoint that queries live sensor status.
+    DEBUG_LOG_API("WebAPI: Returning sensor configuration (error rates not included - "
+              "use POST /api/sensors/:slot/errorrate to trigger test)");
+
     char buffer[2048];
     if (!m_config->toJSON(buffer, sizeof(buffer))) {
         sendError(request, 500, "Failed to serialize configuration");
@@ -304,9 +482,12 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
         return;
     }
 
+    DEBUG_LOG_API("POST /api/config - %u bytes", total);
+
     // Null-terminate data
     char* jsonStr = (char*)malloc(total + 1);
     if (!jsonStr) {
+        DEBUG_LOG_API("Config update FAILED: Out of memory");
         sendError(request, 500, "Out of memory");
         return;
     }
@@ -316,26 +497,99 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
 
     // Parse and validate
     if (!m_config->fromJSON(jsonStr)) {
+        DEBUG_LOG_API("Config update FAILED: %s", m_config->getLastError());
         free(jsonStr);
         sendError(request, 400, m_config->getLastError());
         return;
     }
 
     // Save to SPIFFS
+    DEBUG_LOG_API("=== Saving Full Config via API ===");
     if (!m_config->save()) {
+        DEBUG_LOG_API("Config update FAILED: Cannot save to filesystem");
+        DEBUG_LOG_API("=== Full Config Save Failed ===");
         free(jsonStr);
         sendError(request, 500, "Failed to save configuration");
         return;
     }
+    DEBUG_LOG_API("=== Full Config Saved Successfully ===");
 
     free(jsonStr);
+
+    // Apply log level from config to debug logger
+    const ConfigManager::Config& cfg = m_config->getConfig();
+    DebugLogger::LogLevel configLevel = static_cast<DebugLogger::LogLevel>(cfg.logLevel);
+    g_debugLogger.setLevel(configLevel);
+    DEBUG_LOG_API("Debug log level updated to %u from config", cfg.logLevel);
 
     // Return updated config
     char buffer[2048];
     m_config->toJSON(buffer, sizeof(buffer));
     sendJSON(request, 200, buffer);
 
-    LOG_INFO("Config updated via API");
+    DEBUG_LOG_API("Config updated via API");
+    DEBUG_LOG_API("Config updated successfully");
+    g_debugLogger.logConfigDump();
+}
+
+void WebAPI::handleGetSensors(AsyncWebServerRequest* request) {
+    StaticJsonDocument<2048> doc;
+
+    // Get current config
+    const ConfigManager::Config& config = m_config->getConfig();
+
+    // Build sensors array
+    JsonArray sensorsArray = doc.createNestedArray("sensors");
+    for (int i = 0; i < 4; i++) {
+        if (config.sensors[i].active) {
+            JsonObject sensorObj = sensorsArray.createNestedObject();
+            sensorObj["slot"] = i;
+            sensorObj["name"] = config.sensors[i].name;
+            sensorObj["type"] = config.sensors[i].type;
+            sensorObj["enabled"] = config.sensors[i].enabled;
+            sensorObj["primaryPin"] = config.sensors[i].primaryPin;
+            sensorObj["secondaryPin"] = config.sensors[i].secondaryPin;
+            sensorObj["isPrimary"] = config.sensors[i].isPrimary;
+            sensorObj["detectionThreshold"] = config.sensors[i].detectionThreshold;
+            sensorObj["maxDetectionDistance"] = config.sensors[i].maxDetectionDistance;
+            sensorObj["debounceMs"] = config.sensors[i].debounceMs;
+            sensorObj["warmupMs"] = config.sensors[i].warmupMs;
+            sensorObj["enableDirectionDetection"] = config.sensors[i].enableDirectionDetection;
+            sensorObj["directionTriggerMode"] = config.sensors[i].directionTriggerMode;
+            sensorObj["directionSensitivity"] = config.sensors[i].directionSensitivity;
+            sensorObj["sampleWindowSize"] = config.sensors[i].sampleWindowSize;
+            sensorObj["sampleRateMs"] = config.sensors[i].sampleRateMs;
+
+            // Add runtime error rate info if sensor manager is available
+            if (m_sensorManager) {
+                HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+                if (sensor) {
+                    SensorType sensorType = sensor->getSensorType();
+
+                    // Only ultrasonic sensors support error rate monitoring
+                    if (sensorType == SENSOR_TYPE_ULTRASONIC) {
+                        HAL_Ultrasonic* ultrasonicSensor = static_cast<HAL_Ultrasonic*>(sensor);
+                        float errorRate = ultrasonicSensor->getErrorRate();
+                        sensorObj["errorRate"] = errorRate;
+                        sensorObj["errorRateAvailable"] = ultrasonicSensor->isErrorRateAvailable();
+                        DEBUG_LOG_API("WebAPI: Sensor slot %d (HC-SR04) error rate: %.1f%% (available: %d)",
+                                 i, errorRate, ultrasonicSensor->isErrorRateAvailable());
+                    } else if (sensorType == SENSOR_TYPE_ULTRASONIC_GROVE) {
+                        HAL_Ultrasonic_Grove* groveSensor = static_cast<HAL_Ultrasonic_Grove*>(sensor);
+                        float errorRate = groveSensor->getErrorRate();
+                        sensorObj["errorRate"] = errorRate;
+                        sensorObj["errorRateAvailable"] = groveSensor->isErrorRateAvailable();
+                        DEBUG_LOG_API("WebAPI: Sensor slot %d (Grove) error rate: %.1f%% (available: %d)",
+                                 i, errorRate, groveSensor->isErrorRateAvailable());
+                    }
+                }
+            }
+        }
+    }
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
 }
 
 void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
@@ -389,8 +643,11 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         currentConfig.sensors[slot].debounceMs = sensorObj["debounceMs"] | 100;
         currentConfig.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
         currentConfig.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | false;
+        currentConfig.sensors[slot].directionTriggerMode = sensorObj["directionTriggerMode"] | 0;
+        currentConfig.sensors[slot].directionSensitivity = sensorObj["directionSensitivity"] | 0;
         currentConfig.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 5;
         currentConfig.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
+        currentConfig.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;
     }
 
     free(jsonStr);
@@ -401,10 +658,30 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         return;
     }
 
+    // Log sensor configuration being saved via API (VERBOSE)
+    DEBUG_LOG_API("=== Saving Sensor Config via API ===");
+    for (int i = 0; i < 4; i++) {
+        if (currentConfig.sensors[i].active) {
+            DEBUG_LOG_API("Sensor[%d]: %s, type=%d, enabled=%s, directionMode=%u, threshold=%umm, maxDist=%umm",
+                        i, currentConfig.sensors[i].name, currentConfig.sensors[i].type,
+                        currentConfig.sensors[i].enabled ? "yes" : "no",
+                        currentConfig.sensors[i].directionTriggerMode,
+                        currentConfig.sensors[i].detectionThreshold,
+                        currentConfig.sensors[i].maxDetectionDistance);
+            DEBUG_LOG_API("  directionEnabled=%s, sensitivity=%u, window=%u, sampleRate=%ums",
+                        currentConfig.sensors[i].enableDirectionDetection ? "yes" : "no",
+                        currentConfig.sensors[i].directionSensitivity,
+                        currentConfig.sensors[i].sampleWindowSize,
+                        currentConfig.sensors[i].sampleRateMs);
+        }
+    }
+
     if (!m_config->save()) {
         sendError(request, 500, "Failed to save sensor configuration");
+        DEBUG_LOG_API("=== Sensor Config Save Failed ===");
         return;
     }
+    DEBUG_LOG_API("=== Sensor Config Saved Successfully ===");
 
     // Apply configuration changes to live sensors (if sensor manager available)
     if (m_sensorManager) {
@@ -414,28 +691,80 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
                 // Apply threshold changes
                 if (currentConfig.sensors[i].detectionThreshold > 0) {
                     sensor->setDetectionThreshold(currentConfig.sensors[i].detectionThreshold);
-                    LOG_INFO("Applied threshold %u mm to sensor %u",
+                    DEBUG_LOG_API("Applied threshold %u mm to sensor %u",
                              currentConfig.sensors[i].detectionThreshold, i);
                 }
 
-                // Apply direction detection setting
+                // Apply direction detection setting (base interface method)
                 sensor->setDirectionDetection(currentConfig.sensors[i].enableDirectionDetection);
+                DEBUG_LOG_API("Applied direction detection %s to sensor %u",
+                         currentConfig.sensors[i].enableDirectionDetection ? "enabled" : "disabled", i);
+
+                // Apply ultrasonic-specific settings (requires cast)
+                SensorType sensorType = sensor->getSensorType();
+                if (sensorType == SENSOR_TYPE_ULTRASONIC) {
+                    HAL_Ultrasonic* ultrasonicSensor = static_cast<HAL_Ultrasonic*>(sensor);
+
+                    // Apply direction trigger mode (0=approaching, 1=receding, 2=both)
+                    ultrasonicSensor->setDirectionTriggerMode(currentConfig.sensors[i].directionTriggerMode);
+                    DEBUG_LOG_API("Applied direction trigger mode %u to sensor %u",
+                             currentConfig.sensors[i].directionTriggerMode, i);
+
+                    // Apply direction sensitivity
+                    if (currentConfig.sensors[i].directionSensitivity >= 0) {
+                        ultrasonicSensor->setDirectionSensitivity(currentConfig.sensors[i].directionSensitivity);
+                        DEBUG_LOG_API("Applied direction sensitivity %u mm to sensor %u",
+                                 currentConfig.sensors[i].directionSensitivity, i);
+                    }
+
+                    // Apply sample rate interval
+                    if (currentConfig.sensors[i].sampleRateMs > 0) {
+                        ultrasonicSensor->setMeasurementInterval(currentConfig.sensors[i].sampleRateMs);
+                        DEBUG_LOG_API("Applied sample interval %u ms to sensor %u",
+                                 currentConfig.sensors[i].sampleRateMs, i);
+                    }
+                } else if (sensorType == SENSOR_TYPE_ULTRASONIC_GROVE) {
+                    HAL_Ultrasonic_Grove* groveSensor = static_cast<HAL_Ultrasonic_Grove*>(sensor);
+
+                    // Apply direction trigger mode (0=approaching, 1=receding, 2=both)
+                    groveSensor->setDirectionTriggerMode(currentConfig.sensors[i].directionTriggerMode);
+                    DEBUG_LOG_API("Applied direction trigger mode %u to sensor %u",
+                             currentConfig.sensors[i].directionTriggerMode, i);
+
+                    // Apply direction sensitivity
+                    if (currentConfig.sensors[i].directionSensitivity >= 0) {
+                        groveSensor->setDirectionSensitivity(currentConfig.sensors[i].directionSensitivity);
+                        DEBUG_LOG_API("Applied direction sensitivity %u mm to sensor %u",
+                                 currentConfig.sensors[i].directionSensitivity, i);
+                    }
+
+                    // Apply sample rate interval
+                    if (currentConfig.sensors[i].sampleRateMs > 0) {
+                        groveSensor->setMeasurementInterval(currentConfig.sensors[i].sampleRateMs);
+                        DEBUG_LOG_API("Applied sample interval %u ms to sensor %u",
+                                 currentConfig.sensors[i].sampleRateMs, i);
+                    }
+                }
 
                 // Apply window size changes
                 if (currentConfig.sensors[i].sampleWindowSize > 0) {
                     sensor->setSampleWindowSize(currentConfig.sensors[i].sampleWindowSize);
-                    LOG_INFO("Applied window size %u to sensor %u",
+                    DEBUG_LOG_API("Applied window size %u to sensor %u",
                              currentConfig.sensors[i].sampleWindowSize, i);
                 }
 
                 // Apply distance range if sensor supports it
                 const SensorCapabilities& caps = sensor->getCapabilities();
                 if (caps.supportsDistanceMeasurement) {
-                    sensor->setDistanceRange(caps.minDetectionDistance, caps.maxDetectionDistance);
+                    uint32_t maxDist = currentConfig.sensors[i].maxDetectionDistance;
+                    if (maxDist == 0) maxDist = caps.maxDetectionDistance;  // Use capability default if not set
+                    sensor->setDistanceRange(caps.minDetectionDistance, maxDist);
+                    DEBUG_LOG_API("Applied distance range %u-%u mm to sensor %u",
+                             caps.minDetectionDistance, maxDist, i);
                 }
             }
         }
-        LOG_INFO("Sensor configuration applied to live sensors");
+        DEBUG_LOG_API("Sensor configuration applied to live sensors");
     }
 
     // Return updated sensor configuration
@@ -446,7 +775,99 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
     }
 
     sendJSON(request, 200, buffer);
-    LOG_INFO("Sensor configuration saved successfully");
+    DEBUG_LOG_API("Sensor configuration saved successfully");
+}
+
+void WebAPI::handleCheckSensorErrorRate(AsyncWebServerRequest* request) {
+    DEBUG_LOG_API("WebAPI: ========== handleGetSensorErrorRate() ENTERED ==========");
+    DEBUG_LOG_API("WebAPI: Request URL: %s", request->url().c_str());
+    DEBUG_LOG_API("WebAPI: Request Method: %s", request->methodToString());
+
+    // Extract slot number from URL path parameter
+    // URL format: /api/sensors/:slot/errorrate (e.g., /api/sensors/0/errorrate)
+    String url = request->url();
+    int slotStartIdx = url.indexOf("/sensors/") + 9;  // Length of "/sensors/"
+    int slotEndIdx = url.indexOf("/", slotStartIdx);
+    String slotStr = url.substring(slotStartIdx, slotEndIdx);
+    uint8_t slot = slotStr.toInt();
+
+    DEBUG_LOG_API("WebAPI: Error rate requested for sensor slot %d", slot);
+
+    if (slot >= 4) {
+        DEBUG_LOG_API("WebAPI: Invalid sensor slot %d (must be 0-3)", slot);
+        sendError(request, 400, "Invalid sensor slot");
+        return;
+    }
+
+    // Check if sensor manager is available
+    if (!m_sensorManager) {
+        DEBUG_LOG_API("WebAPI: Sensor manager not available");
+        sendError(request, 500, "Sensor manager not available");
+        return;
+    }
+
+    // Get sensor
+    HAL_MotionSensor* sensor = m_sensorManager->getSensor(slot);
+    if (!sensor) {
+        DEBUG_LOG_API("WebAPI: No sensor found in slot %d", slot);
+        sendError(request, 404, "Sensor not found in slot");
+        return;
+    }
+
+    // Check if sensor supports error rate monitoring
+    SensorType sensorType = sensor->getSensorType();
+    const char* sensorTypeName = getSensorTypeName(sensorType);
+    DEBUG_LOG_API("WebAPI: Sensor type in slot %d: %s (type=%d)", slot, sensorTypeName, sensorType);
+
+    if (sensorType != SENSOR_TYPE_ULTRASONIC && sensorType != SENSOR_TYPE_ULTRASONIC_GROVE) {
+        DEBUG_LOG_API("WebAPI: Sensor type %s does not support error rate monitoring", sensorTypeName);
+        sendError(request, 400, "Sensor type does not support error rate monitoring");
+        return;
+    }
+
+    // Get current error rate from rolling buffer
+    float errorRate = -1.0f;
+
+    if (sensorType == SENSOR_TYPE_ULTRASONIC) {
+        HAL_Ultrasonic* ultrasonicSensor = static_cast<HAL_Ultrasonic*>(sensor);
+        errorRate = ultrasonicSensor->getErrorRate();
+        DEBUG_LOG_API("WebAPI: HC-SR04 sensor - errorRate=%.1f%%", errorRate);
+    } else if (sensorType == SENSOR_TYPE_ULTRASONIC_GROVE) {
+        HAL_Ultrasonic_Grove* groveSensor = static_cast<HAL_Ultrasonic_Grove*>(sensor);
+        errorRate = groveSensor->getErrorRate();
+        DEBUG_LOG_API("WebAPI: Grove sensor - errorRate=%.1f%%", errorRate);
+    }
+
+    DEBUG_LOG_API("WebAPI: Error rate for slot %d: %.1f%%", slot, errorRate);
+
+    // Build response
+    StaticJsonDocument<256> doc;
+    doc["slot"] = slot;
+    doc["errorRate"] = errorRate;
+
+    if (errorRate < 0) {
+        doc["message"] = "Error rate not yet available - collecting first 100 samples at boot";
+        doc["status"] = "unavailable";
+        DEBUG_LOG_API("WebAPI: Error rate unavailable (warmup phase)");
+    } else if (errorRate < 5.0f) {
+        doc["message"] = "Sensor health: Excellent";
+        doc["status"] = "excellent";
+        DEBUG_LOG_API("WebAPI: Sensor health: Excellent (%.1f%% error rate)", errorRate);
+    } else if (errorRate < 15.0f) {
+        doc["message"] = "Sensor health: Fair - consider checking wiring or environment";
+        doc["status"] = "fair";
+        DEBUG_LOG_API("WebAPI: Sensor health: Fair (%.1f%% error rate)", errorRate);
+    } else {
+        doc["message"] = "Sensor health: Poor - check wiring, power, and sensor orientation";
+        doc["status"] = "poor";
+        DEBUG_LOG_API("WebAPI: Sensor health: Poor (%.1f%% error rate)", errorRate);
+    }
+
+    String json;
+    serializeJson(doc, json);
+    DEBUG_LOG_API("WebAPI: Sending error rate response: %s", json.c_str());
+    DEBUG_LOG_API("WebAPI: ========== handleGetSensorErrorRate() EXITING ==========");
+    sendJSON(request, 200, json.c_str());
 }
 
 void WebAPI::handleGetDisplays(AsyncWebServerRequest* request) {
@@ -470,6 +891,20 @@ void WebAPI::handleGetDisplays(AsyncWebServerRequest* request) {
             displayObj["brightness"] = config.displays[i].brightness;
             displayObj["rotation"] = config.displays[i].rotation;
             displayObj["useForStatus"] = config.displays[i].useForStatus;
+
+            // Add error rate if LED matrix is available and initialized
+            if (m_ledMatrix && config.displays[i].type == 1) {  // Type 1 = 8x8 Matrix
+                float errorRate = m_ledMatrix->getErrorRate();
+                displayObj["errorRate"] = errorRate;
+                displayObj["errorRateAvailable"] = m_ledMatrix->isErrorRateAvailable();
+                displayObj["transactionCount"] = m_ledMatrix->getTransactionCount();
+                DEBUG_LOG_API("WebAPI: Display slot %d (%s) error rate: %.1f%% (ready: %d, txCount: %u)",
+                         i, config.displays[i].name, errorRate, m_ledMatrix->isReady(),
+                         m_ledMatrix->getTransactionCount());
+            } else {
+                DEBUG_LOG_API("WebAPI: Display slot %d - no error rate available (ledMatrix: %d, type: %d)",
+                          i, (m_ledMatrix != nullptr), config.displays[i].type);
+            }
         }
     }
 
@@ -526,7 +961,7 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
         currentConfig.displays[slot].sdaPin = displayObj["sdaPin"] | I2C_SDA_PIN;
         currentConfig.displays[slot].sclPin = displayObj["sclPin"] | I2C_SCL_PIN;
         currentConfig.displays[slot].brightness = displayObj["brightness"] | MATRIX_BRIGHTNESS_DEFAULT;
-        currentConfig.displays[slot].rotation = displayObj["rotation"] | 0;
+        currentConfig.displays[slot].rotation = displayObj["rotation"] | MATRIX_ROTATION;
         currentConfig.displays[slot].useForStatus = displayObj["useForStatus"] | true;
     }
 
@@ -538,10 +973,29 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
         return;
     }
 
+    // Log display configuration being saved via API (VERBOSE)
+    DEBUG_LOG_API("=== Saving Display Config via API ===");
+    for (int i = 0; i < 2; i++) {
+        if (currentConfig.displays[i].active) {
+            DEBUG_LOG_API("Display[%d]: %s, type=%d, enabled=%s, i2c=0x%02X, brightness=%u",
+                        i, currentConfig.displays[i].name, currentConfig.displays[i].type,
+                        currentConfig.displays[i].enabled ? "yes" : "no",
+                        currentConfig.displays[i].i2cAddress,
+                        currentConfig.displays[i].brightness);
+            DEBUG_LOG_API("  rotation=%u, useForStatus=%s, I2C pins: SDA=%u, SCL=%u",
+                        currentConfig.displays[i].rotation,
+                        currentConfig.displays[i].useForStatus ? "yes" : "no",
+                        currentConfig.displays[i].sdaPin,
+                        currentConfig.displays[i].sclPin);
+        }
+    }
+
     if (!m_config->save()) {
         sendError(request, 500, "Failed to save display configuration");
+        DEBUG_LOG_API("=== Display Config Save Failed ===");
         return;
     }
+    DEBUG_LOG_API("=== Display Config Saved Successfully ===");
 
     // Return updated display configuration
     char buffer[4096];
@@ -551,7 +1005,7 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
     }
 
     sendJSON(request, 200, buffer);
-    LOG_INFO("Display configuration saved successfully");
+    DEBUG_LOG_API("Display configuration saved successfully");
 }
 
 // ============================================================================
@@ -721,13 +1175,13 @@ void WebAPI::handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t*
 
     // Check if LED matrix is available
     if (!m_ledMatrix) {
-        LOG_WARN("WebAPI: Built-in animation request but LED Matrix pointer is null");
+        DEBUG_LOG_API("WebAPI: Built-in animation request but LED Matrix pointer is null");
         sendError(request, 503, "LED Matrix not configured");
         return;
     }
 
     if (!m_ledMatrix->isReady()) {
-        LOG_WARN("WebAPI: Built-in animation request but LED Matrix not ready");
+        DEBUG_LOG_API("WebAPI: Built-in animation request but LED Matrix not ready");
         sendError(request, 503, "LED Matrix not initialized");
         return;
     }
@@ -834,16 +1288,16 @@ void WebAPI::handleDeleteAnimation(AsyncWebServerRequest* request) {
 void WebAPI::handleGetAnimationTemplate(AsyncWebServerRequest* request) {
     // Extract animation type from query parameter
     // URL format: /api/animations/template?type=MOTION_ALERT
-    LOG_INFO("Template request received for URL: %s", request->url().c_str());
+    DEBUG_LOG_API("Template request received for URL: %s", request->url().c_str());
 
     if (!request->hasParam("type")) {
-        LOG_ERROR("Template request: No 'type' query parameter");
+        DEBUG_LOG_API("Template request: No 'type' query parameter");
         sendError(request, 400, "Animation type required (use ?type=MOTION_ALERT)");
         return;
     }
 
     String animType = request->getParam("type")->value();
-    LOG_INFO("Generating template for animation type: %s", animType.c_str());
+    DEBUG_LOG_API("Generating template for animation type: %s", animType.c_str());
     String templateContent;
 
     // Generate template based on animation type
@@ -909,7 +1363,7 @@ void WebAPI::handleGetAnimationTemplate(AsyncWebServerRequest* request) {
     }
 
     request->send(response);
-    LOG_INFO("Sent animation template: %s", animType.c_str());
+    DEBUG_LOG_API("Sent animation template: %s", animType.c_str());
 }
 
 void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
@@ -959,7 +1413,7 @@ void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data
     serializeJson(response, json);
     sendJSON(request, 200, json.c_str());
 
-    LOG_INFO("Assigned %s animation '%s' to function '%s'", type, animation, functionKey);
+    DEBUG_LOG_API("Assigned %s animation '%s' to function '%s'", type, animation, functionKey);
 }
 
 void WebAPI::handleGetAssignments(AsyncWebServerRequest* request) {
@@ -1008,17 +1462,21 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
         return;
     }
 
+    DEBUG_LOG_API("POST /api/mode - %u bytes", total);
+
     // Parse JSON
     StaticJsonDocument<128> doc;
     DeserializationError error = deserializeJson(doc, data, total);
 
     if (error) {
+        DEBUG_LOG_API("Mode change FAILED: Invalid JSON");
         sendError(request, 400, "Invalid JSON");
         return;
     }
 
     // Get mode from request
     if (!doc.containsKey("mode")) {
+        DEBUG_LOG_API("Mode change FAILED: Missing mode field");
         sendError(request, 400, "Missing 'mode' field");
         return;
     }
@@ -1027,6 +1485,7 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
 
     // Validate mode
     if (mode < StateMachine::OFF || mode > StateMachine::MOTION_DETECT) {
+        DEBUG_LOG_API("Mode change FAILED: Invalid mode value %d", mode);
         sendError(request, 400, "Invalid mode value");
         return;
     }
@@ -1034,7 +1493,8 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
     // Set mode
     m_stateMachine->setMode((StateMachine::OperatingMode)mode);
 
-    LOG_INFO("Mode changed to %s via API", StateMachine::getModeName((StateMachine::OperatingMode)mode));
+    DEBUG_LOG_API("Mode changed to %s via API", StateMachine::getModeName((StateMachine::OperatingMode)mode));
+    DEBUG_LOG_API("Mode changed to %s", StateMachine::getModeName((StateMachine::OperatingMode)mode));
 
     // Return new mode
     handleGetMode(request);
@@ -1076,7 +1536,7 @@ void WebAPI::handleGetLogs(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostReset(AsyncWebServerRequest* request) {
-    LOG_WARN("Factory reset requested via API");
+    DEBUG_LOG_API("Factory reset requested via API");
 
     // Reset configuration
     if (!m_config->reset(true)) {
@@ -1096,7 +1556,29 @@ void WebAPI::handlePostReset(AsyncWebServerRequest* request) {
 
     sendJSON(request, 200, json.c_str());
 
-    LOG_INFO("Factory reset complete");
+    DEBUG_LOG_API("Factory reset complete");
+}
+
+void WebAPI::handlePostReboot(AsyncWebServerRequest* request) {
+    DEBUG_LOG_API("Device reboot requested via API");
+    DEBUG_LOG_API("Reboot request received");
+
+    StaticJsonDocument<128> doc;
+    doc["success"] = true;
+    doc["message"] = "Device rebooting...";
+
+    String json;
+    serializeJson(doc, json);
+
+    sendJSON(request, 200, json.c_str());
+
+    DEBUG_LOG_API("Rebooting device in 1 second...");
+    DEBUG_LOG_SYSTEM("Device reboot initiated via web API");
+    g_debugLogger.flush();  // Flush logs before reboot
+
+    // Delay to allow response to be sent, then reboot
+    delay(1000);
+    ESP.restart();
 }
 
 void WebAPI::handleGetVersion(AsyncWebServerRequest* request) {
@@ -1231,7 +1713,7 @@ String WebAPI::buildDashboardHTML() {
     html += "font-size:0.85em;height:800px;overflow-y:auto;line-height:1.6;resize:vertical;}";
     html += ".log-entry{margin-bottom:4px;}";
     html += ".log-entry.hidden{display:none;}";
-    html += ".log-info{color:#60a5fa;}.log-warn{color:#fbbf24;}.log-error{color:#f87171;}";
+    html += ".log-verbose{color:#94a3b8;}.log-debug{color:#a78bfa;}.log-info{color:#60a5fa;}.log-warn{color:#fbbf24;}.log-error{color:#f87171;}";
     html += "#log-status{margin-bottom:12px;padding:8px;background:#f3f4f6;border-radius:6px;text-align:center;}";
     html += ".log-controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}";
     html += ".log-search{flex:1;min-width:200px;padding:8px;border:2px solid #e5e7eb;border-radius:6px;}";
@@ -1296,6 +1778,13 @@ String WebAPI::buildDashboardHTML() {
     html += "<div class=\"card\"><h2>Network Details</h2><div id=\"wifi-details-full\">";
     html += "<p>Loading WiFi information...</p>";
     html += "</div></div>";
+
+    html += "<div class=\"card\"><h2>System</h2>";
+    html += "<div style=\"display:flex;justify-content:center;\">";
+    html += "<button class=\"btn btn-danger\" onclick=\"rebootDevice()\" style=\"width:50%;max-width:200px;font-weight:600;\">Reboot Device</button>";
+    html += "</div>";
+    html += "<p class=\"form-help\" style=\"margin-top:8px;margin-bottom:0;text-align:center;\">Restart the ESP32 device. The web interface will be unavailable for ~10 seconds.</p>";
+    html += "</div>";
 
     html += "</div>"; // End status tab
 
@@ -1446,13 +1935,14 @@ String WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-row\">";
     html += "<div class=\"form-group\"><label class=\"form-label\">Log Level</label>";
     html += "<select id=\"cfg-logLevel\" class=\"form-select\">";
-    html += "<option value=\"0\">ERROR</option>";
-    html += "<option value=\"1\">WARN</option>";
+    html += "<option value=\"0\">VERBOSE</option>";
+    html += "<option value=\"1\">DEBUG</option>";
     html += "<option value=\"2\">INFO</option>";
-    html += "<option value=\"3\">DEBUG</option>";
-    html += "<option value=\"4\">VERBOSE</option>";
+    html += "<option value=\"3\">WARN</option>";
+    html += "<option value=\"4\">ERROR</option>";
+    html += "<option value=\"5\">NONE</option>";
     html += "</select>";
-    html += "<div class=\"form-help\">Higher levels include more detail but use more memory</div></div>";
+    html += "<div class=\"form-help\">Higher levels log less detail. VERBOSE logs everything (battery intensive)</div></div>";
     html += "<div class=\"form-group\"><label class=\"form-label\">Power Saving</label>";
     html += "<select id=\"cfg-powerSaving\" class=\"form-select\">";
     html += "<option value=\"0\">Disabled</option>";
@@ -1470,20 +1960,35 @@ String WebAPI::buildDashboardHTML() {
 
     // LOGS TAB
     html += "<div id=\"logs-tab\" class=\"tab-content\">";
-    html += "<div class=\"card\"><h2>System Logs</h2>";
-    html += "<div id=\"log-status\">Fetching logs...</div>";
-    html += "<div class=\"log-controls\">";
-    html += "<input type=\"text\" id=\"log-search\" class=\"log-search\" placeholder=\"Search logs...\" oninput=\"filterLogs()\">";
-    html += "<div class=\"log-filter-group\">";
-    html += "<button class=\"log-filter-btn active\" data-level=\"all\" onclick=\"setLogFilter('all')\">All</button>";
-    html += "<button class=\"log-filter-btn\" data-level=\"ERROR\" onclick=\"setLogFilter('ERROR')\">Error</button>";
-    html += "<button class=\"log-filter-btn\" data-level=\"WARN\" onclick=\"setLogFilter('WARN')\">Warn</button>";
-    html += "<button class=\"log-filter-btn\" data-level=\"INFO\" onclick=\"setLogFilter('INFO')\">Info</button>";
+
+    // Boot Information Card
+    html += "<div class=\"card\"><h2>Boot Information</h2>";
+    html += "<div id=\"bootInfo\">";
+    html += "<p><strong>Boot Cycle:</strong> <span id=\"bootCycle\">-</span></p>";
+    html += "<p><strong>Firmware:</strong> <span id=\"firmware\">-</span></p>";
+    html += "<p><strong>Free Heap:</strong> <span id=\"freeHeap\">-</span> bytes</p>";
+    html += "<p><strong>Filesystem Usage:</strong> <span id=\"fsUsage\">-</span>%</p>";
+    html += "<p><strong>Total Logs Size:</strong> <span id=\"logsSize\">-</span> bytes</p>";
+    html += "<p><strong>Current Log Level:</strong> <span id=\"currentLogLevel\" style=\"font-weight:600;\">-</span></p>";
     html += "</div></div>";
-    html += "<div id=\"log-viewer\"></div>";
-    html += "<div style=\"margin-top:12px;\">";
-    html += "<button class=\"btn btn-primary btn-small\" onclick=\"fetchLogs()\">Refresh</button>";
-    html += "<button class=\"btn btn-off btn-small\" style=\"margin-left:8px;\" onclick=\"clearLogView()\">Clear View</button>";
+
+    // Debug Logs (LittleFS) Card
+    html += "<div class=\"card\"><h2>Debug Logs (LittleFS)</h2>";
+    html += "<div style=\"margin-bottom:10px;\">";
+    html += "<label for=\"logSelect\" style=\"display:block;font-weight:600;margin-bottom:4px;\">Select Log File:</label>";
+    html += "<select id=\"logSelect\" style=\"width:100%;padding:8px;margin:5px 0;border:1px solid #cbd5e1;border-radius:4px;\">";
+    html += "<option value=\"\">-- Select a log file --</option>";
+    html += "</select>";
+    html += "</div>";
+    html += "<div id=\"logActions\" style=\"display:none;margin-bottom:10px;\">";
+    html += "<button class=\"btn btn-primary btn-small\" onclick=\"downloadLog()\">Download</button>";
+    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:8px;\" onclick=\"eraseLog()\">Erase</button>";
+    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:16px;\" onclick=\"eraseAllLogs()\">Erase All Logs</button>";
+    html += "</div>";
+    html += "<div id=\"logInfo\" style=\"display:none;padding:12px;background:#f5f5f5;border-radius:6px;\">";
+    html += "<p><strong>File:</strong> <span id=\"selectedLogName\">-</span></p>";
+    html += "<p><strong>Size:</strong> <span id=\"selectedLogSize\">-</span> bytes (<span id=\"selectedLogSizeKB\">-</span> KB)</p>";
+    html += "<p><strong>Path:</strong> <span id=\"selectedLogPath\">-</span></p>";
     html += "</div></div></div>";
 
     html += "</div>"; // End container
@@ -1499,7 +2004,7 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById(tab+'-tab').classList.add('active');";
     html += "if(tab==='config')loadConfig();";
     html += "if(tab==='hardware'){loadSensors();loadDisplays();loadAnimations();}";
-    html += "if(tab==='logs')fetchLogs();";
+    html += "if(tab==='logs'){loadAvailableLogs();}";
     html += "}";
 
     // Status fetching
@@ -1552,6 +2057,15 @@ String WebAPI::buildDashboardHTML() {
     html += "try{const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},";
     html += "body:JSON.stringify({mode:mode})});if(res.ok)fetchStatus();}catch(e){}}";
 
+    // Reboot device
+    html += "async function rebootDevice(){";
+    html += "if(!confirm('Are you sure you want to reboot the device?\\n\\nThe device will restart and the web interface will be unavailable for ~10 seconds.'))return;";
+    html += "try{";
+    html += "await fetch('/api/reboot',{method:'POST'});";
+    html += "alert('Device is rebooting...\\n\\nThe page will reload automatically in 15 seconds.');";
+    html += "setTimeout(()=>location.reload(),15000);";
+    html += "}catch(e){alert('Reboot request sent. Please wait 15 seconds and refresh the page.');}}";
+
     // Config loading
     html += "let currentConfig={};";
     html += "async function loadConfig(){";
@@ -1567,7 +2081,7 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
     html += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
     html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
-    html += "document.getElementById('cfg-logLevel').value=cfg.logging?.level||2;";
+    html += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
     html += "}catch(e){console.error('Config load error:',e);}}";
 
@@ -1598,51 +2112,106 @@ String WebAPI::buildDashboardHTML() {
     html += "setTimeout(()=>document.getElementById('save-indicator').classList.remove('show'),3000);";
     html += "loadConfig();}else{alert('Failed to save configuration');}}catch(e){alert('Error: '+e.message);}}";
 
-    // Log fetching and filtering
-    html += "let currentFilter='all';";
-    html += "async function fetchLogs(){";
-    html += "try{document.getElementById('log-status').textContent='Fetching logs...';";
-    html += "const res=await fetch('/api/logs?limit=100');const data=await res.json();";
-    html += "const viewer=document.getElementById('log-viewer');viewer.innerHTML='';";
-    html += "if(data.logs && data.logs.length>0){";
-    html += "data.logs.forEach(log=>{const div=document.createElement('div');div.className='log-entry';";
-    html += "div.setAttribute('data-level',log.levelName);";
-    html += "div.setAttribute('data-message',log.message.toLowerCase());";
-    html += "let cls='log-info';";
-    html += "if(log.levelName==='WARN')cls='log-warn';";
-    html += "if(log.levelName==='ERROR')cls='log-error';";
-    html += "const time=new Date(log.timestamp).toLocaleTimeString();";
-    html += "const msg='['+time+'] ['+log.levelName+'] '+log.message;";
-    html += "div.innerHTML='<span class=\"'+cls+'\">'+msg+'</span>';viewer.appendChild(div);});";
-    html += "filterLogs();";
-    html += "document.getElementById('log-status').textContent='Showing '+data.logs.length+' of '+data.count+' logs - Last updated: '+new Date().toLocaleTimeString();";
-    html += "}else{viewer.innerHTML='<div style=\"color:#94a3b8;\">No logs available. Check log level in Configuration tab.</div>';";
-    html += "document.getElementById('log-status').textContent='No logs found';}}";
-    html += "catch(e){document.getElementById('log-status').textContent='Error fetching logs: '+e.message;console.error(e);}}";
-    html += "function setLogFilter(level){";
-    html += "currentFilter=level;";
-    html += "document.querySelectorAll('.log-filter-btn').forEach(btn=>{";
-    html += "btn.classList.toggle('active',btn.getAttribute('data-level')===level);});";
-    html += "filterLogs();}";
-    html += "function filterLogs(){";
-    html += "const search=document.getElementById('log-search').value.toLowerCase();";
-    html += "const entries=document.querySelectorAll('.log-entry');";
-    html += "let visibleCount=0;";
-    html += "entries.forEach(entry=>{";
-    html += "const level=entry.getAttribute('data-level');";
-    html += "const message=entry.getAttribute('data-message')||'';";
-    html += "const matchesFilter=(currentFilter==='all'||level===currentFilter);";
-    html += "const matchesSearch=(search===''||message.includes(search));";
-    html += "const visible=matchesFilter&&matchesSearch;";
-    html += "entry.classList.toggle('hidden',!visible);";
-    html += "if(visible)visibleCount++;});";
-    html += "const total=entries.length;";
-    html += "if(total>0){const status=document.getElementById('log-status');";
-    html += "const baseText=status.textContent.split('-')[0];";
-    html += "status.textContent=baseText+'- Showing '+visibleCount+' of '+total+' logs';}}";
+    // LittleFS Log Management
+    html += "let availableLogs=[];";
+    html += "let selectedLog=null;";
 
-    html += "function clearLogView(){document.getElementById('log-viewer').innerHTML='';}";
+    // Load available logs on page load
+    html += "async function loadAvailableLogs(){";
+    html += "try{";
+    html += "const res=await fetch('/api/debug/logs');";
+    html += "const data=await res.json();";
 
+    // Update boot info
+    html += "document.getElementById('bootCycle').textContent=data.bootCycle||'-';";
+    html += "document.getElementById('firmware').textContent=data.firmware||'-';";
+    html += "document.getElementById('freeHeap').textContent=data.freeHeap?data.freeHeap.toLocaleString():'-';";
+    html += "document.getElementById('fsUsage').textContent=data.filesystemUsage||'-';";
+    html += "document.getElementById('logsSize').textContent=data.totalLogsSize?data.totalLogsSize.toLocaleString():'-';";
+
+    // Fetch and display current log level
+    html += "try{const cfgRes=await fetch('/api/debug/config');";
+    html += "if(cfgRes.ok){const cfgData=await cfgRes.json();";
+    html += "const levelEl=document.getElementById('currentLogLevel');";
+    html += "levelEl.textContent=cfgData.level||'-';";
+    html += "levelEl.style.color=(cfgData.level==='ERROR'||cfgData.level==='NONE')?'#dc2626':";
+    html += "(cfgData.level==='WARN')?'#ea580c':(cfgData.level==='INFO')?'#0891b2':";
+    html += "(cfgData.level==='DEBUG')?'#7c3aed':'#6366f1';}}";
+    html += "catch(e){console.error('Failed to fetch log level:',e);}";
+
+    // Populate log dropdown
+    html += "availableLogs=data.logs||[];";
+    html += "const select=document.getElementById('logSelect');";
+    html += "select.innerHTML='<option value=\"\">-- Select a log file --</option>';";
+    html += "availableLogs.forEach((log,index)=>{";
+    html += "const option=document.createElement('option');";
+    html += "option.value=index;";
+    html += "const sizeKB=(log.size/1024).toFixed(1);";
+    html += "option.textContent=log.name+' ('+sizeKB+' KB)';";
+    html += "select.appendChild(option);";
+    html += "});";
+    html += "}catch(err){console.error('Failed to load logs:',err);}}";
+
+    // Handle log selection
+    html += "function onLogSelect(){";
+    html += "const select=document.getElementById('logSelect');";
+    html += "const index=parseInt(select.value);";
+    html += "if(isNaN(index)){";
+    html += "document.getElementById('logActions').style.display='none';";
+    html += "document.getElementById('logInfo').style.display='none';";
+    html += "selectedLog=null;";
+    html += "return;}";
+    html += "selectedLog=availableLogs[index];";
+    html += "document.getElementById('selectedLogName').textContent=selectedLog.name;";
+    html += "document.getElementById('selectedLogSize').textContent=selectedLog.size.toLocaleString();";
+    html += "document.getElementById('selectedLogSizeKB').textContent=(selectedLog.size/1024).toFixed(1);";
+    html += "document.getElementById('selectedLogPath').textContent=selectedLog.path;";
+    html += "document.getElementById('logActions').style.display='block';";
+    html += "document.getElementById('logInfo').style.display='block';}";
+
+    // Download selected log
+    html += "function downloadLog(){";
+    html += "if(!selectedLog)return;";
+    html += "const url='/api/debug/logs/'+selectedLog.name;";
+    html += "const a=document.createElement('a');";
+    html += "a.href=url;";
+    html += "a.download='stepaware_'+selectedLog.name+'.log';";
+    html += "document.body.appendChild(a);";
+    html += "a.click();";
+    html += "document.body.removeChild(a);}";
+
+    // Erase selected log
+    html += "async function eraseLog(){";
+    html += "if(!selectedLog)return;";
+    html += "if(!confirm('Are you sure you want to erase '+selectedLog.name+'?'))return;";
+    html += "try{";
+    html += "const res=await fetch('/api/debug/logs/'+selectedLog.name,{method:'DELETE'});";
+    html += "if(res.ok){";
+    html += "alert('Log erased successfully');";
+    html += "loadAvailableLogs();";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to erase log: '+err);}}";
+    html += "catch(err){console.error('Error erasing log:',err);alert('Error erasing log');}}";
+
+    // Erase all logs
+    html += "async function eraseAllLogs(){";
+    html += "if(!confirm('Are you sure you want to erase ALL logs? This cannot be undone!'))return;";
+    html += "try{";
+    html += "const res=await fetch('/api/debug/logs/clear',{method:'POST'});";
+    html += "if(res.ok){";
+    html += "alert('All logs erased successfully');";
+    html += "loadAvailableLogs();";
+    html += "}else{";
+    html += "const err=await res.text();";
+    html += "alert('Failed to erase logs: '+err);}}";
+    html += "catch(err){console.error('Error erasing logs:',err);alert('Error erasing logs');}}";
+
+    // Add event listener to select
+    html += "document.addEventListener('DOMContentLoaded',()=>{";
+    html += "const select=document.getElementById('logSelect');";
+    html += "if(select)select.addEventListener('change',onLogSelect);";
+    html += "});";
     // Hardware Tab - Sensor Management
     html += "let sensorSlots=[null,null,null,null];";
     html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','debounce']},";
@@ -1652,12 +2221,21 @@ String WebAPI::buildDashboardHTML() {
 
     // Load sensors from configuration
     html += "async function loadSensors(){";
-    html += "try{const res=await fetch('/api/config');if(!res.ok)return;";
-    html += "const cfg=await res.json();";
+    html += "try{";
+    html += "const cfgRes=await fetch('/api/config');if(!cfgRes.ok)return;";
+    html += "const cfg=await cfgRes.json();";
     html += "sensorSlots=[null,null,null,null];";
     html += "if(cfg.sensors&&Array.isArray(cfg.sensors)){";
-    html += "cfg.sensors.forEach(s=>{if(s.slot>=0&&s.slot<4){sensorSlots[s.slot]=s;}});";
-    html += "renderSensors();}}catch(e){console.error('Failed to load sensors:',e);}}";
+    html += "cfg.sensors.forEach(s=>{if(s.slot>=0&&s.slot<4){sensorSlots[s.slot]=s;}});}";
+    html += "const statusRes=await fetch('/api/sensors');";
+    html += "if(statusRes.ok){";
+    html += "const status=await statusRes.json();";
+    html += "if(status.sensors&&Array.isArray(status.sensors)){";
+    html += "status.sensors.forEach(s=>{";
+    html += "if(s.slot>=0&&s.slot<4&&sensorSlots[s.slot]){";
+    html += "sensorSlots[s.slot].errorRate=s.errorRate;";
+    html += "sensorSlots[s.slot].errorRateAvailable=s.errorRateAvailable;}});}}";
+    html += "renderSensors();}catch(e){console.error('Failed to load sensors:',e);}}";
 
     // Render all sensor cards
     html += "function renderSensors(){";
@@ -1727,10 +2305,32 @@ String WebAPI::buildDashboardHTML() {
     html += "if(sensor.enableDirectionDetection){";
     html += "const dirMode=(sensor.directionTriggerMode===0?'Approaching':sensor.directionTriggerMode===1?'Receding':'Both');";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Trigger:</span> <span>'+dirMode+'</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.rapidSampleCount+' @ '+sensor.rapidSampleMs+'ms</span></div>';}}";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.sampleWindowSize+' @ '+sensor.sampleRateMs+'ms</span></div>';";
+    html += "const dirSensStr=(sensor.directionSensitivity===0||sensor.directionSensitivity===undefined?'Auto':''+sensor.directionSensitivity+'mm');";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Dir. Sensitivity:</span> <span>'+dirSensStr+'</span></div>';}";
+    html += "}";  // Close else if block for ultrasonic sensors
     html += "html+='</div></div>';";
 
     html += "html+='</div>';";  // Close grid
+
+    // Hardware Info section (for sensors that support error rate monitoring)
+    html += "if(sensor.type===2||sensor.type===4){";  // Ultrasonic sensors only
+    html += "html+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
+    html += "html+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
+    html += "html+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html += "html+='<span style=\"font-size:0.85em;color:#64748b;\">Error Rate:</span>';";
+    html += "const errorRate=sensor.errorRate!==undefined?sensor.errorRate:-1;";
+    html += "const errorRateAvailable=sensor.errorRateAvailable!==undefined?sensor.errorRateAvailable:false;";
+    html += "if(errorRate<0||!errorRateAvailable){";
+    html += "html+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}";
+    html += "else{";
+    html += "const colorClass=errorRate<5.0?'#10b981':errorRate<15.0?'#f59e0b':'#ef4444';";
+    html += "const statusText=errorRate<5.0?'Excellent':errorRate<15.0?'Fair':'Poor';";
+    html += "html+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
+    html += "html+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
+    html += "html+='</div>';";
+    html += "html+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on 100 sample test. Lower is better. Error rate will be high if distances measured are greater than the sensor\\'s capabilities, but this may not be a problem for functionality.</div>';";
+    html += "html+='</div>';}";
 
     html += "card.innerHTML=html;";
     html += "return card;}";
@@ -1745,16 +2345,22 @@ String WebAPI::buildDashboardHTML() {
     html += "if(typeNum<0||typeNum>4||typeNum===3){alert('Invalid sensor type');return;}";
     html += "const name=prompt('Enter sensor name:','Sensor '+(freeSlot+1));";
     html += "if(!name)return;";
-    html += "const pin=parseInt(prompt('Enter primary pin (GPIO number):','5'));";
+    // Set default pin based on sensor type
+    html += "let defaultPin='5';";
+    html += "if(typeNum===2)defaultPin='8';";  // HC-SR04 trigger pin
+    html += "if(typeNum===4)defaultPin='8';";  // Grove signal pin
+    html += "const pin=parseInt(prompt('Enter primary pin (GPIO number):',defaultPin));";
     html += "if(isNaN(pin)||pin<0||pin>48){alert('Invalid pin number');return;}";
+    // Create sensor with type-specific defaults
     html += "const sensor={type:typeNum,name:name,primaryPin:pin,enabled:true,isPrimary:freeSlot===0,";
-    html += "warmupMs:60000,debounceMs:100,detectionThreshold:1500,maxDetectionDistance:3000,enableDirectionDetection:true,";
-    html += "directionTriggerMode:0,rapidSampleCount:5,rapidSampleMs:200};";
+    html += "warmupMs:60000,debounceMs:50,detectionThreshold:1100,maxDetectionDistance:3000,enableDirectionDetection:true,";
+    html += "directionTriggerMode:0,directionSensitivity:0,sampleWindowSize:3,sampleRateMs:75};";
     html += "if(typeNum===2){";
     html += "const echoPin=parseInt(prompt('Enter echo pin for HC-SR04 (GPIO number):','9'));";
     html += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
     html += "sensor.secondaryPin=echoPin;}";
     html += "if(typeNum===4){sensor.secondaryPin=0;}";
+    html += "if(typeNum===0){sensor.warmupMs=60000;sensor.debounceMs=50;sensor.enableDirectionDetection=false;}";  // PIR-specific overrides
     html += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
 
     // Remove sensor
@@ -1788,10 +2394,12 @@ String WebAPI::buildDashboardHTML() {
     html += "if(sensor.enableDirectionDetection){";
     html += "const dirMode=prompt('Trigger on:\\n0=Approaching (walking towards)\\n1=Receding (walking away)\\n2=Both directions',sensor.directionTriggerMode||0);";
     html += "if(dirMode!==null&&!isNaN(parseInt(dirMode))){sensor.directionTriggerMode=parseInt(dirMode);}";
-    html += "const samples=parseInt(prompt('Rapid sample count (2-20):',sensor.rapidSampleCount||5));";
-    html += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.rapidSampleCount=samples;";
-    html += "const interval=parseInt(prompt('Sample interval ms (50-1000):',sensor.rapidSampleMs||200));";
-    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.rapidSampleMs=interval;}}";
+    html += "const samples=parseInt(prompt('Rapid sample count (2-20):',sensor.sampleWindowSize||5));";
+    html += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.sampleWindowSize=samples;";
+    html += "const interval=parseInt(prompt('Sample interval ms (50-1000):',sensor.sampleRateMs||200));";
+    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.sampleRateMs=interval;";
+    html += "const dirSens=parseInt(prompt('Direction sensitivity (mm):\\n0=Auto (adaptive threshold)\\nOr enter value (will be min: sample interval):',sensor.directionSensitivity||0));";
+    html += "if(!isNaN(dirSens)&&dirSens>=0)sensor.directionSensitivity=dirSens;}}";
     html += "renderSensors();saveSensors();}";
 
     // Save sensors to backend
@@ -1866,6 +2474,31 @@ String WebAPI::buildDashboardHTML() {
     html += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Brightness:</span> <span>'+display.brightness+'/15</span></div>';";
     html += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Rotation:</span> <span>'+(display.rotation*90)+'°</span></div>';";
     html += "content+='</div></div></div>';";
+
+    // Hardware Info section for displays (LED Matrix I2C error rate)
+    html += "if(display.type===1){";  // 8x8 Matrix only
+    html += "content+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
+    html += "content+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
+    html += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html += "content+='<span style=\"font-size:0.85em;color:#64748b;\">I2C Error Rate:</span>';";
+    html += "const errorRate=display.errorRate!==undefined?display.errorRate:-1;";
+    html += "const errorRateAvailable=display.errorRateAvailable!==undefined?display.errorRateAvailable:false;";
+    html += "const txCount=display.transactionCount!==undefined?display.transactionCount:0;";
+    html += "if(errorRate<0||!errorRateAvailable){";
+    html += "const remaining=Math.max(0,10-txCount);";
+    html += "if(remaining>0){";
+    html += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet ('+remaining+' operations remaining)</span>';}";
+    html += "else{";
+    html += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}}";
+    html += "else{";
+    html += "const colorClass=errorRate<1.0?'#10b981':errorRate<5.0?'#f59e0b':'#ef4444';";
+    html += "const statusText=errorRate<1.0?'Excellent':errorRate<5.0?'Fair':'Poor';";
+    html += "content+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
+    html += "content+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
+    html += "content+='</div>';";
+    html += "content+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on I2C transaction history. Lower is better.</div>';";
+    html += "content+='</div>';}";
+
     html += "card.innerHTML=content;";
     html += "return card;}";
 
@@ -1876,7 +2509,7 @@ String WebAPI::buildDashboardHTML() {
     html += "if(slot===-1){alert('Maximum 2 displays reached');return;}";
     html += "const name=prompt('Display name:','8x8 Matrix');";
     html += "if(!name)return;";
-    html += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:5,rotation:0,useForStatus:true};";
+    html += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:15,rotation:0,useForStatus:true};";
     html += "displaySlots[slot]=newDisplay;";
     html += "renderDisplays();";
     html += "saveDisplays();}";
@@ -1902,7 +2535,7 @@ String WebAPI::buildDashboardHTML() {
     html += "const name=prompt('Display name:',display.name);";
     html += "if(name){display.name=name;}";
     html += "const brightness=prompt('Brightness (0-15):',display.brightness);";
-    html += "if(brightness){display.brightness=parseInt(brightness)||5;}";
+    html += "if(brightness){display.brightness=parseInt(brightness)||15;}";
     html += "const rotation=prompt('Rotation (0,1,2,3):',display.rotation);";
     html += "if(rotation){display.rotation=parseInt(rotation)||0;}";
     html += "renderDisplays();";
@@ -2171,9 +2804,6 @@ String WebAPI::buildDashboardHTML() {
     // Auto-refresh status and logs
     html += "fetchStatus();";
     html += "setInterval(fetchStatus,2000);";
-    html += "setInterval(()=>{";
-    html += "if(document.getElementById('logs-tab').classList.contains('active')){fetchLogs();}";
-    html += "},5000);";
 
     // Load animation assignments on page load
     html += "updateActiveAnimations();";
@@ -2181,4 +2811,120 @@ String WebAPI::buildDashboardHTML() {
     html += "</script></body></html>";
 
     return html;
+}
+
+// ============================================================================
+// Debug Logging Endpoints
+// ============================================================================
+
+void WebAPI::handleGetDebugLogs(AsyncWebServerRequest* request) {
+#if !MOCK_HARDWARE
+    // Helper function to get file size
+    auto getFileSize = [](const char* path) -> size_t {
+        if (LittleFS.exists(path)) {
+            File f = LittleFS.open(path, "r");
+            if (f) {
+                size_t size = f.size();
+                f.close();
+                return size;
+            }
+        }
+        return 0;
+    };
+
+    // Build JSON response with system info
+    char json[768];
+    snprintf(json, sizeof(json),
+        "{"
+        "\"bootCycle\":%u,"
+        "\"firmware\":\"%s\","
+        "\"freeHeap\":%u,"
+        "\"filesystemUsage\":%u,"
+        "\"totalLogsSize\":%u,"
+        "\"logs\":["
+        "{\"name\":\"current\",\"size\":%u,\"path\":\"/logs/boot_current.log\"},"
+        "{\"name\":\"boot_1\",\"size\":%u,\"path\":\"/logs/boot_1.log\"},"
+        "{\"name\":\"boot_2\",\"size\":%u,\"path\":\"/logs/boot_2.log\"}"
+        "]"
+        "}",
+        g_debugLogger.getBootCycle(),
+        FIRMWARE_VERSION,
+        ESP.getFreeHeap(),
+        g_debugLogger.getFilesystemUsage(),
+        g_debugLogger.getTotalLogsSize(),
+        getFileSize("/logs/boot_current.log"),
+        getFileSize("/logs/boot_1.log"),
+        getFileSize("/logs/boot_2.log")
+    );
+    sendJSON(request, 200, json);
+#else
+    sendError(request, 501, "Not available in mock mode");
+#endif
+}
+
+void WebAPI::handleClearDebugLogs(AsyncWebServerRequest* request) {
+#if !MOCK_HARDWARE
+    g_debugLogger.clearAllLogs();
+    DEBUG_LOG_API("All debug logs cleared via API");
+    sendJSON(request, 200, "{\"success\":true,\"message\":\"All logs cleared\"}");
+#else
+    sendError(request, 501, "Not available in mock mode");
+#endif
+}
+
+void WebAPI::handleGetDebugConfig(AsyncWebServerRequest* request) {
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"level\":\"%s\",\"categoryMask\":%u}",
+        DebugLogger::getLevelName(g_debugLogger.getLevel()),
+        g_debugLogger.getCategoryMask()
+    );
+    sendJSON(request, 200, json);
+}
+
+void WebAPI::handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    if (index + len != total) {
+        return; // Wait for complete payload
+    }
+
+    // Parse JSON body
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, (const char*)data, len);
+
+    if (error) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    // Update debug logger config
+    bool changed = false;
+
+    if (doc.containsKey("level")) {
+        const char* levelStr = doc["level"];
+        DebugLogger::LogLevel newLevel = DebugLogger::LEVEL_DEBUG;
+
+        if (strcmp(levelStr, "VERBOSE") == 0) newLevel = DebugLogger::LEVEL_VERBOSE;
+        else if (strcmp(levelStr, "DEBUG") == 0) newLevel = DebugLogger::LEVEL_DEBUG;
+        else if (strcmp(levelStr, "INFO") == 0) newLevel = DebugLogger::LEVEL_INFO;
+        else if (strcmp(levelStr, "WARN") == 0) newLevel = DebugLogger::LEVEL_WARN;
+        else if (strcmp(levelStr, "ERROR") == 0) newLevel = DebugLogger::LEVEL_ERROR;
+        else if (strcmp(levelStr, "NONE") == 0) newLevel = DebugLogger::LEVEL_NONE;
+
+        g_debugLogger.setLevel(newLevel);
+        DEBUG_LOG_API("Debug log level changed to %s", levelStr);
+        changed = true;
+    }
+
+    if (doc.containsKey("categoryMask")) {
+        uint8_t mask = doc["categoryMask"];
+        g_debugLogger.setCategoryMask(mask);
+        DEBUG_LOG_API("Debug category mask changed to 0x%02X", mask);
+        changed = true;
+    }
+
+    if (changed) {
+        sendJSON(request, 200, "{\"success\":true,\"message\":\"Debug config updated\"}");
+    } else {
+        sendError(request, 400, "No valid fields to update");
+    }
 }

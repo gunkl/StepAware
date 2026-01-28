@@ -58,7 +58,8 @@
 
 // Ultrasonic sensor configuration (when using SENSOR_TYPE_ULTRASONIC)
 #define ULTRASONIC_THRESHOLD_MM     500     // Detection threshold: 50cm
-#define ULTRASONIC_INTERVAL_MS      60      // Measurement interval: 60ms minimum
+#define ULTRASONIC_INTERVAL_MS      60      // Measurement interval: 60ms minimum (hardware limit)
+#define ULTRASONIC_SAMPLE_INTERVAL_MS 75    // Default sample interval: 75ms (adaptive threshold)
 
 // Distance-based detection defaults
 #define SENSOR_MIN_DISTANCE_CM      30      // Minimum detection distance: 30cm
@@ -119,7 +120,7 @@
 // ============================================================================
 
 #define MATRIX_I2C_ADDRESS          0x70    // Default HT16K33 address (0x70-0x77)
-#define MATRIX_BRIGHTNESS_DEFAULT   5       // 0-15 scale
+#define MATRIX_BRIGHTNESS_DEFAULT   15      // 0-15 scale (max brightness)
 #define MATRIX_ROTATION             0       // 0, 1, 2, or 3 (90° increments)
 
 // Animation timings
@@ -184,12 +185,13 @@
 // Logging Configuration
 // ============================================================================
 
-// Log Levels
-#define LOG_LEVEL_DEBUG    0
-#define LOG_LEVEL_INFO     1
-#define LOG_LEVEL_WARN     2
-#define LOG_LEVEL_ERROR    3
-#define LOG_LEVEL_NONE     4
+// Log Levels (must match DebugLogger::LogLevel enum)
+#define LOG_LEVEL_VERBOSE  0
+#define LOG_LEVEL_DEBUG    1
+#define LOG_LEVEL_INFO     2
+#define LOG_LEVEL_WARN     3
+#define LOG_LEVEL_ERROR    4
+#define LOG_LEVEL_NONE     5
 
 // Default Log Level
 // IMPORTANT: LOG_LEVEL_DEBUG can cause device bricking due to serial flooding!

@@ -1,6 +1,7 @@
 #include "sensor_manager.h"
 #include "sensor_factory.h"
 #include "logger.h"
+#include "debug_logger.h"
 #include <Arduino.h>
 
 SensorManager::SensorManager()
@@ -17,6 +18,7 @@ SensorManager::SensorManager()
         m_slots[i].slotIndex = i;
         strncpy(m_slots[i].name, "", sizeof(m_slots[i].name));
         memset(&m_slots[i].config, 0, sizeof(SensorConfig));
+        m_lastMotionState[i] = false;
     }
 
     memset(m_lastError, 0, sizeof(m_lastError));
@@ -34,22 +36,22 @@ SensorManager::~SensorManager() {
 
 bool SensorManager::begin() {
     if (m_initialized) {
-        LOG_WARN("SensorManager: Already initialized");
+        DEBUG_LOG_SENSOR("SensorManager: Already initialized");
         return true;
     }
 
-    LOG_INFO("SensorManager: Initializing");
+    DEBUG_LOG_SENSOR("SensorManager: Initializing");
 
     // Initialize any pre-configured sensors
     bool allSuccess = true;
     for (uint8_t i = 0; i < MAX_SENSORS; i++) {
         if (m_slots[i].sensor && m_slots[i].enabled) {
             if (!m_slots[i].sensor->begin()) {
-                LOG_ERROR("SensorManager: Failed to init sensor %u (%s)",
+                DEBUG_LOG_SENSOR("SensorManager: Failed to init sensor %u (%s)",
                          i, m_slots[i].name);
                 allSuccess = false;
             } else {
-                LOG_INFO("SensorManager: Initialized sensor %u (%s)",
+                DEBUG_LOG_SENSOR("SensorManager: Initialized sensor %u (%s)",
                         i, m_slots[i].name);
             }
         }
@@ -59,7 +61,7 @@ bool SensorManager::begin() {
     m_primarySlotIndex = findPrimarySlot();
 
     m_initialized = true;
-    LOG_INFO("SensorManager: Initialized with %u active sensors", m_activeSensorCount);
+    DEBUG_LOG_SENSOR("SensorManager: Initialized with %u active sensors", m_activeSensorCount);
 
     return allSuccess;
 }
@@ -73,6 +75,26 @@ void SensorManager::update() {
     for (uint8_t i = 0; i < MAX_SENSORS; i++) {
         if (m_slots[i].sensor && m_slots[i].enabled) {
             m_slots[i].sensor->update();
+
+            // Log sensor readings with smart change detection at VERBOSE level
+            if (m_slots[i].sensor->isReady()) {
+                uint32_t dist = m_slots[i].sensor->getDistance();
+                bool motion = m_slots[i].sensor->motionDetected();
+                int8_t dir = (int8_t)m_slots[i].sensor->getDirection();
+
+                // Use smart logging that only logs changes or periodic summaries
+                g_debugLogger.logSensorReadingIfChanged(i, dist, motion, dir);
+
+                // Log motion events at DEBUG level (state changes only)
+                if (motion && !m_lastMotionState[i]) {
+                    DEBUG_LOG_SENSOR("Slot %u (%s): MOTION DETECTED (dist=%u mm)",
+                                    i, m_slots[i].name, dist);
+                } else if (!motion && m_lastMotionState[i]) {
+                    DEBUG_LOG_SENSOR("Slot %u (%s): Motion cleared", i, m_slots[i].name);
+                }
+
+                m_lastMotionState[i] = motion;
+            }
         }
     }
 }
@@ -86,7 +108,7 @@ bool SensorManager::addSensor(uint8_t slotIndex, const SensorConfig& config,
 
     // Remove existing sensor in this slot
     if (m_slots[slotIndex].sensor) {
-        LOG_WARN("SensorManager: Replacing sensor in slot %u", slotIndex);
+        DEBUG_LOG_SENSOR("SensorManager: Replacing sensor in slot %u", slotIndex);
         removeSensor(slotIndex);
     }
 
@@ -126,14 +148,14 @@ bool SensorManager::addSensor(uint8_t slotIndex, const SensorConfig& config,
     // Initialize sensor if manager is already initialized
     if (m_initialized) {
         if (!sensor->begin()) {
-            LOG_ERROR("SensorManager: Failed to initialize sensor %u (%s)",
+            DEBUG_LOG_SENSOR("SensorManager: Failed to initialize sensor %u (%s)",
                      slotIndex, m_slots[slotIndex].name);
             setError("Failed to initialize sensor");
             return false;
         }
     }
 
-    LOG_INFO("SensorManager: Added sensor %u (%s) - %s",
+    DEBUG_LOG_SENSOR("SensorManager: Added sensor %u (%s) - %s",
             slotIndex, m_slots[slotIndex].name,
             sensor->getCapabilities().sensorTypeName);
 
@@ -151,7 +173,7 @@ bool SensorManager::removeSensor(uint8_t slotIndex) {
         return true;
     }
 
-    LOG_INFO("SensorManager: Removing sensor %u (%s)",
+    DEBUG_LOG_SENSOR("SensorManager: Removing sensor %u (%s)",
             slotIndex, m_slots[slotIndex].name);
 
     // Destroy sensor
@@ -185,7 +207,7 @@ bool SensorManager::setSensorEnabled(uint8_t slotIndex, bool enabled) {
     m_slots[slotIndex].enabled = enabled;
     updateActiveSensorCount();
 
-    LOG_INFO("SensorManager: Sensor %u (%s) %s",
+    DEBUG_LOG_SENSOR("SensorManager: Sensor %u (%s) %s",
             slotIndex, m_slots[slotIndex].name,
             enabled ? "enabled" : "disabled");
 
@@ -221,7 +243,7 @@ HAL_MotionSensor* SensorManager::getPrimarySensor() {
 
 void SensorManager::setFusionMode(SensorFusionMode mode) {
     m_fusionMode = mode;
-    LOG_INFO("SensorManager: Fusion mode set to %u", mode);
+    DEBUG_LOG_SENSOR("SensorManager: Fusion mode set to %u", mode);
 }
 
 SensorFusionMode SensorManager::getFusionMode() const {
@@ -425,7 +447,7 @@ void SensorManager::resetEventCounts() {
             m_slots[i].sensor->resetEventCount();
         }
     }
-    LOG_INFO("SensorManager: Reset all event counts");
+    DEBUG_LOG_SENSOR("SensorManager: Reset all event counts");
 }
 
 void SensorManager::printStatus() {

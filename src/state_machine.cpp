@@ -2,6 +2,7 @@
 #include "sensor_manager.h"
 #include "config_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 
 StateMachine::StateMachine(SensorManager* sensorManager,
                            HAL_LED* hazardLED,
@@ -43,11 +44,11 @@ bool StateMachine::begin(OperatingMode initialMode) {
         return true;
     }
 
-    LOG_INFO("StateMachine: Initializing...");
+    DEBUG_LOG_STATE("StateMachine: Initializing...");
 
     // Validate hardware pointers
     if (!m_sensorManager || !m_hazardLED || !m_statusLED || !m_button) {
-        LOG_ERROR("StateMachine: Hardware HAL not initialized");
+        DEBUG_LOG_STATE("StateMachine: Hardware HAL not initialized");
         return false;
     }
 
@@ -59,7 +60,7 @@ bool StateMachine::begin(OperatingMode initialMode) {
 
     m_initialized = true;
 
-    LOG_INFO("StateMachine: Initialized in mode: %s", getModeName(initialMode));
+    DEBUG_LOG_STATE("StateMachine: Initialized in mode: %s", getModeName(initialMode));
 
     return true;
 }
@@ -80,7 +81,7 @@ void StateMachine::update() {
     // Check if all sensors are ready
     if (!m_sensorReady && m_sensorManager->allSensorsReady()) {
         m_sensorReady = true;
-        LOG_INFO("StateMachine: All sensors ready (%d active)",
+        DEBUG_LOG_STATE("StateMachine: All sensors ready (%d active)",
                  m_sensorManager->getActiveSensorCount());
     }
 
@@ -108,12 +109,13 @@ void StateMachine::update() {
 void StateMachine::handleEvent(SystemEvent event) {
     switch (event) {
         case EVENT_BUTTON_PRESS:
-            LOG_DEBUG("StateMachine: Event BUTTON_PRESS");
+            DEBUG_LOG_STATE("StateMachine: Event BUTTON_PRESS");
             cycleMode();
             break;
 
         case EVENT_MOTION_DETECTED:
-            LOG_INFO("StateMachine: Event MOTION_DETECTED");
+            DEBUG_LOG_STATE("StateMachine: Event MOTION_DETECTED");
+            DEBUG_LOG_STATE("Motion detected - event count: %u", m_motionEvents + 1);
             m_motionEvents++;
 
             // Trigger warning in appropriate modes
@@ -123,37 +125,39 @@ void StateMachine::handleEvent(SystemEvent event) {
                 if (m_config) {
                     duration = m_config->getConfig().motionWarningDuration;
                 }
+                DEBUG_LOG_STATE("Triggering warning (duration: %u ms)", duration);
                 triggerWarning(duration);
             }
             break;
 
         case EVENT_MOTION_CLEARED:
-            LOG_INFO("StateMachine: Event MOTION_CLEARED");
+            DEBUG_LOG_STATE("StateMachine: Event MOTION_CLEARED");
+            DEBUG_LOG_STATE("Motion cleared");
             // Motion cleared, warning will time out naturally
             break;
 
         case EVENT_TIMER_EXPIRED:
-            LOG_DEBUG("StateMachine: Event TIMER_EXPIRED");
+            DEBUG_LOG_STATE("StateMachine: Event TIMER_EXPIRED");
             stopWarning();
             break;
 
         case EVENT_BATTERY_LOW:
-            LOG_WARN("StateMachine: Event BATTERY_LOW");
+            DEBUG_LOG_STATE("StateMachine: Event BATTERY_LOW");
             // Future: Switch to LOW_BATTERY mode
             break;
 
         case EVENT_BATTERY_OK:
-            LOG_INFO("StateMachine: Event BATTERY_OK");
+            DEBUG_LOG_STATE("StateMachine: Event BATTERY_OK");
             // Battery recovered
             break;
 
         case EVENT_CHARGING_START:
-            LOG_INFO("StateMachine: Event CHARGING_START");
+            DEBUG_LOG_STATE("StateMachine: Event CHARGING_START");
             // Future: Switch to CHARGING mode
             break;
 
         case EVENT_CHARGING_STOP:
-            LOG_INFO("StateMachine: Event CHARGING_STOP");
+            DEBUG_LOG_STATE("StateMachine: Event CHARGING_STOP");
             // Exit charging mode
             break;
 
@@ -177,8 +181,15 @@ void StateMachine::setMode(OperatingMode mode) {
         return;  // Already in this mode
     }
 
-    LOG_INFO("StateMachine: Mode change: %s -> %s",
+    DEBUG_LOG_STATE("StateMachine: Mode change: %s -> %s",
              getModeName(m_currentMode), getModeName(mode));
+
+    // Log state transition
+    g_debugLogger.logStateTransition(
+        getModeName(m_currentMode),
+        getModeName(mode),
+        "mode change requested"
+    );
 
     // Exit current mode
     exitMode(m_currentMode);
@@ -241,10 +252,10 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
     // Use LED matrix if available, otherwise fall back to hazard LED
     if (m_ledMatrix && m_ledMatrix->isReady()) {
         m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, duration_ms);
-        LOG_INFO("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
+        DEBUG_LOG_STATE("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
     } else {
         m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
-        LOG_INFO("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
+        DEBUG_LOG_STATE("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
     }
 }
 
@@ -261,7 +272,7 @@ void StateMachine::stopWarning() {
     }
     m_hazardLED->stopPattern();
 
-    LOG_INFO("StateMachine: Warning stopped");
+    DEBUG_LOG_STATE("StateMachine: Warning stopped");
 }
 
 uint32_t StateMachine::getUptimeSeconds() {
@@ -305,7 +316,7 @@ void StateMachine::enterMode(OperatingMode mode) {
         case LOW_BATTERY:
         case CHARGING:
             // Future modes (Phases 5-6)
-            LOG_WARN("StateMachine: Mode not yet implemented");
+            DEBUG_LOG_STATE("StateMachine: Mode not yet implemented");
             break;
     }
 }
@@ -405,8 +416,8 @@ void StateMachine::setLEDMatrix(HAL_LEDMatrix_8x8* matrix) {
     m_ledMatrix = matrix;
 
     if (matrix) {
-        LOG_INFO("StateMachine: LED matrix display enabled");
+        DEBUG_LOG_STATE("StateMachine: LED matrix display enabled");
     } else {
-        LOG_INFO("StateMachine: LED matrix display disabled");
+        DEBUG_LOG_STATE("StateMachine: LED matrix display disabled");
     }
 }

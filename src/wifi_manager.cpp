@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 
 // Global WiFi manager instance
 WiFiManager g_wifi;
@@ -42,7 +43,7 @@ WiFiManager::~WiFiManager() {
 
 bool WiFiManager::begin(const Config* config) {
     if (m_initialized) {
-        LOG_WARN("WiFi: Already initialized");
+        DEBUG_LOG_WIFI("WiFi: Already initialized");
         return true;
     }
 
@@ -53,13 +54,13 @@ bool WiFiManager::begin(const Config* config) {
 
     // Check if WiFi is enabled
     if (!m_config.enabled) {
-        LOG_INFO("WiFi: Disabled in configuration");
+        DEBUG_LOG_WIFI("WiFi: Disabled in configuration");
         m_state = STATE_DISABLED;
         m_initialized = true;
         return true;
     }
 
-    LOG_INFO("WiFi: Initializing");
+    DEBUG_LOG_WIFI("WiFi: Initializing");
 
 #ifndef MOCK_MODE
     // Set WiFi mode
@@ -74,10 +75,10 @@ bool WiFiManager::begin(const Config* config) {
 
     // Attempt initial connection
     if (strlen(m_config.ssid) > 0) {
-        LOG_INFO("WiFi: Credentials configured, connecting to %s", m_config.ssid);
+        DEBUG_LOG_WIFI("WiFi: Credentials configured, connecting to %s", m_config.ssid);
         connect();
     } else {
-        LOG_INFO("WiFi: No credentials configured, entering AP mode");
+        DEBUG_LOG_WIFI("WiFi: No credentials configured, entering AP mode");
         startAPMode();
     }
 
@@ -125,17 +126,17 @@ void WiFiManager::update() {
 
 bool WiFiManager::connect() {
     if (!m_config.enabled) {
-        LOG_ERROR("WiFi: Cannot connect, WiFi disabled");
+        DEBUG_LOG_WIFI("WiFi: Cannot connect, WiFi disabled");
         return false;
     }
 
     if (strlen(m_config.ssid) == 0) {
-        LOG_WARN("WiFi: No SSID configured, entering AP mode");
+        DEBUG_LOG_WIFI("WiFi: No SSID configured, entering AP mode");
         return startAPMode();
     }
 
 #ifndef MOCK_MODE
-    LOG_INFO("WiFi: Connecting to %s", m_config.ssid);
+    DEBUG_LOG_WIFI("WiFi: Connecting to %s", m_config.ssid);
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(m_config.ssid, m_config.password);
@@ -154,7 +155,7 @@ bool WiFiManager::connect() {
 }
 
 bool WiFiManager::disconnect() {
-    LOG_INFO("WiFi: Disconnecting");
+    DEBUG_LOG_WIFI("WiFi: Disconnecting");
 
 #ifndef MOCK_MODE
     WiFi.disconnect();
@@ -165,7 +166,7 @@ bool WiFiManager::disconnect() {
 }
 
 bool WiFiManager::reconnect() {
-    LOG_INFO("WiFi: Reconnecting");
+    DEBUG_LOG_WIFI("WiFi: Reconnecting");
 
     m_status.failureCount = 0;
     m_lastReconnectAttempt = millis();
@@ -176,7 +177,7 @@ bool WiFiManager::reconnect() {
 bool WiFiManager::startAPMode(const char* ssid, const char* password) {
     String apSSID = ssid ? String(ssid) : generateAPSSID();
 
-    LOG_INFO("WiFi: Starting AP mode (SSID: %s)", apSSID.c_str());
+    DEBUG_LOG_WIFI("WiFi: Starting AP mode (SSID: %s)", apSSID.c_str());
 
     strncpy(m_status.apSSID, apSSID.c_str(), sizeof(m_status.apSSID));
 
@@ -190,7 +191,7 @@ bool WiFiManager::startAPMode(const char* ssid, const char* password) {
     }
 
     IPAddress apIP = WiFi.softAPIP();
-    LOG_INFO("WiFi: AP mode started, IP: %s", apIP.toString().c_str());
+    DEBUG_LOG_WIFI("WiFi: AP mode started, IP: %s", apIP.toString().c_str());
 
     m_status.ip = apIP;
 #else
@@ -212,7 +213,7 @@ bool WiFiManager::stopAPMode() {
         return false;
     }
 
-    LOG_INFO("WiFi: Stopping AP mode");
+    DEBUG_LOG_WIFI("WiFi: Stopping AP mode");
 
 #ifndef MOCK_MODE
     WiFi.softAPdisconnect(true);
@@ -224,7 +225,7 @@ bool WiFiManager::stopAPMode() {
 
 bool WiFiManager::setCredentials(const char* ssid, const char* password) {
     if (!ssid || strlen(ssid) == 0) {
-        LOG_ERROR("WiFi: Invalid SSID");
+        DEBUG_LOG_WIFI("WiFi: Invalid SSID");
         return false;
     }
 
@@ -238,7 +239,7 @@ bool WiFiManager::setCredentials(const char* ssid, const char* password) {
         m_config.password[0] = '\0';
     }
 
-    LOG_INFO("WiFi: Credentials updated for %s", m_config.ssid);
+    DEBUG_LOG_WIFI("WiFi: Credentials updated for %s", m_config.ssid);
 
     return true;
 }
@@ -248,7 +249,7 @@ int WiFiManager::scanNetworks(String* networks, int maxNetworks) {
     int n = WiFi.scanNetworks();
 
     if (n == 0) {
-        LOG_INFO("WiFi: No networks found");
+        DEBUG_LOG_WIFI("WiFi: No networks found");
         return 0;
     }
 
@@ -257,7 +258,7 @@ int WiFiManager::scanNetworks(String* networks, int maxNetworks) {
         networks[i] = WiFi.SSID(i);
     }
 
-    LOG_INFO("WiFi: Found %d networks", n);
+    DEBUG_LOG_WIFI("WiFi: Found %d networks", n);
     return count;
 #else
     // Mock mode: return fake networks
@@ -298,7 +299,7 @@ void WiFiManager::handleStateConnecting() {
         updateStatus();
         setupMDNS();
 
-        LOG_INFO("WiFi: Connected! IP: %s, RSSI: %d dBm",
+        DEBUG_LOG_WIFI("WiFi: Connected! IP: %s, RSSI: %d dBm",
                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
 
         setState(STATE_CONNECTED);
@@ -309,7 +310,7 @@ void WiFiManager::handleStateConnecting() {
     } else {
         // Check timeout
         if (millis() - m_connectStartTime > m_config.connectionTimeout) {
-            LOG_WARN("WiFi: Connection timeout to %s", m_config.ssid);
+            DEBUG_LOG_WIFI("WiFi: Connection timeout to %s", m_config.ssid);
 
             WiFi.disconnect();
             m_status.failureCount++;
@@ -329,7 +330,7 @@ void WiFiManager::handleStateConnected() {
 #ifndef MOCK_MODE
     // Check if still connected
     if (WiFi.status() != WL_CONNECTED) {
-        LOG_WARN("WiFi: Connection lost");
+        DEBUG_LOG_WIFI("WiFi: Connection lost");
 
         m_status.failureCount++;
         m_lastReconnectAttempt = millis();  // Set reconnect timer on connection loss
@@ -345,7 +346,7 @@ void WiFiManager::handleStateConnected() {
 
 void WiFiManager::handleStateDisconnected() {
     if (shouldReconnect()) {
-        LOG_INFO("WiFi: Attempting reconnect (failure count: %u)", m_status.failureCount);
+        DEBUG_LOG_WIFI("WiFi: Attempting reconnect (failure count: %u)", m_status.failureCount);
 
         connect();
     }
@@ -354,7 +355,7 @@ void WiFiManager::handleStateDisconnected() {
 void WiFiManager::handleStateFailed() {
     // Max reconnect attempts reached
     if (m_config.apModeOnFailure) {
-        LOG_ERROR("WiFi: Connection failed after %u attempts, entering AP mode", m_status.failureCount);
+        DEBUG_LOG_WIFI("WiFi: Connection failed after %u attempts, entering AP mode", m_status.failureCount);
         startAPMode();
     }
 }
@@ -362,14 +363,14 @@ void WiFiManager::handleStateFailed() {
 void WiFiManager::setupMDNS() {
 #ifndef MOCK_MODE
     if (!MDNS.begin(m_config.hostname)) {
-        LOG_ERROR("WiFi: mDNS failed to start");
+        DEBUG_LOG_WIFI("WiFi: mDNS failed to start");
         return;
     }
 
     MDNS.addService("http", "tcp", 80);
-    LOG_INFO("WiFi: mDNS started - http://%s.local", m_config.hostname);
+    DEBUG_LOG_WIFI("WiFi: mDNS started - http://%s.local", m_config.hostname);
 #else
-    LOG_INFO("WiFi: mDNS (mock) - http://%s.local", m_config.hostname);
+    DEBUG_LOG_WIFI("WiFi: mDNS (mock) - http://%s.local", m_config.hostname);
 #endif
 }
 
@@ -385,7 +386,7 @@ void WiFiManager::updateStatus() {
 
         // Warn if signal weak
         if (m_status.rssi < -80) {
-            LOG_WARN("WiFi: Weak signal (%d dBm)", m_status.rssi);
+            DEBUG_LOG_WIFI("WiFi: Weak signal (%d dBm)", m_status.rssi);
         }
 #else
         m_status.connectionUptime = millis() - m_connectionStartTime;
@@ -428,17 +429,17 @@ void WiFiManager::setPowerSaving(bool enabled) {
 #ifndef MOCK_MODE
     if (enabled) {
         WiFi.setSleep(WIFI_PS_MIN_MODEM);
-        LOG_INFO("WiFi: Power saving enabled");
+        DEBUG_LOG_WIFI("WiFi: Power saving enabled");
     } else {
         WiFi.setSleep(WIFI_PS_NONE);
-        LOG_INFO("WiFi: Power saving disabled (best performance)");
+        DEBUG_LOG_WIFI("WiFi: Power saving disabled (best performance)");
     }
 #endif
 }
 
 void WiFiManager::setState(State newState) {
     if (m_state != newState) {
-        LOG_INFO("WiFi: State %s -> %s", getStateName(m_state), getStateName(newState));
+        DEBUG_LOG_WIFI("WiFi: State %s -> %s", getStateName(m_state), getStateName(newState));
         m_state = newState;
         m_status.state = newState;
     }
@@ -451,28 +452,28 @@ void WiFiManager::updateConfig(const Config& config) {
     // Update configuration
     m_config = config;
 
-    LOG_INFO("WiFi: Configuration updated (enabled=%s, ssid=%s)",
+    DEBUG_LOG_WIFI("WiFi: Configuration updated (enabled=%s, ssid=%s)",
              m_config.enabled ? "yes" : "no", m_config.ssid);
 
     if (!m_config.enabled && wasEnabled) {
         // WiFi was disabled
-        LOG_INFO("WiFi: Disabling");
+        DEBUG_LOG_WIFI("WiFi: Disabling");
         disconnect();
         setState(STATE_DISABLED);
     } else if (m_config.enabled && !wasEnabled) {
         // WiFi was enabled
-        LOG_INFO("WiFi: Enabling");
+        DEBUG_LOG_WIFI("WiFi: Enabling");
         m_status.failureCount = 0;
         if (strlen(m_config.ssid) > 0) {
             connect();
         } else {
-            LOG_WARN("WiFi: No SSID configured, entering AP mode");
+            DEBUG_LOG_WIFI("WiFi: No SSID configured, entering AP mode");
             startAPMode();
         }
     } else if (m_config.enabled && wasConnected) {
         // Check if SSID changed while connected
         if (strcmp(m_status.ssid, m_config.ssid) != 0) {
-            LOG_INFO("WiFi: SSID changed, reconnecting");
+            DEBUG_LOG_WIFI("WiFi: SSID changed, reconnecting");
             disconnect();
             m_status.failureCount = 0;
             connect();
@@ -488,16 +489,16 @@ void WiFiManager::setEnabled(bool enabled) {
     m_config.enabled = enabled;
 
     if (enabled) {
-        LOG_INFO("WiFi: Enabling");
+        DEBUG_LOG_WIFI("WiFi: Enabling");
         m_status.failureCount = 0;
         if (strlen(m_config.ssid) > 0) {
             connect();
         } else {
-            LOG_WARN("WiFi: No SSID configured, entering AP mode");
+            DEBUG_LOG_WIFI("WiFi: No SSID configured, entering AP mode");
             startAPMode();
         }
     } else {
-        LOG_INFO("WiFi: Disabling");
+        DEBUG_LOG_WIFI("WiFi: Disabling");
         disconnect();
         setState(STATE_DISABLED);
     }

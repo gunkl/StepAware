@@ -1,309 +1,235 @@
-# Fix: Configuration Changes Not Taking Effect
+# Configuration Save Fix - Complete
 
 **Date**: 2026-01-26
 **Status**: FIXED
+**Issue**: Configuration tab "Save Configuration" button not working
 
-## Problem Summary
+## Problem
 
-Two configuration issues were reported:
-1. **Warning duration changes** - Changing warning duration in web UI settings didn't show save confirmation and didn't take effect
-2. **Sensor threshold changes** - Changing detection threshold in sensor configuration required reboot to take effect
+The inline HTML UI's Configuration tab save functionality was broken due to missing form fields.
 
-## Root Causes
+### Root Cause
 
-### Issue 1: Missing Save Confirmation
-The save functionality was working correctly on the backend, but there was no debug logging to help diagnose frontend issues. The toast notification should appear, but without logging it was impossible to verify the flow.
+The `saveConfig()` JavaScript function was trying to read sensor configuration fields that didn't exist in the HTML:
 
-### Issue 2: Configuration Not Applied to Live Sensors
-When sensor configuration was saved via the web API:
-1. Configuration was correctly saved to `/config.json` on filesystem
-2. ConfigManager was updated with new values
-3. **BUT** the actual sensor objects were not updated with new threshold values
-4. Sensors retained old threshold values until system reboot
+**Missing Fields**:
+- `cfg-sensorMinDistance`
+- `cfg-sensorMaxDistance`
+- `cfg-sensorDirection`
+- `cfg-sensorSampleCount`
+- `cfg-sensorSampleInterval`
 
-### Issue 3: Warning Duration Not Using Config
-The StateMachine was using a hardcoded default value (`MOTION_WARNING_DURATION_MS`) instead of reading the warning duration from the runtime configuration:
-1. Config value was saved correctly
-2. **BUT** StateMachine had no reference to ConfigManager
-3. Triggered warnings always used default 3000ms duration
+**Impact**: When JavaScript tried to call `parseInt()` on `null` (from `getElementById()` returning null), it returned `NaN`, which broke the JSON payload and caused the save to fail silently.
 
-## Fixes Applied
+### Why This Happened
 
-### Fix 1: Add Debug Logging to Save Function
+The inline HTML UI Configuration tab only includes:
+- Device Settings (name, default mode)
+- WiFi Settings (SSID, password)
+- Motion Detection (warning duration)
+- LED Settings (brightness full/dim)
+- Logging (log level)
+- Power Saving (enabled/disabled)
 
-**File**: `data/app.js`
+But the `saveConfig()` and `loadConfig()` functions were written expecting sensor hardware fields that belonged in a Hardware tab.
 
-Added console logging to `saveConfig()` function to trace execution:
+## Solution
+
+### Approach: Preserve Backend Config
+
+Instead of building the config from scratch with hardcoded sensor values, the fix:
+
+1. **Stores the full backend config** when loaded
+2. **Updates only the fields** that exist in the UI
+3. **Preserves all other config** (sensors, displays, etc.)
+
+This ensures sensor configuration managed via the Hardware tab (multi-sensor management) isn't lost when saving basic settings.
+
+## Changes Made
+
+### File: [src/web_api.cpp](src/web_api.cpp)
+
+#### Change 1: Store Full Config (Line ~1556)
+
+**Before**:
 ```javascript
-async function saveConfig() {
-    try {
-        console.log('saveConfig: Starting save operation...');
-
-        // ... build config object ...
-
-        console.log('saveConfig: Sending config to API:', config);
-
-        const response = await fetch(`${API_BASE}/config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-        });
-
-        console.log('saveConfig: Response status:', response.status, response.statusText);
-
-        if (!response.ok) {
-            const error = await response.json();
-            console.error('saveConfig: Error response:', error);
-            throw new Error(error.error || 'Failed to save config');
-        }
-
-        currentConfig = await response.json();
-        console.log('saveConfig: Successfully saved, new config:', currentConfig);
-        showToast('success', 'Configuration saved successfully');
-    } catch (error) {
-        console.error('saveConfig: Exception caught:', error);
-        showToast('error', `Failed to save: ${error.message}`);
-    }
-}
+html += "async function loadConfig(){";
+html += "try{const res=await fetch('/api/config');const cfg=await res.json();";
+html += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
+// ... populate form fields
+html += "}catch(e){console.error('Config load error:',e);}}";
 ```
 
-**Benefits**:
-- User can now check browser console to see if save request succeeds
-- Clear error messages if save fails
-- Trace entire save flow for debugging
-
-### Fix 2: Apply Sensor Configuration to Live Sensors
-
-**Files Modified**:
-1. `include/web_api.h` - Added `setSensorManager()` method and `m_sensorManager` member
-2. `src/web_api.cpp` - Implemented sensor manager setter and live config application
-3. `src/main.cpp` - Connected sensor manager to WebAPI
-
-**Changes in `web_api.h`**:
-```cpp
-void setSensorManager(class SensorManager* sensorManager);
-
-private:
-    // ...
-    class SensorManager* m_sensorManager;  ///< Sensor Manager reference (optional)
+**After**:
+```javascript
+html += "let currentConfig={};";
+html += "async function loadConfig(){";
+html += "try{const res=await fetch('/api/config');const cfg=await res.json();";
+html += "currentConfig=cfg;";  // Store full config
+html += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
+// ... populate form fields (removed sensor field population)
+html += "}catch(e){console.error('Config load error:',e);}}";
 ```
 
-**Changes in `web_api.cpp` - handlePostSensors()**:
-```cpp
-// After saving config to file...
-
-// Apply configuration changes to live sensors (if sensor manager available)
-if (m_sensorManager) {
-    for (uint8_t i = 0; i < 4; i++) {
-        HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
-        if (sensor && currentConfig.sensors[i].active) {
-            // Apply threshold changes
-            if (currentConfig.sensors[i].detectionThreshold > 0) {
-                sensor->setDetectionThreshold(currentConfig.sensors[i].detectionThreshold);
-                LOG_INFO("Applied threshold %u mm to sensor %u",
-                         currentConfig.sensors[i].detectionThreshold, i);
-            }
-
-            // Apply direction detection setting
-            sensor->setDirectionDetection(currentConfig.sensors[i].enableDirectionDetection);
-
-            // Apply distance range if sensor supports it
-            const SensorCapabilities& caps = sensor->getCapabilities();
-            if (caps.supportsDistanceMeasurement) {
-                sensor->setDistanceRange(caps.minDistance, caps.maxDistance);
-            }
-        }
-    }
-    LOG_INFO("Sensor configuration applied to live sensors");
-}
+**Removed Lines** (sensor field population):
+```javascript
+html += "document.getElementById('cfg-sensorMinDistance').value=cfg.sensor?.minDistance||30;";
+html += "document.getElementById('cfg-sensorMaxDistance').value=cfg.sensor?.maxDistance||200;";
+html += "document.getElementById('cfg-sensorDirection').value=cfg.sensor?.directionEnabled?1:0;";
+html += "document.getElementById('cfg-sensorSampleCount').value=cfg.sensor?.rapidSampleCount||5;";
+html += "document.getElementById('cfg-sensorSampleInterval').value=cfg.sensor?.rapidSampleMs||100;";
 ```
 
-**Changes in `main.cpp`**:
-```cpp
-webAPI->setSensorManager(&sensorManager);
+#### Change 2: Update Only UI Fields (Line ~1577)
+
+**Before** (building config from scratch):
+```javascript
+html += "async function saveConfig(e){";
+html += "e.preventDefault();";
+html += "const pwdField=document.getElementById('cfg-wifiPassword');";
+html += "const cfg={device:{name:document.getElementById('cfg-deviceName').value,";
+html += "defaultMode:parseInt(document.getElementById('cfg-defaultMode').value)},";
+html += "wifi:{ssid:document.getElementById('cfg-wifiSSID').value,enabled:true},";
+html += "motion:{warningDuration:parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000},";
+html += "sensor:{minDistance:parseInt(document.getElementById('cfg-sensorMinDistance').value),";  // ← NULL!
+html += "maxDistance:parseInt(document.getElementById('cfg-sensorMaxDistance').value),";  // ← NULL!
+// ... more missing fields
+html += "led:{brightnessFull:parseInt(document.getElementById('cfg-ledBrightnessFull').value),";
+html += "brightnessDim:parseInt(document.getElementById('cfg-ledBrightnessDim').value)},";
+// ... rest of config
 ```
 
-**Benefits**:
-- Sensor threshold changes take effect immediately
-- Direction detection settings applied without reboot
-- Distance range updates applied dynamically
-- Clear logging of applied changes
-
-### Fix 3: Warning Duration From Config
-
-**Files Modified**:
-1. `include/state_machine.h` - Added ConfigManager parameter and member
-2. `src/state_machine.cpp` - Use config value for warning duration
-3. `src/main.cpp` - Pass ConfigManager to StateMachine constructor
-
-**Changes in `state_machine.h`**:
-```cpp
-StateMachine(class SensorManager* sensorManager,
-             HAL_LED* hazardLED,
-             HAL_LED* statusLED,
-             HAL_Button* button,
-             class ConfigManager* config = nullptr);
-
-private:
-    // ...
-    class ConfigManager* m_config;  ///< Config manager (for runtime config access)
+**After** (preserve backend config, update only UI fields):
+```javascript
+html += "async function saveConfig(e){";
+html += "e.preventDefault();";
+html += "const pwdField=document.getElementById('cfg-wifiPassword');";
+html += "const cfg=JSON.parse(JSON.stringify(currentConfig));";  // Clone full config
+html += "cfg.device=cfg.device||{};";
+html += "cfg.device.name=document.getElementById('cfg-deviceName').value;";
+html += "cfg.device.defaultMode=parseInt(document.getElementById('cfg-defaultMode').value);";
+html += "cfg.wifi=cfg.wifi||{};";
+html += "cfg.wifi.ssid=document.getElementById('cfg-wifiSSID').value;";
+html += "cfg.wifi.enabled=true;";
+html += "if(pwdField.value.length>0){cfg.wifi.password=pwdField.value;}";
+html += "cfg.motion=cfg.motion||{};";
+html += "cfg.motion.warningDuration=parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000;";
+html += "cfg.led=cfg.led||{};";
+html += "cfg.led.brightnessFull=parseInt(document.getElementById('cfg-ledBrightnessFull').value);";
+html += "cfg.led.brightnessDim=parseInt(document.getElementById('cfg-ledBrightnessDim').value);";
+html += "cfg.logging=cfg.logging||{};";
+html += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
+html += "cfg.power=cfg.power||{};";
+html += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
+// ... rest of save logic (unchanged)
 ```
 
-**Changes in `state_machine.cpp`**:
-```cpp
-// Constructor
-StateMachine::StateMachine(SensorManager* sensorManager,
-                           HAL_LED* hazardLED,
-                           HAL_LED* statusLED,
-                           HAL_Button* button,
-                           ConfigManager* config)
-    : m_sensorManager(sensorManager)
-    , m_hazardLED(hazardLED)
-    , m_statusLED(statusLED)
-    , m_button(button)
-    , m_ledMatrix(nullptr)
-    , m_config(config)
-    // ...
+## How It Works Now
 
-// In handleEvent(EVENT_MOTION_DETECTED):
-if (m_currentMode == MOTION_DETECT && m_sensorReady) {
-    // Use warning duration from config if available
-    uint32_t duration = MOTION_WARNING_DURATION_MS;
-    if (m_config) {
-        duration = m_config->getConfig().motionWarningDuration;
-    }
-    triggerWarning(duration);
-}
-```
+### Load Flow
 
-**Changes in `main.cpp`**:
-```cpp
-stateMachine = new StateMachine(&sensorManager, &hazardLED, &statusLED, &modeButton, &configManager);
-```
+1. User loads page or clicks Reload
+2. `loadConfig()` fetches `/api/config`
+3. **Stores full config** in `currentConfig` variable
+4. **Populates only form fields** that exist in UI
+5. Sensor/display config preserved in memory
 
-**Benefits**:
-- Warning duration changes take effect immediately
-- No reboot required for timing adjustments
-- StateMachine has access to all runtime config values
+### Save Flow
+
+1. User clicks "Save Configuration"
+2. `saveConfig()` clones `currentConfig`
+3. **Updates only fields** from the Configuration tab form
+4. **Preserves all other config** (sensors, displays, animations, etc.)
+5. POSTs complete config to `/api/config`
+6. Backend saves and applies changes
+7. Success indicator shows for 3 seconds
+8. `loadConfig()` refreshes to confirm save
+
+## Benefits
+
+✅ **Configuration saves work** - No more silent failures
+✅ **Sensor config preserved** - Hardware tab settings not lost
+✅ **Display config preserved** - LED matrix settings not lost
+✅ **Animation assignments preserved** - Event-to-animation mappings intact
+✅ **Minimal changes** - Only updates what the UI controls
+✅ **Backward compatible** - Works with existing backend API
 
 ## Testing
 
-### Test 1: Warning Duration Changes
-1. Open web UI settings page
-2. Change "Warning Duration" from 3000ms to 5000ms
-3. Click "Save Configuration"
-4. **Expected**: Success toast appears "Configuration saved successfully"
-5. Trigger motion detection
-6. **Expected**: Warning displays for 5 seconds (not 3)
-7. Check browser console for save logs
+### Test Procedure
 
-### Test 2: Sensor Threshold Changes
-1. Open Hardware Configuration page
-2. Change ultrasonic sensor threshold from 500mm to 800mm
-3. Click "Save"
-4. **Expected**: Success toast appears
-5. Check serial output for: `Applied threshold 800 mm to sensor X`
-6. Place object at 600mm distance
-7. **Expected**: No motion detected (above 800mm threshold)
-8. Place object at 700mm distance
-9. **Expected**: Still no motion
-10. Place object at 400mm distance
-11. **Expected**: Motion detected (below 800mm threshold)
+1. **Build and upload firmware**:
+   ```bash
+   pio run -t upload -e esp32c3
+   ```
 
-### Test 3: Direction Detection Toggle
-1. Open Hardware Configuration
-2. Enable "Direction Detection" for sensor
-3. Click "Save"
-4. **Expected**: Settings applied immediately without reboot
-5. Serial diagnostic view shows direction info
+2. **Open web UI** at http://stepaware.local
 
-## Verification Commands
+3. **Go to Configuration tab**
 
-```bash
-# Build and upload firmware
-pio run -t upload -e esp32-devkitlipo
+4. **Change settings**:
+   - Device Name: "StepAware-Test"
+   - Default Mode: MOTION DETECT
+   - Warning Duration: 10 seconds
+   - Full Brightness: 200
+   - Log Level: INFO
 
-# Monitor serial output
-pio device monitor
+5. **Click "Save Configuration"**
 
-# Look for these log messages:
-# - "Applied threshold XXX mm to sensor Y"
-# - "Sensor configuration applied to live sensors"
-# - "Event MOTION_DETECTED" followed by warning with correct duration
-```
+6. **Expected Results**:
+   - Green "Configuration saved successfully!" message appears
+   - Message disappears after 3 seconds
+   - Form reloads with saved values
 
-## Browser Console Verification
+7. **Verify persistence**:
+   - Refresh page (F5)
+   - All settings should match what you saved
 
-Open browser console (F12) and look for:
-```
-saveConfig: Starting save operation...
-saveConfig: Sending config to API: {motion: {...}, led: {...}, ...}
-saveConfig: Response status: 200 OK
-saveConfig: Successfully saved, new config: {...}
-```
+8. **Verify sensor config preserved**:
+   - Go to Hardware tab
+   - Sensor configuration should be unchanged
+   - Change sensor threshold to 2000mm
+   - Go back to Configuration tab
+   - Change LED brightness to 150
+   - Save Configuration
+   - Go to Hardware tab
+   - Sensor threshold should still be 2000mm
 
-If error occurs, will see:
-```
-saveConfig: Error response: {error: "..."}
-saveConfig: Exception caught: Error: ...
-```
+### Success Criteria
+
+✅ Save button triggers save (no silent failure)
+✅ Success indicator appears
+✅ Settings persist after page refresh
+✅ Sensor config not lost when saving basic config
+✅ Display config not lost when saving basic config
 
 ## Related Issues
 
-- Configuration persistence (working correctly)
-- Filesystem operations on LittleFS (working correctly)
-- JSON serialization/deserialization (working correctly)
-- Real-time sensor updates (now fixed)
-- State machine configuration integration (now fixed)
+This fix addresses the same symptom as the previous session:
+- "changing the settings in the ui configuration page dont seem to stick"
+- "never saw a save notice"
+- "threshold settings dont take effect until i reboot"
 
-## Lessons Learned
+The previous investigation focused on filesystem UI vs inline UI, but the root cause was different: missing form fields causing `NaN` in the JSON payload.
 
-1. **Configuration requires two-step update**:
-   - Save to persistent storage (filesystem)
-   - Apply to runtime objects (sensors, state machine)
+## Files Modified
 
-2. **Frontend debugging needs logging**:
-   - Console.log at each step
-   - Log request/response details
-   - Trace error paths
+1. **[src/web_api.cpp](src/web_api.cpp)**
+   - Added `currentConfig` variable to store full backend config
+   - Updated `loadConfig()` to store and populate (lines ~1556-1573)
+   - Updated `saveConfig()` to preserve and update (lines ~1577-1598)
 
-3. **Runtime configuration access**:
-   - Components that use config values need ConfigManager reference
-   - Can't rely only on hardcoded defaults from config.h
-
-4. **Sensor configuration patterns**:
-   - All sensor properties have setter methods
-   - Setters can be called at runtime
-   - Changes take effect immediately
-
-## Commit Message Suggestion
+## Build Output
 
 ```
-Fix configuration changes not taking effect without reboot
-
-Changes:
-1. Added debug logging to web UI saveConfig() function
-2. Apply sensor threshold changes to live sensors after save
-3. StateMachine now uses warning duration from config
-
-This fixes two issues:
-- Sensor threshold changes required reboot to take effect
-- Warning duration changes were saved but ignored at runtime
-
-WebAPI now updates live sensor objects after saving sensor config,
-and StateMachine reads warning duration from ConfigManager instead
-of using hardcoded default.
-
-Files modified:
-- data/app.js (added debug logging)
-- include/web_api.h (added setSensorManager method)
-- src/web_api.cpp (apply sensor config to live sensors)
-- include/state_machine.h (added ConfigManager parameter)
-- src/state_machine.cpp (use config for warning duration)
-- src/main.cpp (wire up managers)
+RAM:   [==        ]  23.8% (used 78060 bytes from 327680 bytes)
+Flash: [========  ]  81.4% (used 1066580 bytes from 1310720 bytes)
 ```
+
+No increase in memory usage from this fix (just JavaScript optimization).
 
 ---
 
-**Status**: Fixed - Ready for testing
-**Next Steps**: Build, upload, and verify both issues are resolved
+**Status**: Fixed and ready to test
+**Next Step**: Upload firmware and verify configuration save works
+**Expected Behavior**: Configuration saves successfully, sensor/display config preserved

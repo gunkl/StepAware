@@ -71,7 +71,10 @@
       "Bash(pio pkg search \"grove ultrasonic\")",
       "Bash(./pio run:*)",
       "Bash(pio device monitor:*)",
-      "Bash(/c/Users/David/.platformio/penv/Scripts/platformio.exe run -e esp32c3)"
+      "Bash(/c/Users/David/.platformio/penv/Scripts/platformio.exe run -e esp32c3)",
+      "Bash(curl:*)",
+      "Bash(ls:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

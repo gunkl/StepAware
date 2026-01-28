@@ -1,5 +1,6 @@
 #include "watchdog_manager.h"
 #include "logger.h"
+#include "debug_logger.h"
 #include <esp_task_wdt.h>
 
 // Global watchdog instance
@@ -56,7 +57,7 @@ WatchdogManager::~WatchdogManager() {
 
 bool WatchdogManager::begin(const Config* config) {
     if (m_initialized) {
-        LOG_WARN("Watchdog: Already initialized");
+        DEBUG_LOG_SYSTEM("Watchdog: Already initialized");
         return true;
     }
 
@@ -65,7 +66,7 @@ bool WatchdogManager::begin(const Config* config) {
         m_config = *config;
     }
 
-    LOG_INFO("Watchdog: Initializing hardware watchdog timer (%ums timeout)", m_config.hardwareTimeoutMs);
+    DEBUG_LOG_SYSTEM("Watchdog: Initializing hardware watchdog timer (%ums timeout)", m_config.hardwareTimeoutMs);
 
 #ifndef MOCK_MODE
     // Configure ESP32 hardware watchdog
@@ -76,7 +77,7 @@ bool WatchdogManager::begin(const Config* config) {
     m_lastHWFeedTime = millis();
     m_initialized = true;
 
-    LOG_INFO("Watchdog: Initialized successfully");
+    DEBUG_LOG_SYSTEM("Watchdog: Initialized successfully");
 
     return true;
 }
@@ -96,13 +97,13 @@ void WatchdogManager::update() {
     if (m_systemHealthy) {
         feedHardwareWatchdog();
     } else {
-        LOG_ERROR("Watchdog: System unhealthy, not feeding hardware watchdog");
+        DEBUG_LOG_SYSTEM("Watchdog: System unhealthy, not feeding hardware watchdog");
     }
 }
 
 void WatchdogManager::registerModule(ModuleID id, HealthCheckFunc checkFunc, RecoveryFunc recoveryFunc) {
     if (id >= MODULE_COUNT) {
-        LOG_ERROR("Watchdog: Invalid module ID %d", id);
+        DEBUG_LOG_SYSTEM("Watchdog: Invalid module ID %d", id);
         return;
     }
 
@@ -113,7 +114,7 @@ void WatchdogManager::registerModule(ModuleID id, HealthCheckFunc checkFunc, Rec
     info.nextCheckTime = millis() + info.checkInterval;
     info.enabled = isModuleEnabled(id);
 
-    LOG_INFO("Watchdog: Registered module %s (interval: %ums)", getModuleName(id), info.checkInterval);
+    DEBUG_LOG_SYSTEM("Watchdog: Registered module %s (interval: %ums)", getModuleName(id), info.checkInterval);
 }
 
 void WatchdogManager::reportHealth(ModuleID id, HealthStatus status, const char* message) {
@@ -134,7 +135,7 @@ void WatchdogManager::reportHealth(ModuleID id, HealthStatus status, const char*
     } else if (status == HEALTH_OK) {
         // Reset failure count on recovery
         if (info.health.failureCount > 0) {
-            LOG_INFO("Watchdog: Module %s recovered", getModuleName(id));
+            DEBUG_LOG_SYSTEM("Watchdog: Module %s recovered", getModuleName(id));
             info.health.failureCount = 0;
         }
     }
@@ -182,7 +183,7 @@ bool WatchdogManager::triggerRecovery(ModuleID id, RecoveryAction action) {
 
     ModuleInfo& info = m_modules[id];
 
-    LOG_WARN("Watchdog: Manual recovery triggered for %s (action: %s)",
+    DEBUG_LOG_SYSTEM("Watchdog: Manual recovery triggered for %s (action: %s)",
              getModuleName(id), getRecoveryActionName(action));
 
     return executeRecovery(info, action);
@@ -194,7 +195,7 @@ void WatchdogManager::resetFailureCount(ModuleID id) {
     }
 
     m_modules[id].health.failureCount = 0;
-    LOG_INFO("Watchdog: Reset failure count for %s", getModuleName(id));
+    DEBUG_LOG_SYSTEM("Watchdog: Reset failure count for %s", getModuleName(id));
 }
 
 const char* WatchdogManager::getModuleName(ModuleID id) {
@@ -271,13 +272,13 @@ void WatchdogManager::checkModuleHealth(ModuleInfo& info) {
     // Log status changes
     if (status != oldStatus) {
         if (status == HEALTH_OK) {
-            LOG_INFO("Watchdog: %s is now %s", getModuleName(info.id), getHealthStatusName(status));
+            DEBUG_LOG_SYSTEM("Watchdog: %s is now %s", getModuleName(info.id), getHealthStatusName(status));
         } else if (status == HEALTH_WARNING) {
-            LOG_WARN("Watchdog: %s is now %s%s%s",
+            DEBUG_LOG_SYSTEM("Watchdog: %s is now %s%s%s",
                      getModuleName(info.id), getHealthStatusName(status),
                      message ? ": " : "", message ? message : "");
         } else {
-            LOG_ERROR("Watchdog: %s is now %s%s%s",
+            DEBUG_LOG_SYSTEM("Watchdog: %s is now %s%s%s",
                       getModuleName(info.id), getHealthStatusName(status),
                       message ? ": " : "", message ? message : "");
         }
@@ -290,7 +291,7 @@ void WatchdogManager::checkModuleHealth(ModuleInfo& info) {
         handleModuleFailure(info);
     } else if (status == HEALTH_OK && info.health.failureCount > 0) {
         // Module recovered
-        LOG_INFO("Watchdog: %s recovered after %u failures", getModuleName(info.id), info.health.failureCount);
+        DEBUG_LOG_SYSTEM("Watchdog: %s recovered after %u failures", getModuleName(info.id), info.health.failureCount);
         info.health.failureCount = 0;
     }
 }
@@ -298,16 +299,16 @@ void WatchdogManager::checkModuleHealth(ModuleInfo& info) {
 void WatchdogManager::handleModuleFailure(ModuleInfo& info) {
     RecoveryAction action = determineRecoveryAction(info.health.failureCount);
 
-    LOG_ERROR("Watchdog: Module %s failed (failure count: %u, total: %u), attempting %s",
+    DEBUG_LOG_SYSTEM("Watchdog: Module %s failed (failure count: %u, total: %u), attempting %s",
               getModuleName(info.id), info.health.failureCount, info.health.totalFailures,
               getRecoveryActionName(action));
 
     if (action != RECOVERY_NONE) {
         bool recovered = executeRecovery(info, action);
         if (recovered) {
-            LOG_INFO("Watchdog: Recovery succeeded for %s", getModuleName(info.id));
+            DEBUG_LOG_SYSTEM("Watchdog: Recovery succeeded for %s", getModuleName(info.id));
         } else {
-            LOG_ERROR("Watchdog: Recovery failed for %s", getModuleName(info.id));
+            DEBUG_LOG_SYSTEM("Watchdog: Recovery failed for %s", getModuleName(info.id));
         }
     }
 }
@@ -345,7 +346,7 @@ bool WatchdogManager::executeRecovery(ModuleInfo& info, RecoveryAction action) {
 
         case RECOVERY_SYSTEM_REBOOT:
             // Controlled system reboot
-            LOG_WARN("Watchdog: Initiating controlled system reboot");
+            DEBUG_LOG_SYSTEM("Watchdog: Initiating controlled system reboot");
             delay(1000);  // Allow logs to flush
 #ifndef MOCK_MODE
             ESP.restart();
@@ -354,7 +355,7 @@ bool WatchdogManager::executeRecovery(ModuleInfo& info, RecoveryAction action) {
 
         case RECOVERY_HW_WATCHDOG:
             // Stop feeding HW WDT, let it reset the system
-            LOG_ERROR("Watchdog: Stopping hardware watchdog feed, system will reset in %ums",
+            DEBUG_LOG_SYSTEM("Watchdog: Stopping hardware watchdog feed, system will reset in %ums",
                       m_config.hardwareTimeoutMs);
             m_systemHealthy = false;  // Prevent feeding
             return true;
@@ -374,9 +375,9 @@ void WatchdogManager::updateSystemHealth() {
         m_systemHealthy = healthy;
 
         if (healthy) {
-            LOG_INFO("Watchdog: System is now healthy");
+            DEBUG_LOG_SYSTEM("Watchdog: System is now healthy");
         } else {
-            LOG_ERROR("Watchdog: System is now unhealthy (worst status: %s)",
+            DEBUG_LOG_SYSTEM("Watchdog: System is now unhealthy (worst status: %s)",
                       getHealthStatusName(worst));
         }
     }
