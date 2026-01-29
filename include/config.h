@@ -23,6 +23,10 @@
 #define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
 #define PIN_VBUS_DETECT     6    // USB VBUS detection (GPIO6)
 
+// Direction Detection Pins (Dual-PIR)
+#define PIN_PIR_NEAR        1    // Near zone PIR (existing sensor, GPIO1)
+#define PIN_PIR_FAR         11   // Far zone PIR (new sensor, GPIO11)
+
 // Output Pins
 #define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
 #define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
@@ -73,7 +77,7 @@
 // ============================================================================
 
 // Version Information
-#define FIRMWARE_VERSION    "0.1.0"
+#define FIRMWARE_VERSION    "0.1.1"
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__
@@ -89,6 +93,12 @@
 #define MOTION_WARNING_DURATION_MS    15000   // 15 seconds LED warning
 #define PIR_WARMUP_TIME_MS            60000   // 1 minute PIR sensor warm-up
 #define PIR_OUTPUT_DELAY_MS           2300    // AM312 output timing delay
+
+// Direction Detection (Dual-PIR)
+#define DIR_CONFIRMATION_WINDOW_MS    5000    // 5s window for pattern confirmation
+#define DIR_SIMULTANEOUS_THRESHOLD_MS 500     // <500ms = simultaneous (ambiguous)
+#define DIR_PATTERN_TIMEOUT_MS        10000   // 10s timeout to reset state
+#define DIR_MIN_SEQUENCE_TIME_MS      300     // Minimum 300ms between triggers
 
 // Button Debouncing
 #define BUTTON_DEBOUNCE_MS            50      // 50ms debounce time

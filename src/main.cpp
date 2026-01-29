@@ -20,6 +20,7 @@
 #include "state_machine.h"
 #include "sensor_factory.h"
 #include "sensor_manager.h"
+#include "direction_detector.h"
 #include "hal_led.h"
 #include "hal_button.h"
 #include "hal_ledmatrix_8x8.h"
@@ -35,6 +36,9 @@
 
 // Multi-sensor manager (Issue #4 Phase 2, Issue #17)
 SensorManager sensorManager;
+
+// Direction detection (Dual-PIR)
+DirectionDetector* directionDetector = nullptr;
 
 // Display components (Issue #12)
 HAL_LEDMatrix_8x8* ledMatrix = nullptr;  // 8x8 LED matrix display
@@ -90,6 +94,12 @@ void startWebAPI() {
     if (ledMatrix && ledMatrix->isReady()) {
         webAPI->setLEDMatrix(ledMatrix);
         Serial.println("[WebAPI] LED Matrix reference set");
+    }
+
+    // Always update direction detector reference (may be initialized after WebAPI)
+    if (directionDetector) {
+        webAPI->setDirectionDetector(directionDetector);
+        Serial.println("[WebAPI] Direction Detector reference set");
     }
 
     if (webAPI && webAPI->begin()) {
@@ -820,6 +830,37 @@ void setup() {
     Serial.println("[Setup] Sensor configuration:");
     sensorManager.printStatus();
 
+    // Initialize direction detector if enabled (Dual-PIR)
+    const ConfigManager::DirectionDetectorConfig& dirCfg = cfg.directionDetector;
+    if (dirCfg.enabled) {
+        Serial.println("[Setup] Direction detector enabled, initializing...");
+
+        // Get sensor references
+        HAL_MotionSensor* farSensor = sensorManager.getSensor(dirCfg.farSensorSlot);
+        HAL_MotionSensor* nearSensor = sensorManager.getSensor(dirCfg.nearSensorSlot);
+
+        if (farSensor && nearSensor) {
+            directionDetector = new DirectionDetector(farSensor, nearSensor);
+            directionDetector->begin();
+            directionDetector->setConfirmationWindowMs(dirCfg.confirmationWindowMs);
+            directionDetector->setSimultaneousThresholdMs(dirCfg.simultaneousThresholdMs);
+            directionDetector->setPatternTimeoutMs(dirCfg.patternTimeoutMs);
+
+            Serial.printf("[Setup] ✓ Direction detector initialized (far=slot %d, near=slot %d)\n",
+                         dirCfg.farSensorSlot, dirCfg.nearSensorSlot);
+            Serial.printf("[Setup]   - Confirmation window: %u ms\n", dirCfg.confirmationWindowMs);
+            Serial.printf("[Setup]   - Simultaneous threshold: %u ms\n", dirCfg.simultaneousThresholdMs);
+            Serial.printf("[Setup]   - Pattern timeout: %u ms\n", dirCfg.patternTimeoutMs);
+            Serial.printf("[Setup]   - Trigger on approaching: %s\n",
+                         dirCfg.triggerOnApproaching ? "YES" : "NO");
+        } else {
+            Serial.printf("[Setup] ERROR: Cannot create direction detector - invalid sensor slots (far=%d, near=%d)\n",
+                         dirCfg.farSensorSlot, dirCfg.nearSensorSlot);
+        }
+    } else {
+        Serial.println("[Setup] Direction detector disabled");
+    }
+
     Serial.println("[Setup] Initializing hazard LED...");
     if (!hazardLED.begin()) {
         Serial.println("[Setup] ERROR: Failed to initialize hazard LED");
@@ -924,6 +965,12 @@ void setup() {
         Serial.println("[Setup] State machine will use LED matrix for warnings");
     }
 
+    // Assign direction detector to state machine (dual-PIR direction detection)
+    if (directionDetector) {
+        stateMachine->setDirectionDetector(directionDetector);
+        Serial.println("[Setup] State machine will use direction detector for motion filtering");
+    }
+
     // Get default mode from config (cfg already retrieved earlier)
     StateMachine::OperatingMode defaultMode = static_cast<StateMachine::OperatingMode>(cfg.defaultMode);
 
@@ -995,6 +1042,11 @@ void setup() {
 void loop() {
     // Update sensor manager (handles all sensors)
     sensorManager.update();
+
+    // Update direction detector (Dual-PIR)
+    if (directionDetector) {
+        directionDetector->update();
+    }
 
     // Update LED matrix (handles animations)
     if (ledMatrix) {

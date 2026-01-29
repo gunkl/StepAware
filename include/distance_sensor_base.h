@@ -383,6 +383,7 @@ private:
     uint8_t m_consecutiveInRangeCount;    ///< Count of consecutive raw readings within range
     uint32_t m_lastRawDistance;           ///< Last raw (non-averaged) distance reading
     uint32_t m_suddenAppearanceBuffer[SUDDEN_APPEARANCE_READING_COUNT]; ///< Buffer for 3 readings to average
+    uint32_t m_lastMotionDetectedTime;    ///< Timestamp of last motion detection (for timeout reset)
 
     // Debug tracking: last 5 raw readings for diagnostics
     static constexpr uint8_t RAW_READING_HISTORY_SIZE = 5;

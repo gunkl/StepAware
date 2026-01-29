@@ -7,6 +7,7 @@
 #include "hal_led.h"
 #include "hal_button.h"
 #include "hal_ledmatrix_8x8.h"
+#include "direction_detector.h"
 
 /**
  * @brief State Machine for StepAware Operating Modes
@@ -193,6 +194,23 @@ public:
      */
     HAL_LEDMatrix_8x8* getLEDMatrix() const { return m_ledMatrix; }
 
+    /**
+     * @brief Set direction detector (dual-PIR)
+     *
+     * Allows dynamic assignment of direction detector for directional motion filtering.
+     * If set and enabled in config, state machine will only trigger on approaching motion.
+     *
+     * @param detector Pointer to DirectionDetector (nullptr to disable)
+     */
+    void setDirectionDetector(DirectionDetector* detector);
+
+    /**
+     * @brief Get direction detector
+     *
+     * @return DirectionDetector* Pointer to detector or nullptr if not set
+     */
+    DirectionDetector* getDirectionDetector() const { return m_directionDetector; }
+
 private:
     // Hardware interfaces
     class SensorManager* m_sensorManager; ///< Sensor manager (multi-sensor support, Issue #17)
@@ -200,6 +218,7 @@ private:
     HAL_LED* m_statusLED;                 ///< Status indicator LED
     HAL_Button* m_button;                 ///< Mode button
     HAL_LEDMatrix_8x8* m_ledMatrix;       ///< LED matrix display (Issue #12, optional)
+    DirectionDetector* m_directionDetector; ///< Direction detector (dual-PIR, optional)
     class ConfigManager* m_config;        ///< Config manager (for runtime config access)
 
     // State

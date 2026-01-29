@@ -1,6 +1,6 @@
 {
   "name": "HAL",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hardware Abstraction Layer for StepAware",
   "keywords": "esp32, hal, hardware, abstraction",
   "authors": {

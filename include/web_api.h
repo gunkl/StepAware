@@ -79,6 +79,13 @@ public:
     void setSensorManager(class SensorManager* sensorManager);
 
     /**
+     * @brief Set Direction Detector reference (optional)
+     *
+     * @param directionDetector Direction Detector instance for dual-PIR status
+     */
+    void setDirectionDetector(class DirectionDetector* directionDetector);
+
+    /**
      * @brief Destructor
      */
     ~WebAPI();
@@ -100,15 +107,16 @@ public:
     void setCORSEnabled(bool enabled);
 
 private:
-    AsyncWebServer* m_server;              ///< Web server instance
-    StateMachine* m_stateMachine;          ///< State machine reference
-    ConfigManager* m_config;               ///< Config manager reference
-    class WiFiManager* m_wifi;             ///< WiFi Manager reference (optional)
-    class PowerManager* m_power;           ///< Power Manager reference (optional)
-    class WatchdogManager* m_watchdog;     ///< Watchdog Manager reference (optional)
-    class HAL_LEDMatrix_8x8* m_ledMatrix;  ///< LED Matrix reference (optional, Issue #12)
-    class SensorManager* m_sensorManager;  ///< Sensor Manager reference (optional)
-    bool m_corsEnabled;                    ///< CORS enabled flag
+    AsyncWebServer* m_server;                  ///< Web server instance
+    StateMachine* m_stateMachine;              ///< State machine reference
+    ConfigManager* m_config;                   ///< Config manager reference
+    class WiFiManager* m_wifi;                 ///< WiFi Manager reference (optional)
+    class PowerManager* m_power;               ///< Power Manager reference (optional)
+    class WatchdogManager* m_watchdog;         ///< Watchdog Manager reference (optional)
+    class HAL_LEDMatrix_8x8* m_ledMatrix;      ///< LED Matrix reference (optional, Issue #12)
+    class SensorManager* m_sensorManager;      ///< Sensor Manager reference (optional)
+    class DirectionDetector* m_directionDetector; ///< Direction Detector reference (optional, dual-PIR)
+    bool m_corsEnabled;                        ///< CORS enabled flag
 
     // Endpoint handlers
 
