@@ -60,6 +60,19 @@ public:
     };
 
     /**
+     * @brief Direction detector configuration (Dual-PIR)
+     */
+    struct DirectionDetectorConfig {
+        bool enabled;                      // Enable direction detection (default: false)
+        uint8_t farSensorSlot;            // Which sensor slot is "far" (0-3, default: 1)
+        uint8_t nearSensorSlot;           // Which sensor slot is "near" (0-3, default: 0)
+        uint32_t confirmationWindowMs;    // Confirmation window (default: 5000ms)
+        uint32_t simultaneousThresholdMs; // Simultaneous threshold (default: 500ms)
+        uint32_t patternTimeoutMs;        // Pattern timeout (default: 10000ms)
+        bool triggerOnApproaching;        // Only trigger on approaching (default: true)
+    };
+
+    /**
      * @brief Runtime configuration structure
      */
     struct Config {
@@ -121,6 +134,9 @@ public:
         // Multi-Display Configuration (Issue #12)
         DisplaySlotConfig displays[2];     // Up to 2 display devices
         uint8_t primaryDisplaySlot;        // Primary display slot index
+
+        // Direction Detection (Dual-PIR)
+        DirectionDetectorConfig directionDetector;  // Direction detector configuration
 
         // Configuration metadata
         char version[16];                  // Config version

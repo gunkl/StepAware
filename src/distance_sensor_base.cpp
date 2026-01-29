@@ -20,6 +20,7 @@ DistanceSensorBase::DistanceSensorBase(uint32_t minDistance, uint32_t maxDistanc
       m_confirmationCyclesRemaining(0),
       m_consecutiveInRangeCount(0),
       m_lastRawDistance(0),
+      m_lastMotionDetectedTime(0),
       m_rawReadingHistoryIndex(0),
       m_skipDirectionUpdateCount(0),
       m_sampleWindowSize(windowSize),
@@ -683,16 +684,27 @@ void DistanceSensorBase::checkThresholdEvents()
         bool beyondDetectionThreshold = (m_currentDistance > m_detectionThreshold);
         bool notApproaching = (m_direction != DIRECTION_APPROACHING);
 
-        if (beyondDetectionThreshold && notApproaching) {
+        // Also reset if no motion detected for 5 seconds (prevents stuck state from hand waves)
+        uint32_t now = millis();
+        bool motionTimeout = (m_lastMotionDetectedTime > 0) &&
+                            ((now - m_lastMotionDetectedTime) > 5000); // 5 second timeout
+
+        if ((beyondDetectionThreshold && notApproaching) || motionTimeout) {
             if (m_suddenAppearance || m_seenApproachingFromOutside) {
-                DEBUG_LOG_SENSOR("Object left detection zone (dist=%u > threshold=%u, dir=%d), resetting dual-mode state",
-                               m_currentDistance, m_detectionThreshold, m_direction);
+                if (motionTimeout) {
+                    DEBUG_LOG_SENSOR("No motion for 5s (last=%u ms ago), resetting dual-mode state",
+                                   now - m_lastMotionDetectedTime);
+                } else {
+                    DEBUG_LOG_SENSOR("Object left detection zone (dist=%u > threshold=%u, dir=%d), resetting dual-mode state",
+                                   m_currentDistance, m_detectionThreshold, m_direction);
+                }
             }
             m_seenApproachingFromOutside = false;
             m_suddenAppearance = false;
             m_awaitingDirectionConfirmation = false;
             m_confirmationCyclesRemaining = 0;
             m_consecutiveInRangeCount = 0;
+            m_lastMotionDetectedTime = 0;  // Reset timestamp
         }
     }
 
@@ -700,6 +712,7 @@ void DistanceSensorBase::checkThresholdEvents()
     if (m_objectDetected && !wasDetected) {
         m_eventCount++;
         m_lastEventTime = millis();
+        m_lastMotionDetectedTime = millis();  // Update timestamp for timeout tracking
         m_lastEvent = MOTION_EVENT_THRESHOLD_CROSSED;
         DEBUG_PRINTF("[DistanceSensorBase] Motion detected at %u mm (movement: %d mm, event #%u)\n",
                      m_currentDistance, abs((int32_t)m_currentDistance - (int32_t)m_lastWindowAverage), m_eventCount);

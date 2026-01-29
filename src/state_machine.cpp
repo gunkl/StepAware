@@ -14,6 +14,7 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_statusLED(statusLED)
     , m_button(button)
     , m_ledMatrix(nullptr)
+    , m_directionDetector(nullptr)
     , m_config(config)
     , m_currentMode(OFF)
     , m_previousMode(OFF)
@@ -386,8 +387,29 @@ void StateMachine::handleMotionDetection() {
     // Check motion from sensor manager (Issue #17 fix)
     bool motionDetected = m_sensorManager->isMotionDetected();
 
-    // Detect rising edge (motion started)
-    if (motionDetected && !m_lastMotionState) {
+    // Apply direction filter if enabled (dual-PIR direction detection)
+    bool directionMatches = true;
+    if (m_directionDetector && m_config) {
+        const ConfigManager::DirectionDetectorConfig& dirCfg = m_config->getConfig().directionDetector;
+        if (dirCfg.enabled && dirCfg.triggerOnApproaching) {
+            // Only trigger on approaching motion
+            directionMatches = m_directionDetector->isApproaching();
+
+            if (motionDetected && !directionMatches && !m_lastMotionState) {
+                DEBUG_LOG_STATE("Motion detected but NOT approaching - ignoring (dir=%s, confirmed=%s)",
+                              m_directionDetector->getDirection() == DIRECTION_APPROACHING ? "APPROACHING" : "UNKNOWN",
+                              m_directionDetector->isDirectionConfirmed() ? "YES" : "NO");
+            }
+        }
+    }
+
+    // Detect rising edge (motion started) with direction filter
+    if (motionDetected && !m_lastMotionState && directionMatches) {
+        if (m_directionDetector && m_directionDetector->isApproaching()) {
+            DEBUG_LOG_STATE("Motion detected: APPROACHING (dir confirmed: %s, confidence: %u ms)",
+                          m_directionDetector->isDirectionConfirmed() ? "YES" : "NO",
+                          m_directionDetector->getDirectionConfidenceMs());
+        }
         handleEvent(EVENT_MOTION_DETECTED);
     }
 
@@ -419,5 +441,15 @@ void StateMachine::setLEDMatrix(HAL_LEDMatrix_8x8* matrix) {
         DEBUG_LOG_STATE("StateMachine: LED matrix display enabled");
     } else {
         DEBUG_LOG_STATE("StateMachine: LED matrix display disabled");
+    }
+}
+
+void StateMachine::setDirectionDetector(DirectionDetector* detector) {
+    m_directionDetector = detector;
+
+    if (detector) {
+        DEBUG_LOG_STATE("StateMachine: Direction detector enabled (dual-PIR filtering)");
+    } else {
+        DEBUG_LOG_STATE("StateMachine: Direction detector disabled");
     }
 }

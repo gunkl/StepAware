@@ -377,6 +377,50 @@ bool ConfigManager::validateAndCorrect() {
         hadErrors = true;
     }
 
+    // Validate direction detector configuration
+    if (m_config.directionDetector.enabled) {
+        // Sensor slots must be valid and different
+        if (m_config.directionDetector.farSensorSlot >= 4) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.farSensorSlot: %u → 1 (must be 0-3)",
+                           m_config.directionDetector.farSensorSlot);
+            m_config.directionDetector.farSensorSlot = 1;
+            hadErrors = true;
+        }
+        if (m_config.directionDetector.nearSensorSlot >= 4) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.nearSensorSlot: %u → 0 (must be 0-3)",
+                           m_config.directionDetector.nearSensorSlot);
+            m_config.directionDetector.nearSensorSlot = 0;
+            hadErrors = true;
+        }
+        if (m_config.directionDetector.farSensorSlot == m_config.directionDetector.nearSensorSlot) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector: far and near slots must be different (both were %u)",
+                           m_config.directionDetector.farSensorSlot);
+            m_config.directionDetector.nearSensorSlot = 0;
+            m_config.directionDetector.farSensorSlot = 1;
+            hadErrors = true;
+        }
+
+        // Timing bounds
+        if (m_config.directionDetector.confirmationWindowMs < 1000 || m_config.directionDetector.confirmationWindowMs > 30000) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.confirmationWindowMs: %u → 5000 (must be 1000-30000)",
+                           m_config.directionDetector.confirmationWindowMs);
+            m_config.directionDetector.confirmationWindowMs = 5000;
+            hadErrors = true;
+        }
+        if (m_config.directionDetector.simultaneousThresholdMs > 2000) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.simultaneousThresholdMs: %u → 500 (must be ≤2000)",
+                           m_config.directionDetector.simultaneousThresholdMs);
+            m_config.directionDetector.simultaneousThresholdMs = 500;
+            hadErrors = true;
+        }
+        if (m_config.directionDetector.patternTimeoutMs < 5000 || m_config.directionDetector.patternTimeoutMs > 60000) {
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.patternTimeoutMs: %u → 10000 (must be 5000-60000)",
+                           m_config.directionDetector.patternTimeoutMs);
+            m_config.directionDetector.patternTimeoutMs = 10000;
+            hadErrors = true;
+        }
+    }
+
     // Report results
     if (sensorErrorCount == 0 && displayErrorCount == 0 && !hadErrors) {
         DEBUG_LOG_CONFIG("Configuration validation: PASSED (no errors detected)");
@@ -522,6 +566,16 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     }
 
     doc["primaryDisplaySlot"] = m_config.primaryDisplaySlot;
+
+    // Direction Detection Configuration
+    JsonObject dirObj = doc.createNestedObject("directionDetector");
+    dirObj["enabled"] = m_config.directionDetector.enabled;
+    dirObj["farSensorSlot"] = m_config.directionDetector.farSensorSlot;
+    dirObj["nearSensorSlot"] = m_config.directionDetector.nearSensorSlot;
+    dirObj["confirmationWindowMs"] = m_config.directionDetector.confirmationWindowMs;
+    dirObj["simultaneousThresholdMs"] = m_config.directionDetector.simultaneousThresholdMs;
+    dirObj["patternTimeoutMs"] = m_config.directionDetector.patternTimeoutMs;
+    dirObj["triggerOnApproaching"] = m_config.directionDetector.triggerOnApproaching;
 
     // Metadata
     JsonObject meta = doc.createNestedObject("metadata");
@@ -684,6 +738,18 @@ bool ConfigManager::fromJSON(const char* json) {
 
     if (doc.containsKey("primaryDisplaySlot")) {
         m_config.primaryDisplaySlot = doc["primaryDisplaySlot"] | 0;
+    }
+
+    // Direction Detection Configuration
+    if (doc.containsKey("directionDetector")) {
+        JsonObject dirObj = doc["directionDetector"];
+        m_config.directionDetector.enabled = dirObj["enabled"] | false;
+        m_config.directionDetector.farSensorSlot = dirObj["farSensorSlot"] | 1;
+        m_config.directionDetector.nearSensorSlot = dirObj["nearSensorSlot"] | 0;
+        m_config.directionDetector.confirmationWindowMs = dirObj["confirmationWindowMs"] | 5000;
+        m_config.directionDetector.simultaneousThresholdMs = dirObj["simultaneousThresholdMs"] | 500;
+        m_config.directionDetector.patternTimeoutMs = dirObj["patternTimeoutMs"] | 10000;
+        m_config.directionDetector.triggerOnApproaching = dirObj["triggerOnApproaching"] | true;
     }
 
     // Metadata
@@ -904,6 +970,15 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].sampleRateMs = 75;      // Global default sample interval (adaptive threshold)
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
+
+    // Direction Detection Configuration - Disabled by default
+    m_config.directionDetector.enabled = false;
+    m_config.directionDetector.farSensorSlot = 1;      // Slot 1 = far PIR
+    m_config.directionDetector.nearSensorSlot = 0;     // Slot 0 = near PIR
+    m_config.directionDetector.confirmationWindowMs = DIR_CONFIRMATION_WINDOW_MS;        // 5000ms
+    m_config.directionDetector.simultaneousThresholdMs = DIR_SIMULTANEOUS_THRESHOLD_MS;  // 500ms
+    m_config.directionDetector.patternTimeoutMs = DIR_PATTERN_TIMEOUT_MS;                // 10000ms
+    m_config.directionDetector.triggerOnApproaching = true;  // Only trigger on approaching
 
     // Multi-Display Configuration - No displays by default
     for (int i = 0; i < 2; i++) {

@@ -21,6 +21,7 @@ WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager
     , m_watchdog(nullptr)
     , m_ledMatrix(nullptr)
     , m_sensorManager(nullptr)
+    , m_directionDetector(nullptr)
     , m_corsEnabled(true)
 {
 }
@@ -394,6 +395,10 @@ void WebAPI::setSensorManager(SensorManager* sensorManager) {
     m_sensorManager = sensorManager;
 }
 
+void WebAPI::setDirectionDetector(DirectionDetector* directionDetector) {
+    m_directionDetector = directionDetector;
+}
+
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
     DEBUG_LOG_API("GET /api/status");
     StaticJsonDocument<2048> doc;
@@ -449,6 +454,39 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
         JsonObject watchdogObj = doc.createNestedObject("watchdog");
         watchdogObj["systemHealth"] = m_watchdog->getSystemHealth();
         watchdogObj["healthName"] = WatchdogManager::getHealthStatusName(m_watchdog->getSystemHealth());
+    }
+
+    // Direction Detector (if available and enabled)
+    if (m_directionDetector) {
+        const ConfigManager::DirectionDetectorConfig& dirCfg = m_config->getConfig().directionDetector;
+        JsonObject dirObj = doc.createNestedObject("direction");
+        dirObj["enabled"] = dirCfg.enabled;
+
+        if (dirCfg.enabled) {
+            // Current direction state
+            dirObj["current"] = m_directionDetector->isApproaching() ? "APPROACHING" : "UNKNOWN";
+            dirObj["confirmed"] = m_directionDetector->isDirectionConfirmed();
+            dirObj["confidenceMs"] = m_directionDetector->getDirectionConfidenceMs();
+            dirObj["state"] = m_directionDetector->getStateName();
+
+            // Sensor states
+            dirObj["farSensorActive"] = m_directionDetector->getFarSensorState();
+            dirObj["nearSensorActive"] = m_directionDetector->getNearSensorState();
+
+            // Statistics
+            JsonObject statsObj = dirObj.createNestedObject("statistics");
+            statsObj["approaching"] = m_directionDetector->getApproachingCount();
+            statsObj["unknown"] = m_directionDetector->getUnknownCount();
+
+            // Configuration
+            JsonObject configObj = dirObj.createNestedObject("config");
+            configObj["farSensorSlot"] = dirCfg.farSensorSlot;
+            configObj["nearSensorSlot"] = dirCfg.nearSensorSlot;
+            configObj["confirmationWindowMs"] = dirCfg.confirmationWindowMs;
+            configObj["simultaneousThresholdMs"] = dirCfg.simultaneousThresholdMs;
+            configObj["patternTimeoutMs"] = dirCfg.patternTimeoutMs;
+            configObj["triggerOnApproaching"] = dirCfg.triggerOnApproaching;
+        }
     }
 
     // Serialize to string
