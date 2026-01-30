@@ -133,7 +133,7 @@ void printStatus() {
     Serial.println("StepAware System Status");
     Serial.println("========================================");
 
-    Serial.printf("Firmware: %s v%s\n", FIRMWARE_NAME, FIRMWARE_VERSION);
+    Serial.printf("Firmware: %s v%s (build %s)\n", FIRMWARE_NAME, FIRMWARE_VERSION, BUILD_NUMBER);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
     Serial.printf("Uptime: %u seconds\n", stateMachine->getUptimeSeconds());
     Serial.println();
@@ -780,16 +780,21 @@ void setup() {
     Serial.println("[Setup] Auto-configuring direction detection...");
     configManager.autoConfigureDirectionDetector();
 
-    // Apply log level from config to debug logger BEFORE writing boot info
+    // Apply log level from config to both loggers BEFORE writing boot info
     const ConfigManager::Config& bootCfg = configManager.getConfig();
-    DebugLogger::LogLevel configLevel = static_cast<DebugLogger::LogLevel>(bootCfg.logLevel);
-    g_debugLogger.setLevel(configLevel);
-    Serial.printf("[Setup] Debug log level set to %u (%s) from config\n",
-                  bootCfg.logLevel, DebugLogger::getLevelName(configLevel));
+    DebugLogger::LogLevel debugLevel = static_cast<DebugLogger::LogLevel>(bootCfg.logLevel);
+    g_debugLogger.setLevel(debugLevel);
+
+    // Also set regular Logger level from config
+    Logger::LogLevel loggerLevel = static_cast<Logger::LogLevel>(bootCfg.logLevel);
+    g_logger.setLevel(loggerLevel);
+
+    Serial.printf("[Setup] Log level set to %u (%s) from config\n",
+                  bootCfg.logLevel, Logger::getLevelName(loggerLevel));
 
     // Now write boot info with correct log level
     DEBUG_LOG_BOOT("=== StepAware Starting ===");
-    DEBUG_LOG_BOOT("Firmware: %s", FIRMWARE_VERSION);
+    DEBUG_LOG_BOOT("Firmware: %s (build %s)", FIRMWARE_VERSION, BUILD_NUMBER);
     DEBUG_LOG_BOOT("Build: %s %s", BUILD_DATE, BUILD_TIME);
     DEBUG_LOG_BOOT("Board: ESP32-C3-DevKit-Lipo");
     DEBUG_LOG_BOOT("Free Heap: %u bytes", ESP.getFreeHeap());

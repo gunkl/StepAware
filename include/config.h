@@ -102,6 +102,7 @@
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__
+#include "build_number.h"  // Auto-generated build number
 
 // Serial Communication
 #define SERIAL_BAUD_RATE    115200
@@ -117,7 +118,7 @@
 
 // Direction Detection (Dual-PIR)
 #define DIR_CONFIRMATION_WINDOW_MS    5000    // 5s window for pattern confirmation
-#define DIR_SIMULTANEOUS_THRESHOLD_MS 500     // <500ms = simultaneous (ambiguous)
+#define DIR_SIMULTANEOUS_THRESHOLD_MS 150     // <150ms = simultaneous (ambiguous)
 #define DIR_PATTERN_TIMEOUT_MS        10000   // 10s timeout to reset state
 #define DIR_MIN_SEQUENCE_TIME_MS      300     // Minimum 300ms between triggers
 

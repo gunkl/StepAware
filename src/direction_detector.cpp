@@ -11,12 +11,17 @@ DirectionDetector::DirectionDetector(HAL_MotionSensor* farSensor, HAL_MotionSens
       m_lastNearTriggerTime(0),
       m_directionConfirmTime(0),
       m_confirmationWindowMs(5000),      // Default: 5 seconds
-      m_simultaneousThresholdMs(500),    // Default: 500ms
+      m_simultaneousThresholdMs(150),    // Default: 150ms
       m_patternTimeoutMs(10000),         // Default: 10 seconds
       m_approachingCount(0),
       m_unknownCount(0),
       m_lastFarState(false),
-      m_lastNearState(false)
+      m_lastNearState(false),
+      m_updateCallCount(0),
+      m_lastFarTriggerLoopCount(0),
+      m_lastNearTriggerLoopCount(0),
+      m_lastFarTriggerMicros(0),
+      m_lastNearTriggerMicros(0)
 {
 }
 
@@ -39,6 +44,9 @@ void DirectionDetector::begin()
 
 void DirectionDetector::update()
 {
+    // Track loop iterations
+    m_updateCallCount++;
+
     // Validate sensors
     if (!m_farSensor || !m_nearSensor) {
         return;
@@ -179,7 +187,10 @@ bool DirectionDetector::getNearSensorState() const
 void DirectionDetector::handleFarTrigger()
 {
     uint32_t now = millis();
+    uint32_t nowMicros = micros();  // Capture microsecond timestamp
     m_lastFarTriggerTime = now;
+    m_lastFarTriggerMicros = nowMicros;
+    m_lastFarTriggerLoopCount = m_updateCallCount;
 
     DEBUG_LOG_SENSOR("DirectionDetector: FAR sensor TRIGGERED (state=%s)", getStateName());
 
@@ -213,7 +224,10 @@ void DirectionDetector::handleFarTrigger()
 void DirectionDetector::handleNearTrigger()
 {
     uint32_t now = millis();
+    uint32_t nowMicros = micros();  // Capture microsecond timestamp
     m_lastNearTriggerTime = now;
+    m_lastNearTriggerMicros = nowMicros;
+    m_lastNearTriggerLoopCount = m_updateCallCount;
 
     DEBUG_LOG_SENSOR("DirectionDetector: NEAR sensor TRIGGERED (state=%s)", getStateName());
 
@@ -250,7 +264,12 @@ void DirectionDetector::handleNearTrigger()
         if (m_lastFarTriggerTime > 0) {
             uint32_t delta = now - m_lastFarTriggerTime;
             if (delta <= m_confirmationWindowMs) {
-                DEBUG_LOG_SENSOR("DirectionDetector: APPROACHING pattern confirmed (far→near, delta=%u ms)", delta);
+                // Calculate precise timing with microseconds and loop count
+                uint32_t deltaMicros = nowMicros - m_lastFarTriggerMicros;
+                uint32_t loopDelta = m_updateCallCount - m_lastFarTriggerLoopCount;
+
+                DEBUG_LOG_SENSOR("DirectionDetector: APPROACHING pattern confirmed (far→near, delta=%u ms [%u µs], loops=%u)",
+                               delta, deltaMicros, loopDelta);
                 confirmApproaching();
             } else {
                 DEBUG_LOG_SENSOR("DirectionDetector: Far→near but outside window (delta=%u ms > %u ms) - timeout",

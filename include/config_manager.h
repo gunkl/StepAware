@@ -68,7 +68,7 @@ public:
         uint8_t farSensorSlot;            // Which sensor slot is "far" (0-3, default: 1)
         uint8_t nearSensorSlot;           // Which sensor slot is "near" (0-3, default: 0)
         uint32_t confirmationWindowMs;    // Confirmation window (default: 5000ms)
-        uint32_t simultaneousThresholdMs; // Simultaneous threshold (default: 500ms)
+        uint32_t simultaneousThresholdMs; // Simultaneous threshold (default: 150ms)
         uint32_t patternTimeoutMs;        // Pattern timeout (default: 10000ms)
         bool triggerOnApproaching;        // Only trigger on approaching (default: true)
     };

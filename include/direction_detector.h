@@ -173,7 +173,7 @@ public:
      * If both sensors trigger within this time, it's considered simultaneous
      * (ambiguous direction, too fast to determine).
      *
-     * @param threshold_ms Threshold in milliseconds (default: 500ms)
+     * @param threshold_ms Threshold in milliseconds (default: 150ms)
      */
     void setSimultaneousThresholdMs(uint32_t threshold_ms);
 
@@ -248,7 +248,7 @@ private:
     // =========================================================================
 
     uint32_t m_confirmationWindowMs;    ///< Time window for pattern confirmation (default: 5000ms)
-    uint32_t m_simultaneousThresholdMs; ///< Threshold for simultaneous trigger (default: 500ms)
+    uint32_t m_simultaneousThresholdMs; ///< Threshold for simultaneous trigger (default: 150ms)
     uint32_t m_patternTimeoutMs;        ///< Pattern timeout duration (default: 10000ms)
 
     // =========================================================================
@@ -264,6 +264,16 @@ private:
 
     bool m_lastFarState;                ///< Previous far sensor state
     bool m_lastNearState;               ///< Previous near sensor state
+
+    // =========================================================================
+    // Timing instrumentation (debug)
+    // =========================================================================
+
+    uint32_t m_updateCallCount;         ///< Total update() calls for loop counting
+    uint32_t m_lastFarTriggerLoopCount; ///< Loop count at far trigger
+    uint32_t m_lastNearTriggerLoopCount;///< Loop count at near trigger
+    uint32_t m_lastFarTriggerMicros;    ///< Microsecond timestamp (far)
+    uint32_t m_lastNearTriggerMicros;   ///< Microsecond timestamp (near)
 
     // =========================================================================
     // Internal Methods

@@ -408,9 +408,9 @@ bool ConfigManager::validateAndCorrect() {
             hadErrors = true;
         }
         if (m_config.directionDetector.simultaneousThresholdMs > 2000) {
-            DEBUG_LOG_CONFIG("CORRECTED directionDetector.simultaneousThresholdMs: %u → 500 (must be ≤2000)",
+            DEBUG_LOG_CONFIG("CORRECTED directionDetector.simultaneousThresholdMs: %u → 150 (must be ≤2000)",
                            m_config.directionDetector.simultaneousThresholdMs);
-            m_config.directionDetector.simultaneousThresholdMs = 500;
+            m_config.directionDetector.simultaneousThresholdMs = 150;
             hadErrors = true;
         }
         if (m_config.directionDetector.patternTimeoutMs < 5000 || m_config.directionDetector.patternTimeoutMs > 60000) {
@@ -475,7 +475,7 @@ void ConfigManager::autoConfigureDirectionDetector() {
             m_config.directionDetector.confirmationWindowMs = 5000;
         }
         if (m_config.directionDetector.simultaneousThresholdMs == 0) {
-            m_config.directionDetector.simultaneousThresholdMs = 500;
+            m_config.directionDetector.simultaneousThresholdMs = 150;
         }
         if (m_config.directionDetector.patternTimeoutMs == 0) {
             m_config.directionDetector.patternTimeoutMs = 10000;
@@ -801,7 +801,7 @@ bool ConfigManager::fromJSON(const char* json) {
         m_config.directionDetector.farSensorSlot = dirObj["farSensorSlot"] | 1;
         m_config.directionDetector.nearSensorSlot = dirObj["nearSensorSlot"] | 0;
         m_config.directionDetector.confirmationWindowMs = dirObj["confirmationWindowMs"] | 5000;
-        m_config.directionDetector.simultaneousThresholdMs = dirObj["simultaneousThresholdMs"] | 500;
+        m_config.directionDetector.simultaneousThresholdMs = dirObj["simultaneousThresholdMs"] | 150;
         m_config.directionDetector.patternTimeoutMs = dirObj["patternTimeoutMs"] | 10000;
         m_config.directionDetector.triggerOnApproaching = dirObj["triggerOnApproaching"] | true;
     }
@@ -1030,7 +1030,7 @@ void ConfigManager::loadDefaults() {
     m_config.directionDetector.farSensorSlot = 1;      // Slot 1 = far PIR
     m_config.directionDetector.nearSensorSlot = 0;     // Slot 0 = near PIR
     m_config.directionDetector.confirmationWindowMs = DIR_CONFIRMATION_WINDOW_MS;        // 5000ms
-    m_config.directionDetector.simultaneousThresholdMs = DIR_SIMULTANEOUS_THRESHOLD_MS;  // 500ms
+    m_config.directionDetector.simultaneousThresholdMs = DIR_SIMULTANEOUS_THRESHOLD_MS;  // 150ms
     m_config.directionDetector.patternTimeoutMs = DIR_PATTERN_TIMEOUT_MS;                // 10000ms
     m_config.directionDetector.triggerOnApproaching = true;  // Only trigger on approaching
 
