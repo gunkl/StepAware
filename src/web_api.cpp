@@ -2157,6 +2157,21 @@ String WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-help\">Time to display warning after motion detected</div></div>";
     html += "</div>";
 
+    html += "<h3>Direction Detection (Dual-PIR)</h3>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Simultaneous Threshold (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-dirSimultaneousThreshold\" class=\"form-input\" min=\"50\" max=\"2000\">";
+    html += "<div class=\"form-help\">If both sensors trigger within this time, it's considered simultaneous (not directional). Lower = more sensitive to direction. Typical: 100-200ms</div></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Confirmation Window (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-dirConfirmationWindow\" class=\"form-input\" min=\"1000\" max=\"10000\">";
+    html += "<div class=\"form-help\">Maximum time between sensor triggers to detect direction. Higher = works for slower movement. Typical: 3000-5000ms</div></div>";
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Pattern Timeout (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-dirPatternTimeout\" class=\"form-input\" min=\"5000\" max=\"30000\">";
+    html += "<div class=\"form-help\">How long to wait for pattern completion before resetting. Typical: 10000ms</div></div>";
+    html += "</div>";
+
     html += "<h3>LED Settings</h3>";
     html += "<div class=\"form-row\">";
     html += "<div class=\"form-group\"><label class=\"form-label\">Full Brightness (0-255)</label>";
@@ -2319,6 +2334,9 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
     html += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
+    html += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||500;";
+    html += "document.getElementById('cfg-dirConfirmationWindow').value=cfg.directionDetector?.confirmationWindowMs||5000;";
+    html += "document.getElementById('cfg-dirPatternTimeout').value=cfg.directionDetector?.patternTimeoutMs||10000;";
     html += "}catch(e){console.error('Config load error:',e);}}";
 
     // Config saving
@@ -2342,6 +2360,10 @@ String WebAPI::buildDashboardHTML() {
     html += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
     html += "cfg.power=cfg.power||{};";
     html += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
+    html += "cfg.directionDetector=cfg.directionDetector||{};";
+    html += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
+    html += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";
+    html += "cfg.directionDetector.patternTimeoutMs=parseInt(document.getElementById('cfg-dirPatternTimeout').value);";
     html += "let jsonStr;";
     html += "try{jsonStr=JSON.stringify(cfg);console.log('Saving config:',JSON.stringify(cfg,null,2));}";
     html += "catch(e){console.error('JSON.stringify failed:',e);alert('Failed to serialize config: '+e.message);return;}";
