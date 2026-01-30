@@ -98,7 +98,7 @@
 // ============================================================================
 
 // Version Information
-#define FIRMWARE_VERSION    "0.2.0"
+#define FIRMWARE_VERSION    "0.2.1"
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__

@@ -1097,9 +1097,21 @@ void loop() {
         statusLED.setBrightness(0);
     }
 
-    // Diagnostic mode - real-time sensor view
+    // Diagnostic mode - real-time sensor view with change detection
     if (diagnosticMode) {
         static uint32_t lastDiagUpdate = 0;
+
+        // State tracking for deduplication
+        struct DiagSensorState {
+            uint32_t distance;
+            bool motion;
+            int8_t direction;
+            bool initialized;
+        };
+        static DiagSensorState lastState[4] = {{0, false, -1, false}, {0, false, -1, false},
+                                                 {0, false, -1, false}, {0, false, -1, false}};
+        static bool lastSystemMotion = false;
+
         if (now - lastDiagUpdate >= 200) {  // Update 5x per second
             lastDiagUpdate = now;
 
@@ -1110,63 +1122,77 @@ void loop() {
                     // Re-read capabilities and state each time (picks up config changes)
                     const SensorCapabilities& caps = sensor->getCapabilities();
                     bool motion = sensor->motionDetected();
+                    uint32_t dist = caps.supportsDistanceMeasurement ? sensor->getDistance() : 0;
+                    int8_t dir = caps.supportsDirectionDetection ? (int8_t)sensor->getDirection() : -1;
 
-                    // Build status line
-                    Serial.printf("[S%u] ", i);
+                    // Check if state changed (or first time)
+                    bool stateChanged = !lastState[i].initialized ||
+                                       lastState[i].motion != motion ||
+                                       abs((int32_t)lastState[i].distance - (int32_t)dist) > 50 ||  // 50mm threshold
+                                       lastState[i].direction != dir;
 
-                    if (caps.supportsDistanceMeasurement) {
-                        // Read current values (not cached - responds to config changes)
-                        uint32_t dist = sensor->getDistance();
-                        uint32_t thresh = sensor->getDetectionThreshold();
+                    if (stateChanged) {
+                        // Update tracked state
+                        lastState[i].distance = dist;
+                        lastState[i].motion = motion;
+                        lastState[i].direction = dir;
+                        lastState[i].initialized = true;
 
-                        // Distance with visual indicator
-                        Serial.printf("Dist:%4u mm ", dist);
+                        // Build status line
+                        char statusLine[200];
+                        int pos = snprintf(statusLine, sizeof(statusLine), "[S%u] ", i);
 
-                        // Threshold comparison
-                        if (dist > 0 && dist < thresh) {
-                            Serial.print("[NEAR] ");
-                        } else if (dist >= thresh) {
-                            Serial.print("[FAR ] ");
+                        if (caps.supportsDistanceMeasurement) {
+                            uint32_t thresh = sensor->getDetectionThreshold();
+                            pos += snprintf(statusLine + pos, sizeof(statusLine) - pos,
+                                          "Dist:%4u mm ", dist);
+
+                            // Threshold comparison
+                            if (dist > 0 && dist < thresh) {
+                                pos += snprintf(statusLine + pos, sizeof(statusLine) - pos, "[NEAR] ");
+                            } else if (dist >= thresh) {
+                                pos += snprintf(statusLine + pos, sizeof(statusLine) - pos, "[FAR ] ");
+                            } else {
+                                pos += snprintf(statusLine + pos, sizeof(statusLine) - pos, "[NONE] ");
+                            }
+
+                            pos += snprintf(statusLine + pos, sizeof(statusLine) - pos, "(thresh:%u) ", thresh);
+                        }
+
+                        // Motion state
+                        pos += snprintf(statusLine + pos, sizeof(statusLine) - pos,
+                                      "Motion:%s ", motion ? "YES" : "NO ");
+
+                        // Direction if supported
+                        if (caps.supportsDirectionDetection) {
+                            const char* dirStr = "???";
+                            switch ((MotionDirection)dir) {
+                                case DIRECTION_STATIONARY: dirStr = "STAT"; break;
+                                case DIRECTION_APPROACHING: dirStr = "APPR"; break;
+                                case DIRECTION_RECEDING: dirStr = "RECD"; break;
+                                default: dirStr = "UNKN"; break;
+                            }
+                            pos += snprintf(statusLine + pos, sizeof(statusLine) - pos, "Dir:%s ", dirStr);
+                        }
+
+                        // Final decision indicator
+                        if (motion) {
+                            snprintf(statusLine + pos, sizeof(statusLine) - pos, ">>> TRIGGER");
                         } else {
-                            Serial.print("[NONE] ");
+                            snprintf(statusLine + pos, sizeof(statusLine) - pos, "    (idle)");
                         }
 
-                        Serial.printf("(thresh:%u) ", thresh);
+                        // Log with proper level (DEBUG for diagnostic info)
+                        DEBUG_LOG_SENSOR("%s", statusLine);
                     }
-
-                    // Motion state
-                    Serial.printf("Motion:%s ", motion ? "YES" : "NO ");
-
-                    // Direction if supported
-                    if (caps.supportsDirectionDetection) {
-                        MotionDirection dir = sensor->getDirection();
-                        const char* dirStr = "???";
-                        switch (dir) {
-                            case DIRECTION_STATIONARY: dirStr = "STAT"; break;
-                            case DIRECTION_APPROACHING: dirStr = "APPR"; break;
-                            case DIRECTION_RECEDING: dirStr = "RECD"; break;
-                            default: dirStr = "UNKN"; break;
-                        }
-                        Serial.printf("Dir:%s ", dirStr);
-                    }
-
-                    // Final decision indicator
-                    if (motion) {
-                        Serial.print(">>> TRIGGER");
-                    } else {
-                        Serial.print("    (idle)");
-                    }
-
-                    Serial.println();
                 }
             }
 
-            // Show combined fusion result (only if motion detected - saves space)
+            // Motion state tracking
             bool anyMotion = sensorManager.isMotionDetected();
-            if (anyMotion) {
-                Serial.println(">>> SYSTEM: MOTION DETECTED - WARNING ACTIVE <<<");
+            if (anyMotion != lastSystemMotion) {
+                lastSystemMotion = anyMotion;
             }
-            // Removed extra blank line for compactness
         }
     }
 
