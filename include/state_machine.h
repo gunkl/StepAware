@@ -239,6 +239,7 @@ private:
     // Motion sensor state tracking
     bool m_lastMotionState;      ///< Previous motion sensor state
     bool m_sensorReady;          ///< Motion sensor ready (warmup complete)
+    bool m_lastApproachingState; ///< Previous approaching state (for edge detection)
 
     /**
      * @brief Enter a new operating mode

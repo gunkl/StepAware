@@ -453,7 +453,8 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms) {
 
     // ESP32-C3 deep sleep GPIO wakeup configuration
     // Note: ESP32-C3 only supports wakeup on GPIO 0-5 in deep sleep
-    // PIR_SENSOR_PIN (GPIO1) and BUTTON_PIN (GPIO0) are both valid
+    // PIR_SENSOR_PIN (GPIO6) exceeds GPIO 0-5 range - verify wakeup compatibility!
+    // BUTTON_PIN (GPIO0) is valid for wakeup
 
     // Create bitmask for GPIO wakeup pins
     // PIR sensor wakes on HIGH (motion detected)

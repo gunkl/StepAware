@@ -27,6 +27,7 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_modeChanges(0)
     , m_lastMotionState(false)
     , m_sensorReady(false)
+    , m_lastApproachingState(false)
 {
 }
 
@@ -250,11 +251,19 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
     m_warningStartTime = millis();
     m_warningDuration = duration_ms;
 
+    DEBUG_LOG_STATE("StateMachine: triggerWarning() called - m_ledMatrix=%p", (void*)m_ledMatrix);
+
     // Use LED matrix if available, otherwise fall back to hazard LED
     if (m_ledMatrix && m_ledMatrix->isReady()) {
+        DEBUG_LOG_STATE("StateMachine: LED matrix available and ready, starting MOTION_ALERT animation");
         m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
     } else {
+        if (m_ledMatrix) {
+            DEBUG_LOG_STATE("StateMachine: LED matrix exists but not ready (isReady=%d)", m_ledMatrix->isReady());
+        } else {
+            DEBUG_LOG_STATE("StateMachine: LED matrix is NULL, using hazard LED instead");
+        }
         m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
     }
@@ -384,41 +393,53 @@ void StateMachine::updateStatusLED() {
 }
 
 void StateMachine::handleMotionDetection() {
-    // Check motion from sensor manager (Issue #17 fix)
-    bool motionDetected = m_sensorManager->isMotionDetected();
+    // Check if direction detection is enabled with approaching-only mode
+    bool useDirectionFilter = false;
+    bool isApproaching = false;
 
-    // Apply direction filter if enabled (dual-PIR direction detection)
-    bool directionMatches = true;
     if (m_directionDetector && m_config) {
         const ConfigManager::DirectionDetectorConfig& dirCfg = m_config->getConfig().directionDetector;
-        if (dirCfg.enabled && dirCfg.triggerOnApproaching) {
-            // Only trigger on approaching motion
-            directionMatches = m_directionDetector->isApproaching();
+        useDirectionFilter = dirCfg.enabled && dirCfg.triggerOnApproaching;
 
-            if (motionDetected && !directionMatches && !m_lastMotionState) {
-                DEBUG_LOG_STATE("Motion detected but NOT approaching - ignoring (dir=%s, confirmed=%s)",
-                              m_directionDetector->getDirection() == DIRECTION_APPROACHING ? "APPROACHING" : "UNKNOWN",
-                              m_directionDetector->isDirectionConfirmed() ? "YES" : "NO");
-            }
+        if (useDirectionFilter) {
+            isApproaching = m_directionDetector->isApproaching();
         }
     }
 
-    // Detect rising edge (motion started) with direction filter
-    if (motionDetected && !m_lastMotionState && directionMatches) {
-        if (m_directionDetector && m_directionDetector->isApproaching()) {
-            DEBUG_LOG_STATE("Motion detected: APPROACHING (dir confirmed: %s, confidence: %u ms)",
+    if (useDirectionFilter) {
+        // Direction detection mode: Trigger on approaching rising edge
+        // This allows triggering even if sensor states have transitioned
+        if (isApproaching && !m_lastApproachingState) {
+            DEBUG_LOG_STATE("APPROACHING motion confirmed (dir confirmed: %s, confidence: %u ms)",
                           m_directionDetector->isDirectionConfirmed() ? "YES" : "NO",
                           m_directionDetector->getDirectionConfidenceMs());
+            handleEvent(EVENT_MOTION_DETECTED);
         }
-        handleEvent(EVENT_MOTION_DETECTED);
-    }
 
-    // Detect falling edge (motion ended)
-    if (!motionDetected && m_lastMotionState) {
-        handleEvent(EVENT_MOTION_CLEARED);
-    }
+        // Detect falling edge (approaching ended)
+        if (!isApproaching && m_lastApproachingState) {
+            DEBUG_LOG_STATE("Approaching motion ended");
+            handleEvent(EVENT_MOTION_CLEARED);
+        }
 
-    m_lastMotionState = motionDetected;
+        m_lastApproachingState = isApproaching;
+    } else {
+        // Standard motion detection mode: Use sensor manager state
+        bool motionDetected = m_sensorManager->isMotionDetected();
+
+        // Detect rising edge (motion started)
+        if (motionDetected && !m_lastMotionState) {
+            DEBUG_LOG_STATE("Motion detected");
+            handleEvent(EVENT_MOTION_DETECTED);
+        }
+
+        // Detect falling edge (motion ended)
+        if (!motionDetected && m_lastMotionState) {
+            handleEvent(EVENT_MOTION_CLEARED);
+        }
+
+        m_lastMotionState = motionDetected;
+    }
 }
 
 void StateMachine::updateWarning() {

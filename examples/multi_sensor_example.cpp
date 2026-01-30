@@ -10,7 +10,7 @@
  *
  * Hardware Requirements:
  * - ESP32-C3 (or compatible)
- * - PIR motion sensor on GPIO 5
+ * - PIR motion sensor on GPIO 6
  * - HC-SR04 ultrasonic sensor (Trigger: GPIO 12, Echo: GPIO 14)
  *
  * Power Consumption:
@@ -26,7 +26,7 @@
 #include "sensor_manager.h"
 
 // Pin definitions
-#define PIN_PIR_SENSOR      5
+#define PIN_PIR_SENSOR      6  // Note: Avoid GPIO5 - it can interfere with programming
 #define PIN_ULTRASONIC_TRIG 12
 #define PIN_ULTRASONIC_ECHO 14
 #define PIN_LED             2   // Built-in LED for visual feedback

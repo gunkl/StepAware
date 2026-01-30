@@ -157,6 +157,7 @@ void printStatus() {
                          (sensor == primarySensor) ? "PRIMARY" : "secondary",
                          caps.sensorTypeName);
             Serial.printf("      Ready: %s\n", sensor->isReady() ? "YES" : "NO");
+            Serial.printf("      Motion: %s\n", sensor->motionDetected() ? "DETECTED" : "clear");
 
             if (!sensor->isReady() && caps.requiresWarmup) {
                 Serial.printf("      Warmup remaining: %u seconds\n",
@@ -738,6 +739,10 @@ void setup() {
         Serial.println("[Setup] Configuration validation: PASSED");
         DEBUG_LOG_CONFIG("Configuration validation: PASSED (no errors)");
     }
+
+    // Auto-configure direction detector based on sensor distance zones
+    Serial.println("[Setup] Auto-configuring direction detection...");
+    configManager.autoConfigureDirectionDetector();
 
     // Apply log level from config to debug logger BEFORE writing boot info
     const ConfigManager::Config& bootCfg = configManager.getConfig();

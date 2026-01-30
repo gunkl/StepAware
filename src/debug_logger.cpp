@@ -215,7 +215,7 @@ void DebugLogger::logConfigDump() {
     log(LEVEL_INFO, CAT_CONFIG, "=========================");
 }
 
-void DebugLogger::logSensorReading(uint8_t slot, uint32_t distance, bool motion, int8_t direction) {
+void DebugLogger::logSensorReading(uint8_t slot, uint8_t sensorType, uint32_t distance, bool motion, int8_t direction) {
     // This method now respects the current log level
     // Only logs if VERBOSE level is enabled
     if (m_level > LEVEL_VERBOSE) {
@@ -227,12 +227,19 @@ void DebugLogger::logSensorReading(uint8_t slot, uint32_t distance, bool motion,
     else if (direction == 1) dirStr = "RECEDING";
     else if (direction == 2) dirStr = "STATIONARY";
 
-    log(LEVEL_VERBOSE, CAT_SENSOR,
-        "Slot %u: dist=%u mm, motion=%s, dir=%s",
-        slot, distance, motion ? "YES" : "NO", dirStr);
+    // Format output based on sensor type
+    if (sensorType == 1) {  // SENSOR_TYPE_PIR
+        log(LEVEL_VERBOSE, CAT_SENSOR,
+            "Slot %u: PIR=%s, motion=%s, dir=%s",
+            slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr);
+    } else {
+        log(LEVEL_VERBOSE, CAT_SENSOR,
+            "Slot %u: dist=%u mm, motion=%s, dir=%s",
+            slot, distance, motion ? "YES" : "NO", dirStr);
+    }
 }
 
-void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint32_t distance, bool motion, int8_t direction) {
+void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint8_t sensorType, uint32_t distance, bool motion, int8_t direction) {
     // Only log at VERBOSE level
     if (m_level > LEVEL_VERBOSE) {
         return;  // Don't log if level is higher than VERBOSE
@@ -266,9 +273,15 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint32_t distance, boo
         else if (direction == 2) dirStr = "APPROACHING";
         else if (direction == 3) dirStr = "RECEDING";
 
-        log(LEVEL_VERBOSE, CAT_SENSOR,
-            "Slot %u: dist=%u mm, motion=%s, dir=%s [INITIAL]",
-            slot, distance, motion ? "YES" : "NO", dirStr);
+        if (sensorType == 1) {  // SENSOR_TYPE_PIR
+            log(LEVEL_VERBOSE, CAT_SENSOR,
+                "Slot %u: PIR=%s, motion=%s, dir=%s [INITIAL]",
+                slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr);
+        } else {
+            log(LEVEL_VERBOSE, CAT_SENSOR,
+                "Slot %u: dist=%u mm, motion=%s, dir=%s [INITIAL]",
+                slot, distance, motion ? "YES" : "NO", dirStr);
+        }
         return;
     }
 
@@ -320,9 +333,15 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint32_t distance, boo
                           "dir %s->%s", oldDir, dirStr);
         }
 
-        log(LEVEL_VERBOSE, CAT_SENSOR,
-            "Slot %u: dist=%u mm, motion=%s, dir=%s [CHANGED: %s]",
-            slot, distance, motion ? "YES" : "NO", dirStr, changeDesc);
+        if (sensorType == 1) {  // SENSOR_TYPE_PIR
+            log(LEVEL_VERBOSE, CAT_SENSOR,
+                "Slot %u: PIR=%s, motion=%s, dir=%s [CHANGED: %s]",
+                slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr, changeDesc);
+        } else {
+            log(LEVEL_VERBOSE, CAT_SENSOR,
+                "Slot %u: dist=%u mm, motion=%s, dir=%s [CHANGED: %s]",
+                slot, distance, motion ? "YES" : "NO", dirStr, changeDesc);
+        }
 
         // Update state
         state.lastDistance = distance;
@@ -349,10 +368,17 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint32_t distance, boo
 
         if (shouldLogSummary) {
             uint32_t timeSinceLastLog = now - state.lastLogTime;
-            log(LEVEL_VERBOSE, CAT_SENSOR,
-                "Slot %u: No change (%u readings over %u ms) - dist=%u mm, motion=%s",
-                slot, state.unchangedCount, timeSinceLastLog,
-                distance, motion ? "YES" : "NO");
+            if (sensorType == 1) {  // SENSOR_TYPE_PIR
+                log(LEVEL_VERBOSE, CAT_SENSOR,
+                    "Slot %u: No change (%u readings over %u ms) - PIR=%s, motion=%s",
+                    slot, state.unchangedCount, timeSinceLastLog,
+                    motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO");
+            } else {
+                log(LEVEL_VERBOSE, CAT_SENSOR,
+                    "Slot %u: No change (%u readings over %u ms) - dist=%u mm, motion=%s",
+                    slot, state.unchangedCount, timeSinceLastLog,
+                    distance, motion ? "YES" : "NO");
+            }
 
             state.unchangedCount = 0;
             state.lastLogTime = now;

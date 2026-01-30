@@ -41,6 +41,7 @@ public:
         uint16_t directionSensitivity;    // Direction change threshold (mm), 0 = auto (adaptive threshold)
         uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
+        uint8_t distanceZone;             // PIR distance zone: 0=Auto, 1=Near (0.5-4m), 2=Far (3-12m)
     };
 
     /**
@@ -204,6 +205,16 @@ public:
      * @return true if no corrections were needed, false if corrections were made
      */
     bool validateAndCorrect();
+
+    /**
+     * @brief Auto-configure direction detector based on sensor distance zones
+     *
+     * Scans all PIR sensors for distance zone settings (Near/Far).
+     * If one sensor is configured as Near and another as Far, automatically
+     * enables dual-PIR direction detection and configures the sensor slots.
+     * Otherwise, disables direction detection.
+     */
+    void autoConfigureDirectionDetector();
 
     /**
      * @brief Get current configuration

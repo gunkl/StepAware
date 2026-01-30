@@ -112,8 +112,8 @@ public:
      * @brief Special logging for detailed diagnostics
      */
     void logConfigDump();  // Dump entire config at boot
-    void logSensorReading(uint8_t slot, uint32_t distance, bool motion, int8_t direction);
-    void logSensorReadingIfChanged(uint8_t slot, uint32_t distance, bool motion, int8_t direction);
+    void logSensorReading(uint8_t slot, uint8_t sensorType, uint32_t distance, bool motion, int8_t direction);
+    void logSensorReadingIfChanged(uint8_t slot, uint8_t sensorType, uint32_t distance, bool motion, int8_t direction);
     void logStateTransition(const char* from, const char* to, const char* reason);
     void logLEDChange(const char* state, uint8_t brightness);
 
