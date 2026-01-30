@@ -2,6 +2,9 @@
 #include "sensor_types.h"
 #include "wifi_manager.h"
 #include <cstring>
+#if !MOCK_HARDWARE
+#include <LittleFS.h>
+#endif
 
 // External WiFi manager reference (defined in main.cpp)
 extern WiFiManager wifiManager;
@@ -159,6 +162,9 @@ void SerialConfigUI::executeCommand(const char* cmd, size_t argc, char** argv) {
     else if (strcmp(cmdLower, "reboot") == 0) {
         cmdReboot();
     }
+    else if (strcmp(cmdLower, "format") == 0) {
+        cmdFormat();
+    }
     else if (strcmp(cmdLower, "status") == 0) {
         cmdStatus();
     }
@@ -214,6 +220,7 @@ void SerialConfigUI::cmdHelp() {
     Serial.println("  save              Save all settings to flash");
     Serial.println("  load              Reload settings from flash");
     Serial.println("  reset             Reset to factory defaults");
+    Serial.println("  format            Format LittleFS (erases all data)");
     Serial.println("  reboot            Reboot the device");
     Serial.println();
     Serial.println("WiFi (auto-saves to flash):");
@@ -318,6 +325,71 @@ void SerialConfigUI::cmdReboot() {
     Serial.println("Rebooting device in 2 seconds...");
     delay(2000);
     ESP.restart();
+}
+
+void SerialConfigUI::cmdFormat() {
+#if !MOCK_HARDWARE
+    Serial.println("\n========================================");
+    Serial.println("FORMAT LITTLEFS FILESYSTEM");
+    Serial.println("========================================");
+    Serial.println("WARNING: This will erase ALL stored data:");
+    Serial.println("  - Configuration files");
+    Serial.println("  - Log files");
+    Serial.println("  - User uploaded content");
+    Serial.println("\nType 'yes' to confirm, or anything else to cancel:");
+
+    // Wait for user input
+    unsigned long timeout = millis() + 30000;  // 30 second timeout
+    String response = "";
+
+    while (millis() < timeout) {
+        if (Serial.available()) {
+            char c = Serial.read();
+            if (c == '\n' || c == '\r') {
+                if (response.length() > 0) break;
+            } else {
+                response += c;
+            }
+        }
+        delay(10);
+    }
+
+    response.trim();
+    response.toLowerCase();
+
+    if (response != "yes") {
+        Serial.println("Format cancelled");
+        return;
+    }
+
+    Serial.println("\nFormatting LittleFS (this may take 30-60 seconds)...");
+
+    // Unmount first
+    LittleFS.end();
+
+    // Format
+    if (LittleFS.format()) {
+        Serial.println("✓ Format complete");
+
+        // Remount
+        Serial.println("Mounting filesystem...");
+        if (LittleFS.begin(false)) {
+            Serial.println("✓ Filesystem mounted successfully");
+            Serial.println("\nYou should now:");
+            Serial.println("  1. Use 'reset' to restore factory defaults");
+            Serial.println("  2. Use 'save' to write configuration");
+            Serial.println("  3. Use 'reboot' to restart device");
+        } else {
+            Serial.println("✗ Failed to mount after format");
+            Serial.println("Device may need a reboot");
+        }
+    } else {
+        Serial.println("✗ Format failed!");
+        Serial.println("Try rebooting the device and format again");
+    }
+#else
+    Serial.println("Format command not available in mock mode");
+#endif
 }
 
 void SerialConfigUI::cmdStatus() {

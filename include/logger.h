@@ -25,6 +25,7 @@ public:
      * @brief Log entry structure
      */
     struct LogEntry {
+        uint32_t sequenceNumber;   // Global sequence number across all logs
         uint32_t timestamp;        // millis() when logged
         uint8_t level;             // Log level
         char message[128];         // Log message
@@ -191,6 +192,7 @@ private:
     uint32_t m_bufferHead;                  ///< Write index
     uint32_t m_bufferTail;                  ///< Read index (oldest)
     uint32_t m_totalEntries;                ///< Total entries ever logged
+    uint32_t m_sequenceCounter;             ///< Tracks global sequence across all logs
 
     // File logging
     uint32_t m_lastFlushTime;               ///< Last flush time (millis)

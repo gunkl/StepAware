@@ -6,16 +6,25 @@
 #include "hal_ultrasonic.h"
 #include "hal_ultrasonic_grove.h"
 #include "sensor_manager.h"
+#include "direction_detector.h"
 #include "debug_logger.h"
+#include "ota_manager.h"
 #include <ArduinoJson.h>
 #include <map>
 #if !MOCK_HARDWARE
 #include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
+#include <esp_core_dump.h>
+#include <esp_partition.h>
 #endif
 
 // Static map to track request buffers for chunked POST body handling
 // Using std::map instead of request->_tempObject to avoid heap corruption
 static std::map<AsyncWebServerRequest*, char*> s_requestBuffers;
+
+// Static buffer for HTML dashboard (single-user device)
+static String g_htmlResponseBuffer;
+static unsigned long g_lastHTMLBuildTime = 0;
+static bool g_htmlResponseInProgress = false;
 
 // Helper functions for request buffer management
 static char* allocateRequestBuffer(AsyncWebServerRequest* request, size_t size) {
@@ -51,11 +60,19 @@ WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager
     , m_ledMatrix(nullptr)
     , m_sensorManager(nullptr)
     , m_directionDetector(nullptr)
+    , m_otaManager(nullptr)
     , m_corsEnabled(true)
+    , m_logWebSocket(nullptr)
+    , m_maxWebSocketClients(3)
 {
 }
 
 WebAPI::~WebAPI() {
+    // Clean up OTA manager
+    if (m_otaManager) {
+        delete m_otaManager;
+        m_otaManager = nullptr;
+    }
 }
 
 bool WebAPI::begin() {
@@ -72,6 +89,11 @@ bool WebAPI::begin() {
     // is simpler to deploy (no filesystem upload required).
     m_server->on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
         this->handleRoot(req);
+    });
+
+    // Live logs popup window
+    m_server->on("/live-logs", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleLiveLogs(req);
     });
 
     // GET endpoints
@@ -389,12 +411,63 @@ bool WebAPI::begin() {
         this->handleOptions(req);
     });
 
+    // OTA (Over-The-Air) firmware update endpoints
+    // Initialize OTA Manager
+    m_otaManager = new OTAManager();
+    if (m_otaManager) {
+        m_otaManager->begin();
+    }
+
+    // OTA upload endpoint (chunked file upload handler)
+    m_server->on("/api/ota/upload", HTTP_POST,
+        [](AsyncWebServerRequest* req) {},
+        [this](AsyncWebServerRequest* req, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
+            this->handleOTAUpload(req, filename, index, data, len, final);
+        },
+        nullptr
+    );
+
+    // OTA status endpoint
+    m_server->on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetOTAStatus(req);
+    });
+
+    // Coredump download endpoint
+    m_server->on("/api/ota/coredump", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetCoredump(req);
+    });
+
+    // Coredump clear endpoint
+    m_server->on("/api/ota/coredump", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        this->handleClearCoredump(req);
+    });
+
+    // OPTIONS for OTA endpoints
+    m_server->on("/api/ota/upload", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/ota/status", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+    m_server->on("/api/ota/coredump", HTTP_OPTIONS, [this](AsyncWebServerRequest* req) {
+        this->handleOptions(req);
+    });
+
     // Add catch-all handler for debugging unmatched routes
     m_server->onNotFound([](AsyncWebServerRequest *request) {
         DEBUG_LOG_API("WebAPI: Unmatched request - Method: %s, URL: %s",
                  request->methodToString(), request->url().c_str());
         request->send(404, "text/plain", "Not Found: " + request->url());
     });
+
+    // Create WebSocket for log streaming
+    m_logWebSocket = new AsyncWebSocket("/ws/logs");
+    m_logWebSocket->onEvent([this](AsyncWebSocket* s, AsyncWebSocketClient* c,
+                                    AwsEventType t, void* a, uint8_t* d, size_t l) {
+        this->handleLogWebSocketEvent(s, c, t, a, d, l);
+    });
+    m_server->addHandler(m_logWebSocket);
+    DEBUG_LOG_API("WebSocket /ws/logs registered");
 
     DEBUG_LOG_API("WebAPI: ✓ Endpoints registered");
     return true;
@@ -1831,6 +1904,214 @@ void WebAPI::handleGetVersion(AsyncWebServerRequest* request) {
     sendJSON(request, 200, json.c_str());
 }
 
+void WebAPI::handleOTAUpload(AsyncWebServerRequest* request, const String& filename,
+                             size_t index, uint8_t* data, size_t len, bool final) {
+    // Check if OTA manager is available
+    if (!m_otaManager) {
+        if (final) {
+            sendError(request, 503, "OTA Manager not available");
+        }
+        return;
+    }
+
+    // First chunk - start upload
+    if (index == 0) {
+        size_t totalSize = request->contentLength();
+        LOG_INFO("OTA: Starting firmware upload - size: %u bytes", totalSize);
+
+        if (!m_otaManager->handleUploadStart(totalSize)) {
+            OTAManager::Status status = m_otaManager->getStatus();
+            LOG_ERROR("OTA: Upload start failed - %s", status.errorMessage);
+            if (final) {
+                sendError(request, 400, status.errorMessage);
+            }
+            return;
+        }
+    }
+
+    // Write chunk
+    if (len > 0) {
+        if (!m_otaManager->handleUploadChunk(data, len)) {
+            OTAManager::Status status = m_otaManager->getStatus();
+            LOG_ERROR("OTA: Chunk write failed - %s", status.errorMessage);
+            if (final) {
+                sendError(request, 500, status.errorMessage);
+            }
+            return;
+        }
+    }
+
+    // Final chunk - complete upload
+    if (final) {
+        if (m_otaManager->handleUploadComplete()) {
+            LOG_INFO("OTA: Firmware upload completed successfully");
+
+            StaticJsonDocument<256> doc;
+            doc["success"] = true;
+            doc["message"] = "Firmware uploaded successfully. Rebooting...";
+            doc["bytesWritten"] = m_otaManager->getStatus().bytesWritten;
+
+            String json;
+            serializeJson(doc, json);
+            sendJSON(request, 200, json.c_str());
+
+            // Reboot after a short delay to allow response to be sent
+            LOG_INFO("OTA: Rebooting in 2 seconds to apply new firmware...");
+            delay(2000);
+            ESP.restart();
+        } else {
+            OTAManager::Status status = m_otaManager->getStatus();
+            LOG_ERROR("OTA: Upload completion failed - %s", status.errorMessage);
+            sendError(request, 500, status.errorMessage);
+        }
+    }
+}
+
+void WebAPI::handleGetOTAStatus(AsyncWebServerRequest* request) {
+    if (!m_otaManager) {
+        sendError(request, 503, "OTA Manager not available");
+        return;
+    }
+
+    OTAManager::Status status = m_otaManager->getStatus();
+    StaticJsonDocument<512> doc;
+
+    doc["inProgress"] = status.inProgress;
+    doc["bytesWritten"] = status.bytesWritten;
+    doc["totalSize"] = status.totalSize;
+    doc["progressPercent"] = status.progressPercent;
+    doc["errorMessage"] = status.errorMessage;
+    doc["maxFirmwareSize"] = m_otaManager->getMaxFirmwareSize();
+    doc["currentPartition"] = m_otaManager->getCurrentPartition();
+    doc["currentVersion"] = FIRMWARE_VERSION;
+
+    String json;
+    serializeJson(doc, json);
+
+    sendJSON(request, 200, json.c_str());
+}
+
+void WebAPI::handleGetCoredump(AsyncWebServerRequest* request) {
+#if !MOCK_HARDWARE
+    LOG_INFO("Coredump download requested");
+
+    // Check if coredump exists
+    esp_err_t err = esp_core_dump_image_check();
+    if (err != ESP_OK) {
+        LOG_WARN("No coredump found or coredump corrupted (error: %d)", err);
+        sendError(request, 404, "No core dump available");
+        return;
+    }
+
+    // Get coredump address and size
+    size_t coredump_addr = 0;
+    size_t coredump_size = 0;
+    err = esp_core_dump_image_get(&coredump_addr, &coredump_size);
+    if (err != ESP_OK || coredump_size == 0) {
+        LOG_ERROR("Failed to get coredump info (error: %d)", err);
+        sendError(request, 500, "Failed to read core dump info");
+        return;
+    }
+
+    LOG_INFO("Coredump found: addr=0x%x, size=%u bytes", coredump_addr, coredump_size);
+
+    // Find coredump partition to read data
+    const esp_partition_t* coredump_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_DATA_COREDUMP,
+        NULL
+    );
+
+    if (coredump_partition == NULL) {
+        LOG_ERROR("Coredump partition not found");
+        sendError(request, 500, "Core dump partition not found");
+        return;
+    }
+
+    // Allocate buffer for coredump
+    uint8_t* buffer = (uint8_t*)malloc(coredump_size);
+    if (!buffer) {
+        LOG_ERROR("Failed to allocate %u bytes for coredump", coredump_size);
+        sendError(request, 500, "Insufficient memory");
+        return;
+    }
+
+    // Read coredump data from partition
+    err = esp_partition_read(coredump_partition, 0, buffer, coredump_size);
+    if (err != ESP_OK) {
+        LOG_ERROR("Failed to read coredump data (error: %d)", err);
+        free(buffer);
+        sendError(request, 500, "Failed to read core dump data");
+        return;
+    }
+
+    LOG_INFO("Coredump read successfully, sending to client...");
+
+    // Send coredump as binary download
+    AsyncWebServerResponse* response = request->beginResponse(
+        "application/octet-stream",
+        coredump_size,
+        [buffer, coredump_size](uint8_t *dest, size_t maxLen, size_t index) -> size_t {
+            if (index >= coredump_size) {
+                free((void*)buffer);  // Free when done
+                return 0;
+            }
+
+            size_t remaining = coredump_size - index;
+            size_t toSend = (remaining < maxLen) ? remaining : maxLen;
+            memcpy(dest, buffer + index, toSend);
+            return toSend;
+        }
+    );
+
+    response->addHeader("Content-Disposition", "attachment; filename=coredump.elf");
+    request->send(response);
+
+    LOG_INFO("Coredump download started");
+#else
+    sendError(request, 501, "Coredump not available in mock mode");
+#endif
+}
+
+void WebAPI::handleClearCoredump(AsyncWebServerRequest* request) {
+#if !MOCK_HARDWARE
+    LOG_INFO("Coredump clear requested");
+
+    // Find coredump partition
+    const esp_partition_t* coredump_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_DATA_COREDUMP,
+        NULL
+    );
+
+    if (coredump_partition == NULL) {
+        LOG_ERROR("Coredump partition not found");
+        sendError(request, 404, "Core dump partition not found");
+        return;
+    }
+
+    // Erase coredump partition
+    esp_err_t err = esp_partition_erase_range(coredump_partition, 0, coredump_partition->size);
+    if (err != ESP_OK) {
+        LOG_ERROR("Failed to erase coredump partition (error: %d)", err);
+        sendError(request, 500, "Failed to clear core dump");
+        return;
+    }
+
+    LOG_INFO("Coredump partition cleared successfully");
+
+    StaticJsonDocument<128> doc;
+    doc["success"] = true;
+    doc["message"] = "Core dump cleared";
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+#else
+    sendError(request, 501, "Coredump not available in mock mode");
+#endif
+}
+
 void WebAPI::handleOptions(AsyncWebServerRequest* request) {
     AsyncWebServerResponse* response = request->beginResponse(200);
     if (m_corsEnabled) {
@@ -1863,19 +2144,123 @@ void WebAPI::sendError(AsyncWebServerRequest* request, int code, const char* mes
 }
 
 void WebAPI::handleRoot(AsyncWebServerRequest* request) {
-    // Serve inline HTML dashboard
+    unsigned long now = millis();
+
+    // Check if a response is in progress (with 3 second timeout for safety)
+    if (g_htmlResponseInProgress && (now - g_lastHTMLBuildTime) < 3000) {
+        LOG_WARN("Dashboard request rejected - response in progress");
+        request->send(503, "text/plain", "Dashboard busy, please retry");
+        return;
+    }
+
+    // Mark response as in progress
+    g_htmlResponseInProgress = true;
+    g_lastHTMLBuildTime = now;
+
+    // Build HTML only if not already cached
     // Note: We use inline HTML instead of filesystem-based UI because:
     // 1. All features are implemented (multi-sensor, LED matrix, animations)
     // 2. Simpler deployment (no filesystem upload step)
     // 3. No LittleFS mount/filesystem issues
     // 4. For single-developer embedded projects, reflashing is acceptable
-    String html = buildDashboardHTML();
+    if (g_htmlResponseBuffer.length() == 0 || !g_htmlResponseBuffer.endsWith("</html>")) {
+        LOG_INFO("Building dashboard HTML...");
+        g_htmlResponseBuffer = buildDashboardHTML();
+
+        // Verify build succeeded
+        if (g_htmlResponseBuffer.length() == 0 || !g_htmlResponseBuffer.endsWith("</html>")) {
+            LOG_ERROR("Dashboard HTML build failed - truncated or empty");
+            g_htmlResponseInProgress = false;
+            request->send(500, "text/plain", "Dashboard build failed - low memory");
+            return;
+        }
+
+        LOG_INFO("Dashboard HTML built: %u bytes, free heap: %u",
+                 g_htmlResponseBuffer.length(), ESP.getFreeHeap());
+    } else {
+        LOG_DEBUG("Using cached dashboard HTML (%u bytes)", g_htmlResponseBuffer.length());
+    }
+
+    size_t len = g_htmlResponseBuffer.length();
+    const char* htmlPtr = g_htmlResponseBuffer.c_str();
+
+    // Send using chunked response callback (reads directly from static buffer)
+    AsyncWebServerResponse *response = request->beginResponse(
+        "text/html", len,
+        [htmlPtr, len](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            if (index >= len) {
+                g_htmlResponseInProgress = false;  // Mark as complete
+                return 0;
+            }
+
+            size_t remaining = len - index;
+            size_t toSend = (remaining < maxLen) ? remaining : maxLen;
+            memcpy(buffer, htmlPtr + index, toSend);
+
+            return toSend;
+        }
+    );
+
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+
+    LOG_INFO("Dashboard HTML response started (chunked, %u bytes)", len);
+}
+
+void WebAPI::handleLiveLogs(AsyncWebServerRequest* request) {
+    // Simple live logs viewer in popup window
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1.0'>";
+    html += "<title>StepAware Live Logs</title><style>";
+    html += "body{font-family:monospace;margin:0;padding:10px;background:#1e1e1e;color:#d4d4d4;}";
+    html += "h1{font-size:16px;margin:0 0 10px 0;color:#fff;}";
+    html += "#status{padding:5px;background:#333;border-radius:3px;margin-bottom:10px;font-size:12px;}";
+    html += ".badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:bold;}";
+    html += ".badge-success{background:#28a745;color:white;}";
+    html += ".badge-error{background:#dc3545;color:white;}";
+    html += "#logs{height:calc(100vh - 80px);overflow-y:auto;background:#000;padding:10px;border:1px solid #444;}";
+    html += ".log{padding:2px 0;font-size:12px;line-height:1.4;}";
+    html += ".log-verbose{color:#808080;}.log-debug{color:#00d4ff;}.log-info{color:#d4d4d4;}";
+    html += ".log-warn{color:#ffa500;}.log-error{color:#ff4444;font-weight:bold;}";
+    html += "</style></head><body>";
+    html += "<h1>&#128680; StepAware Live Logs</h1>";
+    html += "<div id='status'><span class='badge badge-error' id='ws-badge'>Connecting...</span> ";
+    html += "<span id='count'>0 logs</span></div>";
+    html += "<div id='logs'></div>";
+    html += "<script>";
+    html += "let ws,count=0;";
+    html += "function connect(){";
+    html += "const proto=location.protocol==='https:'?'wss:':'ws:';";
+    html += "ws=new WebSocket(proto+'//'+location.host+'/ws/logs');";
+    html += "ws.onopen=()=>{document.getElementById('ws-badge').textContent='Connected';";
+    html += "document.getElementById('ws-badge').className='badge badge-success';};";
+    html += "ws.onmessage=(e)=>{const data=JSON.parse(e.data);";
+    html += "const div=document.createElement('div');";
+    html += "div.className='log log-'+data.levelName.toLowerCase().trim();";
+    html += "const ms=data.ts;const s=Math.floor(ms/1000);const m=Math.floor(s/60);const h=Math.floor(m/60);";
+    html += "const ts=String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+':'+String(s%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0');";
+    html += "div.textContent='['+ts+'] ['+data.levelName+'] '+data.msg;";
+    html += "document.getElementById('logs').appendChild(div);";
+    html += "count++;document.getElementById('count').textContent=count+' logs';";
+    html += "div.scrollIntoView();};";
+    html += "ws.onerror=()=>{document.getElementById('ws-badge').textContent='Error';";
+    html += "document.getElementById('ws-badge').className='badge badge-error';};";
+    html += "ws.onclose=()=>{document.getElementById('ws-badge').textContent='Disconnected';";
+    html += "document.getElementById('ws-badge').className='badge badge-error';setTimeout(connect,3000);};";
+    html += "}";
+    html += "connect();";
+    html += "</script></body></html>";
+
     request->send(200, "text/html", html);
 }
 
 String WebAPI::buildDashboardHTML() {
+    LOG_DEBUG("buildDashboardHTML() starting, free heap: %u", ESP.getFreeHeap());
     String html;
-    html.reserve(16384);  // Larger allocation for enhanced UI
+    // Reserve 60KB - conservative to avoid allocation failures on ESP32-C3
+    // Actual HTML is ~65KB, but String will auto-grow if needed
+    html.reserve(61440);
+    LOG_DEBUG("Reserved 60KB for HTML buffer");
 
     // HTML Head
     html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
@@ -1944,19 +2329,24 @@ String WebAPI::buildDashboardHTML() {
     html += ".form-help{font-size:0.85em;color:#6b7280;margin-top:4px;}";
     html += ".form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;}";
 
-    // Logs
-    html += "#log-viewer{background:#1e293b;color:#e2e8f0;padding:16px;border-radius:8px;font-family:monospace;";
-    html += "font-size:0.85em;height:800px;overflow-y:auto;line-height:1.6;resize:vertical;}";
-    html += ".log-entry{margin-bottom:4px;}";
+    // Logs - Real-time streaming viewer
+    html += ".log-viewer{font-family:'Courier New',monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;";
+    html += "padding:10px;height:400px;overflow-y:auto;border:1px solid #444;border-radius:4px;margin-top:10px;}";
+    html += ".log-entry{padding:2px 0;white-space:pre-wrap;word-wrap:break-word;font-size:11px;}";
     html += ".log-entry.hidden{display:none;}";
-    html += ".log-verbose{color:#94a3b8;}.log-debug{color:#a78bfa;}.log-info{color:#60a5fa;}.log-warn{color:#fbbf24;}.log-error{color:#f87171;}";
-    html += "#log-status{margin-bottom:12px;padding:8px;background:#f3f4f6;border-radius:6px;text-align:center;}";
-    html += ".log-controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}";
-    html += ".log-search{flex:1;min-width:200px;padding:8px;border:2px solid #e5e7eb;border-radius:6px;}";
-    html += ".log-filter-group{display:flex;gap:4px;}";
-    html += ".log-filter-btn{padding:6px 12px;border:2px solid #e5e7eb;background:white;border-radius:6px;cursor:pointer;font-size:0.85em;transition:all 0.2s;}";
-    html += ".log-filter-btn.active{background:#667eea;color:white;border-color:#667eea;}";
-    html += ".log-filter-btn:hover{border-color:#667eea;}";
+    html += ".log-verbose{color:#808080;}";
+    html += ".log-debug{color:#00d4ff;}";
+    html += ".log-info{color:#d4d4d4;}";
+    html += ".log-warn{color:#ffa500;}";
+    html += ".log-error{color:#ff4444;font-weight:bold;}";
+    html += ".log-header{margin-bottom:10px;display:flex;align-items:center;}";
+    html += ".log-controls{display:flex;align-items:center;margin-bottom:10px;}";
+    html += ".log-filter-buttons{display:inline-flex;gap:4px;}";
+    html += ".filter-btn{padding:4px 8px;border:1px solid #666;background:#333;color:#fff;cursor:pointer;";
+    html += "font-size:11px;border-radius:3px;}";
+    html += ".filter-btn.active{background:#007bff;border-color:#0056b3;}";
+    html += ".filter-btn:hover{background:#555;}";
+    html += ".filter-btn.active:hover{background:#0056b3;}";
 
     // Misc
     html += "#wifi-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}";
@@ -1999,7 +2389,8 @@ String WebAPI::buildDashboardHTML() {
     html += "<button class=\"tab active\" onclick=\"showTab('status')\">Status</button>";
     html += "<button class=\"tab\" onclick=\"showTab('hardware')\">Hardware</button>";
     html += "<button class=\"tab\" onclick=\"showTab('config')\">Configuration</button>";
-    html += "<button class=\"tab\" onclick=\"showTab('logs')\">Logs</button>";
+    html += "<button class=\"tab\" onclick=\"window.open('/live-logs','logs','width=900,height=600')\">Live Logs</button>";
+    html += "<button class=\"tab\" onclick=\"showTab('firmware')\">Firmware</button>";
     html += "</div>";
 
     // STATUS TAB
@@ -2212,6 +2603,33 @@ String WebAPI::buildDashboardHTML() {
     // LOGS TAB
     html += "<div id=\"logs-tab\" class=\"tab-content\">";
 
+    // Real-time System Logs Card
+    html += "<div class=\"card\"><h2>System Logs</h2>";
+    html += "<div class=\"log-header\">";
+    html += "<span id=\"ws-status\" class=\"badge badge-info\">Connecting...</span>";
+    html += "<label style=\"margin-left:10px;\">";
+    html += "<input type=\"checkbox\" id=\"auto-scroll\" checked> Auto-scroll";
+    html += "</label>";
+    html += "<label style=\"margin-left:10px;\">";
+    html += "<input type=\"checkbox\" id=\"show-debug-logs\" onchange=\"toggleDebugLogs()\">";
+    html += " Include debug logs (file-based)";
+    html += "</label>";
+    html += "</div>";
+    html += "<div class=\"log-controls\">";
+    html += "<input type=\"text\" id=\"log-search\" placeholder=\"Search logs...\" ";
+    html += "onkeyup=\"filterLogs()\" style=\"width:200px;margin-right:10px;\">";
+    html += "<div class=\"log-filter-buttons\">";
+    html += "<button class=\"filter-btn active\" data-level=\"0\" onclick=\"toggleLevelFilter(this)\">VERBOSE</button>";
+    html += "<button class=\"filter-btn active\" data-level=\"1\" onclick=\"toggleLevelFilter(this)\">DEBUG</button>";
+    html += "<button class=\"filter-btn active\" data-level=\"2\" onclick=\"toggleLevelFilter(this)\">INFO</button>";
+    html += "<button class=\"filter-btn active\" data-level=\"3\" onclick=\"toggleLevelFilter(this)\">WARN</button>";
+    html += "<button class=\"filter-btn active\" data-level=\"4\" onclick=\"toggleLevelFilter(this)\">ERROR</button>";
+    html += "</div>";
+    html += "<button class=\"btn btn-sm\" onclick=\"clearLogViewer()\" style=\"margin-left:10px;\">Clear Display</button>";
+    html += "</div>";
+    html += "<div id=\"log-viewer\" class=\"log-viewer\"></div>";
+    html += "</div>";
+
     // Boot Information Card
     html += "<div class=\"card\"><h2>Boot Information</h2>";
     html += "<div id=\"bootInfo\">";
@@ -2241,6 +2659,44 @@ String WebAPI::buildDashboardHTML() {
     html += "<p><strong>Size:</strong> <span id=\"selectedLogSize\">-</span> bytes (<span id=\"selectedLogSizeKB\">-</span> KB)</p>";
     html += "<p><strong>Path:</strong> <span id=\"selectedLogPath\">-</span></p>";
     html += "</div></div></div>";
+
+    // FIRMWARE TAB
+    html += "<div id=\"firmware-tab\" class=\"tab-content\">";
+    html += "<div class=\"card\"><h2>Firmware Update (OTA)</h2>";
+
+    html += "<div class=\"form-group\">";
+    html += "<label class=\"form-label\">Current Version:</label>";
+    html += "<div id=\"current-version\" style=\"font-weight:600;font-size:1.1em;color:#333;margin-bottom:4px;\">Loading...</div>";
+    html += "<div id=\"current-partition\" style=\"font-size:0.9em;color:#6b7280;\">Partition: --</div>";
+    html += "<div id=\"max-firmware-size\" style=\"font-size:0.9em;color:#6b7280;margin-top:4px;\">Max size: --</div>";
+    html += "</div>";
+
+    html += "<div class=\"form-group\" style=\"margin-top:24px;\">";
+    html += "<label class=\"form-label\">Upload New Firmware (.bin):</label>";
+    html += "<input type=\"file\" id=\"firmware-file\" accept=\".bin\" onchange=\"validateFirmware()\" class=\"form-input\" style=\"padding:8px;\">";
+    html += "<div class=\"form-help\">Select ESP32-C3 firmware binary file</div>";
+    html += "</div>";
+
+    html += "<div id=\"upload-progress\" style=\"display:none;margin-top:16px;\">";
+    html += "<progress id=\"upload-bar\" max=\"100\" value=\"0\" style=\"width:100%;height:30px;\"></progress>";
+    html += "<div id=\"upload-status\" style=\"text-align:center;margin-top:8px;font-weight:600;color:#667eea;\">Uploading... 0%</div>";
+    html += "</div>";
+
+    html += "<button id=\"upload-btn\" class=\"btn btn-warning\" onclick=\"uploadFirmware()\" disabled style=\"margin-top:16px;width:100%;max-width:300px;\">";
+    html += "Upload Firmware";
+    html += "</button>";
+
+    html += "<div style=\"margin-top:24px;padding:16px;background:#fef3c7;border-left:4px solid #f59e0b;border-radius:6px;\">";
+    html += "<div style=\"font-weight:600;color:#92400e;margin-bottom:8px;\">&#9888; Warning</div>";
+    html += "<ul style=\"margin:0;padding-left:20px;color:#92400e;font-size:0.9em;\">";
+    html += "<li>Device will reboot automatically after upload</li>";
+    html += "<li>Ensure stable power supply during update</li>";
+    html += "<li>Do not interrupt the upload process</li>";
+    html += "<li>Web interface will be unavailable for ~30 seconds</li>";
+    html += "</ul>";
+    html += "</div>";
+
+    html += "</div></div>"; // End firmware tab
 
     html += "</div>"; // End container
 
@@ -3070,6 +3526,166 @@ String WebAPI::buildDashboardHTML() {
     html += "if(idx>=0&&idx<functions.length){";
     html += "assignAnimation(functions[idx],'custom',name);}}";
 
+    // Firmware OTA Functions
+    html += "function validateFirmware(){";
+    html += "const file=document.getElementById('firmware-file').files[0];";
+    html += "const btn=document.getElementById('upload-btn');";
+    html += "if(!file){btn.disabled=true;return;}";
+    html += "if(file.size<100000){alert('File too small - not a valid firmware');btn.disabled=true;return;}";
+    html += "if(file.size>2000000){alert('File too large - exceeds 2MB limit');btn.disabled=true;return;}";
+    html += "btn.disabled=false;}";
+
+    html += "function uploadFirmware(){";
+    html += "const file=document.getElementById('firmware-file').files[0];";
+    html += "if(!file){alert('Please select a firmware file');return;}";
+    html += "if(!confirm('Upload firmware and reboot device?\\n\\nThis will restart the device.'))return;";
+    html += "const formData=new FormData();";
+    html += "formData.append('firmware',file);";
+    html += "const xhr=new XMLHttpRequest();";
+    html += "const progressDiv=document.getElementById('upload-progress');";
+    html += "const progressBar=document.getElementById('upload-bar');";
+    html += "const statusDiv=document.getElementById('upload-status');";
+    html += "const uploadBtn=document.getElementById('upload-btn');";
+    html += "progressDiv.style.display='block';";
+    html += "uploadBtn.disabled=true;";
+    html += "xhr.upload.addEventListener('progress',(e)=>{";
+    html += "if(e.lengthComputable){";
+    html += "const percent=Math.round((e.loaded/e.total)*100);";
+    html += "progressBar.value=percent;";
+    html += "statusDiv.textContent='Uploading... '+percent+'%';}});";
+    html += "xhr.addEventListener('load',()=>{";
+    html += "if(xhr.status===200){";
+    html += "statusDiv.textContent='Success! Device rebooting...';";
+    html += "statusDiv.style.color='#10b981';";
+    html += "setTimeout(()=>{";
+    html += "alert('Firmware updated. Device is rebooting.\\nReconnect in 30 seconds.');";
+    html += "window.location.reload();},3000);}";
+    html += "else{";
+    html += "statusDiv.textContent='Failed: '+xhr.responseText;";
+    html += "statusDiv.style.color='#ef4444';";
+    html += "uploadBtn.disabled=false;}});";
+    html += "xhr.addEventListener('error',()=>{";
+    html += "statusDiv.textContent='Upload error - check connection';";
+    html += "statusDiv.style.color='#ef4444';";
+    html += "uploadBtn.disabled=false;});";
+    html += "xhr.open('POST','/api/ota/upload');";
+    html += "xhr.send(formData);}";
+
+    html += "fetch('/api/ota/status')";
+    html += ".then(r=>r.json())";
+    html += ".then(data=>{";
+    html += "const versionElem=document.getElementById('current-version');";
+    html += "const partitionElem=document.getElementById('current-partition');";
+    html += "const maxSizeElem=document.getElementById('max-firmware-size');";
+    html += "if(versionElem)versionElem.textContent=data.currentVersion||'Unknown';";
+    html += "if(partitionElem)partitionElem.textContent='Partition: '+data.currentPartition;";
+    html += "if(maxSizeElem)maxSizeElem.textContent='Max size: '+(data.maxFirmwareSize/1024).toFixed(0)+' KB';})";
+    html += ".catch(e=>console.error('Failed to load OTA status:',e));";
+
+    // Log streaming variables
+    html += "let logSocket=null;";
+    html += "let autoScroll=true;";
+    html += "let activeFilters=new Set([0,1,2,3,4]);";
+    html += "let lastSequence=0;";
+    html += "let showDebugLogs=false;";
+
+    // Connect to log streaming WebSocket
+    html += "function connectLogStream(){";
+    html += "const protocol=window.location.protocol==='https:'?'wss:':'ws:';";
+    html += "const wsUrl=protocol+'//'+window.location.host+'/ws/logs';";
+    html += "logSocket=new WebSocket(wsUrl);";
+    html += "logSocket.onopen=function(){";
+    html += "document.getElementById('ws-status').textContent='\\u25CF Connected';";
+    html += "document.getElementById('ws-status').className='badge badge-success';};";
+    html += "logSocket.onmessage=function(event){";
+    html += "const entry=JSON.parse(event.data);appendLogEntry(entry);};";
+    html += "logSocket.onerror=function(){";
+    html += "document.getElementById('ws-status').textContent='\\u25CF Error';";
+    html += "document.getElementById('ws-status').className='badge badge-error';};";
+    html += "logSocket.onclose=function(){";
+    html += "document.getElementById('ws-status').textContent='\\u25CF Disconnected';";
+    html += "document.getElementById('ws-status').className='badge badge-warning';";
+    html += "setTimeout(connectLogStream,3000);};};";
+
+    // Append log entry to viewer
+    html += "function appendLogEntry(entry){";
+    html += "if(lastSequence>0&&entry.seq>lastSequence+1){";
+    html += "const missed=entry.seq-lastSequence-1;";
+    html += "const warningDiv=document.createElement('div');";
+    html += "warningDiv.className='log-entry log-warn';";
+    html += "warningDiv.textContent='\\u26A0\\uFE0F Missed '+missed+' log entries (connection lag)';";
+    html += "document.getElementById('log-viewer').appendChild(warningDiv);}";
+    html += "lastSequence=entry.seq;";
+    html += "const viewer=document.getElementById('log-viewer');";
+    html += "const div=document.createElement('div');";
+    html += "div.className='log-entry log-'+entry.levelName.toLowerCase();";
+    html += "div.dataset.level=entry.level;";
+    html += "div.dataset.seq=entry.seq;";
+    html += "div.dataset.source=entry.source||'logger';";
+    html += "const ts=formatTimestamp(entry.ts);";
+    html += "div.textContent='['+ts+'] ['+entry.levelName+'] '+entry.msg;";
+    html += "if(!activeFilters.has(entry.level))div.classList.add('hidden');";
+    html += "if(entry.source==='debuglog'&&!showDebugLogs)div.classList.add('hidden');";
+    html += "viewer.appendChild(div);";
+    html += "while(viewer.children.length>1000)viewer.removeChild(viewer.firstChild);";
+    html += "if(autoScroll)viewer.scrollTop=viewer.scrollHeight;};";
+
+    // Format timestamp
+    html += "function formatTimestamp(ms){";
+    html += "const sec=Math.floor(ms/1000);";
+    html += "const min=Math.floor(sec/60);";
+    html += "const hr=Math.floor(min/60);";
+    html += "const msec=ms%1000;";
+    html += "return pad(hr%24)+':'+pad(min%60)+':'+pad(sec%60)+'.'+pad(msec,3);};";
+
+    // Pad numbers with leading zeros
+    html += "function pad(n,len){";
+    html += "len=len||2;";
+    html += "return String(n).padStart(len,'0');};";
+
+    // Toggle level filter
+    html += "function toggleLevelFilter(btn){";
+    html += "const level=parseInt(btn.dataset.level);";
+    html += "if(activeFilters.has(level)){";
+    html += "activeFilters.delete(level);";
+    html += "btn.classList.remove('active');}else{";
+    html += "activeFilters.add(level);";
+    html += "btn.classList.add('active');}";
+    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
+    html += "const entryLevel=parseInt(entry.dataset.level);";
+    html += "if(activeFilters.has(entryLevel)){";
+    html += "entry.classList.remove('hidden');}else{";
+    html += "entry.classList.add('hidden');}});};";
+
+    // Filter logs by search text
+    html += "function filterLogs(){";
+    html += "const search=document.getElementById('log-search').value.toLowerCase();";
+    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
+    html += "const matches=entry.textContent.toLowerCase().includes(search);";
+    html += "const levelOk=activeFilters.has(parseInt(entry.dataset.level));";
+    html += "if(search===''){";
+    html += "if(levelOk)entry.style.display='block';";
+    html += "else entry.style.display='none';}else{";
+    html += "if(matches&&levelOk)entry.style.display='block';";
+    html += "else entry.style.display='none';}});};";
+
+    // Clear log viewer
+    html += "function clearLogViewer(){";
+    html += "document.getElementById('log-viewer').innerHTML='';";
+    html += "lastSequence=0;};";
+
+    // Toggle debug logs inclusion
+    html += "function toggleDebugLogs(){";
+    html += "showDebugLogs=document.getElementById('show-debug-logs').checked;";
+    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
+    html += "if(entry.dataset.source==='debuglog'){";
+    html += "if(showDebugLogs)entry.classList.remove('hidden');";
+    html += "else entry.classList.add('hidden');}});};";
+
+    // Auto-scroll checkbox handler
+    html += "document.getElementById('auto-scroll').addEventListener('change',function(e){";
+    html += "autoScroll=e.target.checked;});";
+
     // Auto-refresh status and logs
     html += "fetchStatus();";
     html += "setInterval(fetchStatus,2000);";
@@ -3077,7 +3693,19 @@ String WebAPI::buildDashboardHTML() {
     // Load animation assignments on page load
     html += "updateActiveAnimations();";
 
+    // Initialize WebSocket connection on page load
+    html += "window.addEventListener('load',function(){connectLogStream();});";
+
     html += "</script></body></html>";
+
+    LOG_DEBUG("buildDashboardHTML() complete: %u bytes, free heap: %u", html.length(), ESP.getFreeHeap());
+
+    // Verify HTML is complete
+    if (html.endsWith("</html>")) {
+        LOG_INFO("HTML is complete (ends with </html>)");
+    } else {
+        LOG_ERROR("HTML TRUNCATED! Last 20 chars: %s", html.substring(html.length()-20).c_str());
+    }
 
     return html;
 }
@@ -3227,5 +3855,88 @@ void WebAPI::handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data
         sendJSON(request, 200, "{\"success\":true,\"message\":\"Debug config updated\"}");
     } else {
         sendError(request, 400, "No valid fields to update");
+    }
+}
+
+// ============================================================================
+// WebSocket Support for Real-Time Log Streaming
+// ============================================================================
+
+void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
+                                      AsyncWebSocketClient* client,
+                                      AwsEventType type, void* arg,
+                                      uint8_t* data, size_t len) {
+    switch(type) {
+        case WS_EVT_CONNECT:
+            // Enforce connection limit
+            if (server->count() > m_maxWebSocketClients) {
+                client->close();
+                DEBUG_LOG_API("WebSocket client rejected (max %u)", m_maxWebSocketClients);
+                return;
+            }
+
+            DEBUG_LOG_API("WebSocket client #%u connected", client->id());
+
+            // Send last 50 log entries as catchup
+            {
+                uint32_t count = g_logger.getEntryCount();
+                uint32_t start = count > 50 ? count - 50 : 0;
+                for (uint32_t i = start; i < count; i++) {
+                    Logger::LogEntry entry;
+                    if (g_logger.getEntry(i, entry)) {
+                        client->text(formatLogEntryJSON(entry));
+                    }
+                }
+            }
+            break;
+
+        case WS_EVT_DISCONNECT:
+            DEBUG_LOG_API("WebSocket client #%u disconnected", client->id());
+            break;
+
+        case WS_EVT_DATA:
+            // Future: handle filter/control messages from client
+            break;
+
+        case WS_EVT_ERROR:
+            DEBUG_LOG_API("WebSocket client #%u error", client->id());
+            break;
+    }
+}
+
+String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry) {
+    StaticJsonDocument<256> doc;
+    doc["seq"] = entry.sequenceNumber;
+    doc["ts"] = entry.timestamp;
+    doc["level"] = entry.level;
+    doc["levelName"] = Logger::getLevelName((Logger::LogLevel)entry.level);
+    doc["msg"] = entry.message;
+    doc["source"] = "logger";
+
+    String json;
+    serializeJson(doc, json);
+    return json;
+}
+
+void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry) {
+    if (!m_logWebSocket) {
+        Serial.println("[WS] broadcastLogEntry: m_logWebSocket is NULL");
+        return;
+    }
+
+    int clientCount = m_logWebSocket->count();
+    if (clientCount == 0) {
+        return;  // No clients connected (normal, don't spam)
+    }
+
+    String json = formatLogEntryJSON(entry);
+    m_logWebSocket->textAll(json);
+
+    // Debug: confirm broadcast
+    static uint32_t lastDebugTime = 0;
+    if (millis() - lastDebugTime > 5000) {  // Only log every 5 seconds
+        Serial.printf("[WS] Broadcast to %d clients: seq=%u, msg=%s\n",
+                     clientCount, entry.sequenceNumber, entry.message);
+        lastDebugTime = millis();
     }
 }
