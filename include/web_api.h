@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
+#include <AsyncWebSocket.h>
 #include "config.h"
 #include "config_manager.h"
 #include "logger.h"
@@ -106,6 +107,13 @@ public:
      */
     void setCORSEnabled(bool enabled);
 
+    /**
+     * @brief Broadcast log entry to WebSocket clients
+     *
+     * @param entry Log entry to broadcast
+     */
+    void broadcastLogEntry(const Logger::LogEntry& entry);
+
 private:
     AsyncWebServer* m_server;                  ///< Web server instance
     StateMachine* m_stateMachine;              ///< State machine reference
@@ -116,7 +124,10 @@ private:
     class HAL_LEDMatrix_8x8* m_ledMatrix;      ///< LED Matrix reference (optional, Issue #12)
     class SensorManager* m_sensorManager;      ///< Sensor Manager reference (optional)
     class DirectionDetector* m_directionDetector; ///< Direction Detector reference (optional, dual-PIR)
+    class OTAManager* m_otaManager;            ///< OTA Manager reference (firmware updates)
     bool m_corsEnabled;                        ///< CORS enabled flag
+    AsyncWebSocket* m_logWebSocket;            ///< WebSocket for log streaming
+    uint32_t m_maxWebSocketClients;            ///< Maximum WebSocket clients (default: 3)
 
     // Endpoint handlers
 
@@ -265,6 +276,40 @@ private:
      */
     void handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
 
+    /**
+     * @brief POST /api/ota/upload - Upload firmware binary for OTA update
+     */
+    void handleOTAUpload(AsyncWebServerRequest* request, const String& filename,
+                         size_t index, uint8_t* data, size_t len, bool final);
+
+    /**
+     * @brief GET /api/ota/status - Get OTA upload status
+     */
+    void handleGetOTAStatus(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/ota/coredump - Download core dump file
+     */
+    void handleGetCoredump(AsyncWebServerRequest* request);
+
+    /**
+     * @brief DELETE /api/ota/coredump - Clear core dump partition
+     */
+    void handleClearCoredump(AsyncWebServerRequest* request);
+
+    /**
+     * @brief Handle WebSocket events for log streaming
+     */
+    void handleLogWebSocketEvent(AsyncWebSocket* server,
+                                  AsyncWebSocketClient* client,
+                                  AwsEventType type, void* arg,
+                                  uint8_t* data, size_t len);
+
+    /**
+     * @brief Format log entry as JSON
+     */
+    String formatLogEntryJSON(const Logger::LogEntry& entry);
+
     // Helper methods
 
     /**
@@ -289,6 +334,11 @@ private:
      * @brief Handle root dashboard page
      */
     void handleRoot(AsyncWebServerRequest* request);
+
+    /**
+     * @brief Handle live logs popup window
+     */
+    void handleLiveLogs(AsyncWebServerRequest* request);
 
     /**
      * @brief Build dashboard HTML
