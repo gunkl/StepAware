@@ -204,6 +204,9 @@ private:
     // Statistics
     uint32_t m_motionEventCount;    ///< Total motion events detected
 
+    // Timing instrumentation (debug)
+    uint32_t m_lastRisingEdgeMicros; ///< Microsecond timestamp of rising edge
+
     // Mock mode state
     uint32_t m_mockMotionEndTime;   ///< When mock motion should end
 

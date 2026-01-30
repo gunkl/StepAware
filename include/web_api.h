@@ -111,8 +111,9 @@ public:
      * @brief Broadcast log entry to WebSocket clients
      *
      * @param entry Log entry to broadcast
+     * @param source Optional source identifier (defaults to "logger")
      */
-    void broadcastLogEntry(const Logger::LogEntry& entry);
+    void broadcastLogEntry(const Logger::LogEntry& entry, const char* source = "logger");
 
 private:
     AsyncWebServer* m_server;                  ///< Web server instance
@@ -307,8 +308,11 @@ private:
 
     /**
      * @brief Format log entry as JSON
+     *
+     * @param entry Log entry to format
+     * @param source Source identifier (defaults to "logger")
      */
-    String formatLogEntryJSON(const Logger::LogEntry& entry);
+    String formatLogEntryJSON(const Logger::LogEntry& entry, const char* source = "logger");
 
     // Helper methods
 

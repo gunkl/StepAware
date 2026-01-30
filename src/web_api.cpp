@@ -686,11 +686,16 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
 
     freeRequestBuffer(request);
 
-    // Apply log level from config to debug logger
+    // Apply log level from config to both loggers
     const ConfigManager::Config& cfg = m_config->getConfig();
-    DebugLogger::LogLevel configLevel = static_cast<DebugLogger::LogLevel>(cfg.logLevel);
-    g_debugLogger.setLevel(configLevel);
-    DEBUG_LOG_API("Debug log level updated to %u from config", cfg.logLevel);
+    DebugLogger::LogLevel debugLevel = static_cast<DebugLogger::LogLevel>(cfg.logLevel);
+    g_debugLogger.setLevel(debugLevel);
+
+    // Also update regular Logger level
+    Logger::LogLevel loggerLevel = static_cast<Logger::LogLevel>(cfg.logLevel);
+    g_logger.setLevel(loggerLevel);
+
+    DEBUG_LOG_API("Log level updated to %u from config", cfg.logLevel);
 
     // Return updated config
     char buffer[2048];
@@ -1895,6 +1900,7 @@ void WebAPI::handleGetVersion(AsyncWebServerRequest* request) {
 
     doc["firmware"] = FIRMWARE_NAME;
     doc["version"] = FIRMWARE_VERSION;
+    doc["buildNumber"] = BUILD_NUMBER;
     doc["buildDate"] = BUILD_DATE;
     doc["buildTime"] = BUILD_TIME;
 
@@ -1983,7 +1989,7 @@ void WebAPI::handleGetOTAStatus(AsyncWebServerRequest* request) {
     doc["errorMessage"] = status.errorMessage;
     doc["maxFirmwareSize"] = m_otaManager->getMaxFirmwareSize();
     doc["currentPartition"] = m_otaManager->getCurrentPartition();
-    doc["currentVersion"] = FIRMWARE_VERSION;
+    doc["currentVersion"] = String(FIRMWARE_VERSION) + " (build " + String(BUILD_NUMBER) + ")";
 
     String json;
     serializeJson(doc, json);
@@ -2208,41 +2214,95 @@ void WebAPI::handleRoot(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handleLiveLogs(AsyncWebServerRequest* request) {
-    // Simple live logs viewer in popup window
+    // Live logs viewer in popup window with filtering
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1.0'>";
     html += "<title>StepAware Live Logs</title><style>";
     html += "body{font-family:monospace;margin:0;padding:10px;background:#1e1e1e;color:#d4d4d4;}";
     html += "h1{font-size:16px;margin:0 0 10px 0;color:#fff;}";
-    html += "#status{padding:5px;background:#333;border-radius:3px;margin-bottom:10px;font-size:12px;}";
+    html += "#status{padding:5px;background:#333;border-radius:3px;margin-bottom:5px;font-size:12px;}";
     html += ".badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:bold;}";
     html += ".badge-success{background:#28a745;color:white;}";
     html += ".badge-error{background:#dc3545;color:white;}";
-    html += "#logs{height:calc(100vh - 80px);overflow-y:auto;background:#000;padding:10px;border:1px solid #444;}";
-    html += ".log{padding:2px 0;font-size:12px;line-height:1.4;}";
+    html += ".badge-warning{background:#ffa500;color:white;}";
+
+    // Filter controls styling
+    html += ".filters{padding:8px;background:#2a2a2a;border-radius:3px;margin-bottom:5px;font-size:11px;}";
+    html += ".filter-btn{display:inline-block;padding:4px 8px;margin:2px;border:1px solid #555;background:#333;";
+    html += "color:#aaa;border-radius:3px;cursor:pointer;font-size:11px;font-weight:bold;}";
+    html += ".filter-btn.active{border-color:#4CAF50;background:#4CAF50;color:#fff;}";
+    html += ".filter-btn:hover{background:#444;}";
+    html += ".filter-btn.active:hover{background:#45a049;}";
+    html += "label{margin-left:10px;font-size:11px;}";
+    html += "input[type='checkbox']{margin-right:3px;}";
+
+    html += "#logs{height:calc(100vh - 140px);overflow-y:auto;background:#000;padding:10px;border:1px solid #444;}";
+    html += ".log-entry{padding:2px 0;font-size:12px;line-height:1.4;}";
+    html += ".log-entry.hidden{display:none;}";
     html += ".log-verbose{color:#808080;}.log-debug{color:#00d4ff;}.log-info{color:#d4d4d4;}";
     html += ".log-warn{color:#ffa500;}.log-error{color:#ff4444;font-weight:bold;}";
     html += "</style></head><body>";
+
     html += "<h1>&#128680; StepAware Live Logs</h1>";
     html += "<div id='status'><span class='badge badge-error' id='ws-badge'>Connecting...</span> ";
     html += "<span id='count'>0 logs</span></div>";
+
+    // Filter controls
+    html += "<div class='filters'>";
+    html += "<span style='margin-right:8px;'>Level:</span>";
+    html += "<button class='filter-btn active' data-level='0' onclick='toggleLevel(this)'>VERBOSE</button>";
+    html += "<button class='filter-btn active' data-level='1' onclick='toggleLevel(this)'>DEBUG</button>";
+    html += "<button class='filter-btn active' data-level='2' onclick='toggleLevel(this)'>INFO</button>";
+    html += "<button class='filter-btn active' data-level='3' onclick='toggleLevel(this)'>WARN</button>";
+    html += "<button class='filter-btn active' data-level='4' onclick='toggleLevel(this)'>ERROR</button>";
+    html += "<label><input type='checkbox' id='auto-scroll' checked> Auto-scroll</label>";
+    html += "</div>";
+
     html += "<div id='logs'></div>";
+
+    // JavaScript
     html += "<script>";
-    html += "let ws,count=0;";
+    html += "let ws,count=0,autoScroll=true;";
+    html += "let activeFilters=new Set([0,1,2,3,4]);";
+
+    // Toggle level filter
+    html += "function toggleLevel(btn){";
+    html += "const level=parseInt(btn.dataset.level);";
+    html += "if(activeFilters.has(level)){";
+    html += "activeFilters.delete(level);btn.classList.remove('active');}else{";
+    html += "activeFilters.add(level);btn.classList.add('active');}";
+    html += "document.querySelectorAll('.log-entry').forEach(e=>{";
+    html += "const lvl=parseInt(e.dataset.level);";
+    html += "if(activeFilters.has(lvl))e.classList.remove('hidden');";
+    html += "else e.classList.add('hidden');});";
+    html += "}";
+
+    // Auto-scroll handler
+    html += "document.getElementById('auto-scroll').addEventListener('change',e=>{";
+    html += "autoScroll=e.target.checked;});";
+
+    // WebSocket connection
     html += "function connect(){";
     html += "const proto=location.protocol==='https:'?'wss:':'ws:';";
     html += "ws=new WebSocket(proto+'//'+location.host+'/ws/logs');";
     html += "ws.onopen=()=>{document.getElementById('ws-badge').textContent='Connected';";
     html += "document.getElementById('ws-badge').className='badge badge-success';};";
-    html += "ws.onmessage=(e)=>{const data=JSON.parse(e.data);";
+    html += "ws.onmessage=(e)=>{";
+    html += "const data=JSON.parse(e.data);";
     html += "const div=document.createElement('div');";
-    html += "div.className='log log-'+data.levelName.toLowerCase().trim();";
+    html += "div.className='log-entry log-'+data.levelName.toLowerCase().trim();";
+    html += "div.dataset.level=data.level;";
+    html += "div.dataset.source=data.source||'logger';";
     html += "const ms=data.ts;const s=Math.floor(ms/1000);const m=Math.floor(s/60);const h=Math.floor(m/60);";
     html += "const ts=String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+':'+String(s%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0');";
     html += "div.textContent='['+ts+'] ['+data.levelName+'] '+data.msg;";
+
+    // Apply filters to new entry
+    html += "if(!activeFilters.has(parseInt(data.level)))div.classList.add('hidden');";
+
     html += "document.getElementById('logs').appendChild(div);";
     html += "count++;document.getElementById('count').textContent=count+' logs';";
-    html += "div.scrollIntoView();};";
+    html += "if(autoScroll)div.scrollIntoView();};";
     html += "ws.onerror=()=>{document.getElementById('ws-badge').textContent='Error';";
     html += "document.getElementById('ws-badge').className='badge badge-error';};";
     html += "ws.onclose=()=>{document.getElementById('ws-badge').textContent='Disconnected';";
@@ -2610,10 +2670,6 @@ String WebAPI::buildDashboardHTML() {
     html += "<label style=\"margin-left:10px;\">";
     html += "<input type=\"checkbox\" id=\"auto-scroll\" checked> Auto-scroll";
     html += "</label>";
-    html += "<label style=\"margin-left:10px;\">";
-    html += "<input type=\"checkbox\" id=\"show-debug-logs\" onchange=\"toggleDebugLogs()\">";
-    html += " Include debug logs (file-based)";
-    html += "</label>";
     html += "</div>";
     html += "<div class=\"log-controls\">";
     html += "<input type=\"text\" id=\"log-search\" placeholder=\"Search logs...\" ";
@@ -2767,11 +2823,11 @@ String WebAPI::buildDashboardHTML() {
     // Reboot device
     html += "async function rebootDevice(){";
     html += "if(!confirm('Are you sure you want to reboot the device?\\n\\nThe device will restart and the web interface will be unavailable for ~10 seconds.'))return;";
+    html += "alert('Rebooting device now...\\n\\nThe page will reload automatically in 15 seconds.');";
+    html += "setTimeout(()=>location.reload(),15000);";
     html += "try{";
     html += "await fetch('/api/reboot',{method:'POST'});";
-    html += "alert('Device is rebooting...\\n\\nThe page will reload automatically in 15 seconds.');";
-    html += "setTimeout(()=>location.reload(),15000);";
-    html += "}catch(e){alert('Reboot request sent. Please wait 15 seconds and refresh the page.');}}";
+    html += "}catch(e){}}"; // Connection lost during reboot is expected
 
     // Config loading
     html += "let currentConfig={};";
@@ -2790,7 +2846,7 @@ String WebAPI::buildDashboardHTML() {
     html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
     html += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
-    html += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||500;";
+    html += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||150;";
     html += "document.getElementById('cfg-dirConfirmationWindow').value=cfg.directionDetector?.confirmationWindowMs||5000;";
     html += "document.getElementById('cfg-dirPatternTimeout').value=cfg.directionDetector?.patternTimeoutMs||10000;";
     html += "}catch(e){console.error('Config load error:',e);}}";
@@ -3587,7 +3643,6 @@ String WebAPI::buildDashboardHTML() {
     html += "let autoScroll=true;";
     html += "let activeFilters=new Set([0,1,2,3,4]);";
     html += "let lastSequence=0;";
-    html += "let showDebugLogs=false;";
 
     // Connect to log streaming WebSocket
     html += "function connectLogStream(){";
@@ -3625,7 +3680,6 @@ String WebAPI::buildDashboardHTML() {
     html += "const ts=formatTimestamp(entry.ts);";
     html += "div.textContent='['+ts+'] ['+entry.levelName+'] '+entry.msg;";
     html += "if(!activeFilters.has(entry.level))div.classList.add('hidden');";
-    html += "if(entry.source==='debuglog'&&!showDebugLogs)div.classList.add('hidden');";
     html += "viewer.appendChild(div);";
     html += "while(viewer.children.length>1000)viewer.removeChild(viewer.firstChild);";
     html += "if(autoScroll)viewer.scrollTop=viewer.scrollHeight;};";
@@ -3673,14 +3727,6 @@ String WebAPI::buildDashboardHTML() {
     html += "function clearLogViewer(){";
     html += "document.getElementById('log-viewer').innerHTML='';";
     html += "lastSequence=0;};";
-
-    // Toggle debug logs inclusion
-    html += "function toggleDebugLogs(){";
-    html += "showDebugLogs=document.getElementById('show-debug-logs').checked;";
-    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
-    html += "if(entry.dataset.source==='debuglog'){";
-    html += "if(showDebugLogs)entry.classList.remove('hidden');";
-    html += "else entry.classList.add('hidden');}});};";
 
     // Auto-scroll checkbox handler
     html += "document.getElementById('auto-scroll').addEventListener('change',function(e){";
@@ -3884,7 +3930,7 @@ void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
                 for (uint32_t i = start; i < count; i++) {
                     Logger::LogEntry entry;
                     if (g_logger.getEntry(i, entry)) {
-                        client->text(formatLogEntryJSON(entry));
+                        client->text(formatLogEntryJSON(entry, "logger"));
                     }
                 }
             }
@@ -3904,21 +3950,21 @@ void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
     }
 }
 
-String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry) {
+String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry, const char* source) {
     StaticJsonDocument<256> doc;
     doc["seq"] = entry.sequenceNumber;
     doc["ts"] = entry.timestamp;
     doc["level"] = entry.level;
     doc["levelName"] = Logger::getLevelName((Logger::LogLevel)entry.level);
     doc["msg"] = entry.message;
-    doc["source"] = "logger";
+    doc["source"] = source;
 
     String json;
     serializeJson(doc, json);
     return json;
 }
 
-void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry) {
+void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry, const char* source) {
     if (!m_logWebSocket) {
         Serial.println("[WS] broadcastLogEntry: m_logWebSocket is NULL");
         return;
@@ -3929,7 +3975,7 @@ void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry) {
         return;  // No clients connected (normal, don't spam)
     }
 
-    String json = formatLogEntryJSON(entry);
+    String json = formatLogEntryJSON(entry, source);
     m_logWebSocket->textAll(json);
 
     // Debug: confirm broadcast

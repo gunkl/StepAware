@@ -1,6 +1,11 @@
 #include "debug_logger.h"
 #include "config_manager.h"
+#include "web_api.h"
+#include "logger.h"
 #include <stdarg.h>
+
+// Global WebAPI pointer (defined in main.cpp)
+extern WebAPI* g_webAPI;
 
 // Global debug logger instance
 DebugLogger g_debugLogger;
@@ -124,6 +129,24 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
 
     // Write to serial
     Serial.print(logLine);
+
+    // Broadcast to WebSocket if available
+    if (g_webAPI) {
+        // Create a Logger::LogEntry for broadcasting
+        // Include category in the message for clarity
+        char fullMessage[384];
+        snprintf(fullMessage, sizeof(fullMessage), "[%s] %s",
+                 getCategoryName(category), message);
+
+        Logger::LogEntry entry;
+        static uint32_t debugLogSeq = 0;  // Separate sequence counter for debug logs
+        entry.sequenceNumber = debugLogSeq++;
+        entry.timestamp = millis();
+        entry.level = level;  // DebugLogger levels match Logger levels
+        strlcpy(entry.message, fullMessage, sizeof(entry.message));
+
+        g_webAPI->broadcastLogEntry(entry, "debuglog");
+    }
 
 #if !MOCK_HARDWARE
     // Write to file

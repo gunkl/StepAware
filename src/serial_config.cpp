@@ -396,7 +396,7 @@ void SerialConfigUI::cmdStatus() {
     Serial.println("\n========================================");
     Serial.println("System Status");
     Serial.println("========================================");
-    Serial.printf("Firmware: %s v%s\n", FIRMWARE_NAME, FIRMWARE_VERSION);
+    Serial.printf("Firmware: %s v%s (build %s)\n", FIRMWARE_NAME, FIRMWARE_VERSION, BUILD_NUMBER);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
     Serial.printf("Uptime: %lu ms\n", millis());
     Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
@@ -407,7 +407,7 @@ void SerialConfigUI::cmdStatus() {
 }
 
 void SerialConfigUI::cmdVersion() {
-    Serial.printf("%s v%s\n", FIRMWARE_NAME, FIRMWARE_VERSION);
+    Serial.printf("%s v%s (build %s)\n", FIRMWARE_NAME, FIRMWARE_VERSION, BUILD_NUMBER);
     Serial.printf("Build: %s %s\n", BUILD_DATE, BUILD_TIME);
 }
 

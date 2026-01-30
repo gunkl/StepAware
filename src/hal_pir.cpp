@@ -29,6 +29,7 @@ HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     , m_warmupDuration(PIR_WARMUP_TIME_MS)
     , m_lastEventTime(0)
     , m_motionEventCount(0)
+    , m_lastRisingEdgeMicros(0)
     , m_mockMotionEndTime(0)
 {
 }
@@ -75,8 +76,9 @@ void HAL_PIR::update() {
         }
     }
 
-    // Read sensor state
+    // Read sensor state with microsecond timestamp
     bool currentState;
+    uint32_t readMicros = micros();  // Capture precise read time
 
     if (!m_mockMode) {
         // Read real hardware
@@ -94,6 +96,7 @@ void HAL_PIR::update() {
     if (currentState && !m_lastState) {
         m_motionEventCount++;
         m_lastEventTime = millis();
+        m_lastRisingEdgeMicros = readMicros;  // Store µs timestamp
         m_lastEvent = MOTION_EVENT_DETECTED;
         DEBUG_LOG_SENSOR("HAL_PIR: Motion detected (event #%u)", m_motionEventCount);
     }
