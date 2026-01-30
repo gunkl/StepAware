@@ -103,14 +103,18 @@
 1. **Inspect the board** for any damage or loose components
 2. **Identify key pins** using the silkscreen labels:
    - GPIO0 (BOOT button - built-in)
-   - GPIO1 (for PIR sensor)
+   - GPIO1 (for PIR sensor - near zone in dual-PIR mode)
    - GPIO2 (built-in LED)
    - GPIO3 (for hazard LED)
-   - GPIO4 (for light sensor, optional)
-   - GPIO5 (for battery monitoring - usually connected internally)
-   - GPIO6 (for VBUS detection - may be connected internally)
+   - GPIO4 (for PIR far zone OR light sensor - see pin mode notes)
+   - GPIO5 (for battery monitoring - **NEVER use for external sensors!**)
+   - GPIO6 (for VBUS detection)
    - 3.3V and GND pins
 3. **Insert the board** into the breadboard with pins on both sides accessible
+
+**Pin Mode Note:** GPIO4 serves dual purpose:
+- **Dual-PIR mode**: PIR_FAR sensor (direction detection)
+- **Single-PIR mode**: Light sensor (optional)
 
 ### Step 2: Connect Power Rails
 
@@ -222,30 +226,72 @@ Before powering on, verify:
 
 ### Pin Connection Summary
 
+### Single-PIR Mode Pin Assignments
+
 | ESP32 Pin | Connection | Component |
 |-----------|------------|-----------|
 | GPIO0 | Input (pull-up) | Mode Button (built-in boot button) |
-| GPIO1 | Input | PIR Sensor OUT |
+| GPIO1 | Input | PIR Sensor OUT (deep sleep wakeup ✅) |
 | GPIO2 | Output | Status LED (built-in) |
 | GPIO3 | Output (PWM) | Hazard LED → 220Ω → GND |
 | GPIO4 | Input (ADC) | Photoresistor voltage divider (optional) |
-| GPIO5 | Input (ADC) | Battery voltage monitor (internal) |
-| GPIO6 | Input | VBUS detect (internal, may vary by board) |
+| GPIO5 | Input (ADC) | Battery voltage monitor (internal) - **⚠️ NEVER use for external sensors!** |
+| GPIO6 | Input | VBUS detect (USB power detection) |
 | 3.3V | Power | PIR sensor VCC, power rails |
 | GND | Ground | All component grounds |
 
+### Dual-PIR Mode Pin Assignments
+
+| ESP32 Pin | Connection | Component |
+|-----------|------------|-----------|
+| GPIO0 | Input (pull-up) | Mode Button (built-in boot button) |
+| GPIO1 | Input | PIR Near Sensor OUT (deep sleep wakeup ✅) |
+| GPIO2 | Output | Status LED (built-in) |
+| GPIO3 | Output (PWM) | Hazard LED → 220Ω → GND |
+| GPIO4 | Input | PIR Far Sensor OUT (deep sleep wakeup ✅) |
+| GPIO5 | Input (ADC) | Battery voltage monitor (internal) - **⚠️ NEVER use for external sensors!** |
+| GPIO6 | Input | VBUS detect (USB power detection) |
+| 3.3V | Power | PIR sensors VCC, power rails |
+| GND | Ground | All component grounds |
+
+**Important Notes:**
+- **GPIO5 Programming Issue**: NEVER connect external sensors to GPIO5! It causes programming/flashing failures.
+- **Deep Sleep Wakeup**: Only GPIO 0-5 can wake from deep sleep. PIR sensors on GPIO1/GPIO4 are compatible.
+- **GPIO4 Conflict**: In dual-PIR mode, light sensor is NOT available (GPIO4 used for PIR_FAR).
+
 ### Breadboard Layout
 
+### Single-PIR Mode Layout:
 ```
                      ESP32-C3-DevKit-Lipo
                     ┌─────────────────────┐
                     │                     │
              3.3V ──┤ 3.3V           GPIO0├── Boot Button (built-in)
-              GND ──┤ GND            GPIO1├──── PIR OUT
+              GND ──┤ GND            GPIO1├──── PIR OUT (deep sleep wakeup)
                     │                GPIO2├── Status LED (built-in)
                     │                GPIO3├──[220Ω]──[LED]── GND
                     │                GPIO4├── Light Sensor (optional)
                     │                GPIO5├── Battery ADC (internal)
+                    │                GPIO6├── VBUS Detect
+                    │                     │
+                    └─────────────────────┘
+                            │
+                        [Battery]
+                        (1000mAh)
+```
+
+### Dual-PIR Mode Layout:
+```
+                     ESP32-C3-DevKit-Lipo
+                    ┌─────────────────────┐
+                    │                     │
+             3.3V ──┤ 3.3V           GPIO0├── Boot Button (built-in)
+              GND ──┤ GND            GPIO1├──── PIR NEAR OUT (wakeup)
+                    │                GPIO2├── Status LED (built-in)
+                    │                GPIO3├──[220Ω]──[LED]── GND
+                    │                GPIO4├──── PIR FAR OUT (wakeup)
+                    │                GPIO5├── Battery ADC (internal)
+                    │                GPIO6├── VBUS Detect
                     │                     │
                     └─────────────────────┘
                             │
@@ -385,7 +431,7 @@ Expected output on first boot:
 
 **Solutions:**
 1. Wait full 60 seconds after power-on
-2. Verify GPIO1 connection
+2. Verify GPIO6 connection
 3. Check 3.3V power to PIR sensor
 4. Wave hand closer to sensor (within 1-2 meters)
 5. Adjust sensitivity potentiometer if present

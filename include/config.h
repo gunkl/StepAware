@@ -15,21 +15,42 @@
 // ============================================================================
 // Hardware Pin Assignments (ESP32-C3)
 // ============================================================================
+//
+// CRITICAL: GPIO 0-5 Required for Deep Sleep Wakeup
+// ESP32-C3 only supports wakeup from deep sleep on GPIO 0-5.
+// PIR sensors MUST be assigned to GPIO 0-5 for motion-based wakeup.
+//
+// Pin Assignment Priorities:
+// 1. GPIO0, GPIO2: Hardware fixed (boot button, status LED)
+// 2. GPIO3: Hazard LED (core functionality, PWM capable)
+// 3. GPIO5: Battery monitor ONLY (avoid external sensors - programming issues!)
+// 4. GPIO1, GPIO4: Available for PIR sensors (deep sleep compatible)
+// 5. GPIO6+: Available for optional/non-wakeup sensors
+// ============================================================================
 
-// Input Pins
+// Fixed Hardware Pins (Cannot Change)
 #define PIN_BUTTON          0    // Mode button (GPIO0, boot button, pull-up)
-#define PIN_PIR_SENSOR      1    // AM312 PIR motion sensor output (GPIO1)
-#define PIN_LIGHT_SENSOR    4    // Photoresistor for ambient light sensing (GPIO4, ADC1_CH0)
-#define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
-#define PIN_VBUS_DETECT     6    // USB VBUS detection (GPIO6)
-
-// Direction Detection Pins (Dual-PIR)
-#define PIN_PIR_NEAR        1    // Near zone PIR (existing sensor, GPIO1)
-#define PIN_PIR_FAR         11   // Far zone PIR (new sensor, GPIO11)
-
-// Output Pins
 #define PIN_STATUS_LED      2    // Built-in status LED (GPIO2)
+
+// Direction Detection Pins (Dual-PIR) - MUST be GPIO 0-5 for deep sleep wakeup
+#define PIN_PIR_NEAR        1    // Near zone PIR (GPIO1) - Primary sensor, deep sleep wakeup
+#define PIN_PIR_FAR         4    // Far zone PIR (GPIO4) - Direction detection, deep sleep wakeup
+
+// Single PIR Mode (backward compatibility)
+#define PIN_PIR_SENSOR      PIN_PIR_NEAR  // Defaults to near zone sensor (GPIO1)
+
+// Core Functionality Pins
 #define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
+#define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
+                                 // WARNING: Do NOT use GPIO5 for external sensors!
+                                 // It can interfere with programming/flashing the device.
+
+// Optional Sensor Pins (GPIO 6+, no deep sleep wakeup)
+#define PIN_VBUS_DETECT     6    // USB VBUS detection (GPIO6)
+// NOTE: Light sensor shares GPIO4 with PIR_FAR. Only available in single-PIR mode.
+// #define PIN_LIGHT_SENSOR    4    // Photoresistor (GPIO4, ADC1_CH4) - conflicts with PIR_FAR
+
+// (Output pins defined above with fixed hardware and core functionality)
 
 // Ultrasonic Sensor Pins (optional)
 // HC-SR04 (4-pin): Separate trigger and echo pins
@@ -77,7 +98,7 @@
 // ============================================================================
 
 // Version Information
-#define FIRMWARE_VERSION    "0.1.1"
+#define FIRMWARE_VERSION    "0.2.0"
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__
@@ -158,8 +179,17 @@
 #define BATTERY_DIVIDER_RATIO  2.0        // Voltage divider: R1=R2 -> ratio=2
 
 // ADC Channel Mappings (ESP32-C3)
-#define BATTERY_ADC_CHANNEL    ADC1_CHANNEL_4  // GPIO5 = ADC1_CH4
-#define LIGHT_ADC_CHANNEL      ADC1_CHANNEL_3  // GPIO4 = ADC1_CH3
+// Note: ESP32-C3 ADC pins are limited to GPIO0-5 only:
+//   ADC1_CH0 = GPIO0 (used by button)
+//   ADC1_CH1 = GPIO1 (used by PIR_NEAR)
+//   ADC1_CH2 = GPIO2 (used by status LED)
+//   ADC1_CH3 = GPIO3 (used by hazard LED)
+//   ADC1_CH4 = GPIO4 (used by PIR_FAR in dual-PIR mode)
+//   ADC2_CH0 = GPIO5 (used by battery monitor)
+#define BATTERY_ADC_CHANNEL    ADC2_CHANNEL_0  // GPIO5 = ADC2_CH0
+#define LIGHT_ADC_CHANNEL      ADC1_CHANNEL_4  // GPIO4 = ADC1_CH4
+// WARNING: Light sensor (GPIO4/ADC1_CH4) shares pin with PIR_FAR
+// In dual-PIR mode, light sensor is NOT available!
 
 // Pin Aliases for Power Manager
 #define VBUS_DETECT_PIN        PIN_VBUS_DETECT

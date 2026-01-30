@@ -53,7 +53,7 @@ enum DirectionState {
  *
  * ```cpp
  * HAL_MotionSensor* farPIR = sensorManager.getSensor(1);   // Far zone (GPIO11)
- * HAL_MotionSensor* nearPIR = sensorManager.getSensor(0);  // Near zone (GPIO1)
+ * HAL_MotionSensor* nearPIR = sensorManager.getSensor(0);  // Near zone (GPIO6)
  *
  * DirectionDetector dirDetector(farPIR, nearPIR);
  * dirDetector.begin();

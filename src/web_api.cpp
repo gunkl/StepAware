@@ -8,9 +8,38 @@
 #include "sensor_manager.h"
 #include "debug_logger.h"
 #include <ArduinoJson.h>
+#include <map>
 #if !MOCK_HARDWARE
 #include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
 #endif
+
+// Static map to track request buffers for chunked POST body handling
+// Using std::map instead of request->_tempObject to avoid heap corruption
+static std::map<AsyncWebServerRequest*, char*> s_requestBuffers;
+
+// Helper functions for request buffer management
+static char* allocateRequestBuffer(AsyncWebServerRequest* request, size_t size) {
+    char* buffer = (char*)malloc(size + 1);
+    if (buffer) {
+        s_requestBuffers[request] = buffer;
+        DEBUG_LOG_API("Allocated request buffer: req=%p, size=%u", (void*)request, size);
+    }
+    return buffer;
+}
+
+static char* getRequestBuffer(AsyncWebServerRequest* request) {
+    auto it = s_requestBuffers.find(request);
+    return (it != s_requestBuffers.end()) ? it->second : nullptr;
+}
+
+static void freeRequestBuffer(AsyncWebServerRequest* request) {
+    auto it = s_requestBuffers.find(request);
+    if (it != s_requestBuffers.end()) {
+        DEBUG_LOG_API("Freeing request buffer: req=%p", (void*)request);
+        free(it->second);
+        s_requestBuffers.erase(it);
+    }
+}
 
 WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager* config)
     : m_server(server)
@@ -515,28 +544,58 @@ void WebAPI::handleGetConfig(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    DEBUG_LOG_API("POST /api/config - chunk: index=%u, len=%u, total=%u", index, len, total);
+
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            DEBUG_LOG_API("Config update FAILED: Out of memory");
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            DEBUG_LOG_API("Request disconnected, cleaning up buffer");
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
     }
 
-    DEBUG_LOG_API("POST /api/config - %u bytes", total);
+    DEBUG_LOG_API("POST /api/config - complete: %u bytes", total);
 
-    // Null-terminate data
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        DEBUG_LOG_API("Config update FAILED: Out of memory");
-        sendError(request, 500, "Out of memory");
+    if (!requestBuffer) {
+        DEBUG_LOG_API("Config update FAILED: Buffer is null");
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
         return;
     }
 
-    memcpy(jsonStr, data, total);
+    char* jsonStr = requestBuffer;
     jsonStr[total] = '\0';
+
+    // Log received JSON for debugging (first 500 chars)
+    DEBUG_LOG_API("Received JSON (first 500 chars): %.500s", jsonStr);
+    if (total > 500) {
+        DEBUG_LOG_API("... (total %u bytes, truncated for logging)", total);
+    }
 
     // Parse and validate
     if (!m_config->fromJSON(jsonStr)) {
         DEBUG_LOG_API("Config update FAILED: %s", m_config->getLastError());
-        free(jsonStr);
+        DEBUG_LOG_API("Failed JSON: %s", jsonStr);  // Log full JSON on error
+        freeRequestBuffer(request);
         sendError(request, 400, m_config->getLastError());
         return;
     }
@@ -546,13 +605,13 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
     if (!m_config->save()) {
         DEBUG_LOG_API("Config update FAILED: Cannot save to filesystem");
         DEBUG_LOG_API("=== Full Config Save Failed ===");
-        free(jsonStr);
+        freeRequestBuffer(request);
         sendError(request, 500, "Failed to save configuration");
         return;
     }
     DEBUG_LOG_API("=== Full Config Saved Successfully ===");
 
-    free(jsonStr);
+    freeRequestBuffer(request);
 
     // Apply log level from config to debug logger
     const ConfigManager::Config& cfg = m_config->getConfig();
@@ -631,19 +690,38 @@ void WebAPI::handleGetSensors(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
     }
 
-    // Null-terminate data
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        sendError(request, 500, "Out of memory");
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
         return;
     }
 
-    memcpy(jsonStr, data, total);
+    char* jsonStr = requestBuffer;
     jsonStr[total] = '\0';
 
     // Parse JSON sensor array
@@ -651,7 +729,7 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {
-        free(jsonStr);
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -686,15 +764,19 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         currentConfig.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 5;
         currentConfig.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
         currentConfig.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;
+        currentConfig.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;
     }
 
-    free(jsonStr);
+    freeRequestBuffer(request);
 
     // Update and save config
     if (!m_config->setConfig(currentConfig)) {
         sendError(request, 400, m_config->getLastError());
         return;
     }
+
+    // Auto-configure direction detector based on sensor distance zones
+    m_config->autoConfigureDirectionDetector();
 
     // Log sensor configuration being saved via API (VERBOSE)
     DEBUG_LOG_API("=== Saving Sensor Config via API ===");
@@ -952,19 +1034,38 @@ void WebAPI::handleGetDisplays(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
     }
 
-    // Null-terminate data
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        sendError(request, 500, "Out of memory");
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
         return;
     }
 
-    memcpy(jsonStr, data, total);
+    char* jsonStr = requestBuffer;
     jsonStr[total] = '\0';
 
     // Parse JSON display array
@@ -972,7 +1073,7 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {
-        free(jsonStr);
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -1003,7 +1104,7 @@ void WebAPI::handlePostDisplays(AsyncWebServerRequest* request, uint8_t* data, s
         currentConfig.displays[slot].useForStatus = displayObj["useForStatus"] | true;
     }
 
-    free(jsonStr);
+    freeRequestBuffer(request);
 
     // Update and save config
     if (!m_config->setConfig(currentConfig)) {
@@ -1148,32 +1249,51 @@ void WebAPI::handleUploadAnimation(AsyncWebServerRequest* request, const String&
 
 void WebAPI::handlePlayAnimation(AsyncWebServerRequest* request, uint8_t* data,
                                  size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
     }
 
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
+        return;
+    }
+
     // Check if LED matrix is available
     if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        freeRequestBuffer(request);
         sendError(request, 503, "LED Matrix not available");
         return;
     }
 
-    // Parse JSON body
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        sendError(request, 500, "Out of memory");
-        return;
-    }
-
-    memcpy(jsonStr, data, total);
-    jsonStr[total] = '\0';
+    requestBuffer[total] = '\0';
 
     StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, jsonStr);
+    DeserializationError error = deserializeJson(doc, requestBuffer);
 
     if (error) {
-        free(jsonStr);
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -1181,15 +1301,16 @@ void WebAPI::handlePlayAnimation(AsyncWebServerRequest* request, uint8_t* data,
     const char* name = doc["name"];
     uint32_t duration = doc["duration"] | 0;
 
-    free(jsonStr);
-
     if (!name || strlen(name) == 0) {
+        freeRequestBuffer(request);
         sendError(request, 400, "Animation name required");
         return;
     }
 
     // Play the animation
     bool started = m_ledMatrix->playCustomAnimation(name, duration);
+
+    freeRequestBuffer(request);
 
     if (started) {
         StaticJsonDocument<256> response;
@@ -1206,39 +1327,59 @@ void WebAPI::handlePlayAnimation(AsyncWebServerRequest* request, uint8_t* data,
 
 void WebAPI::handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t* data,
                                         size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
+        return;
+    }
+
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
         return;
     }
 
     // Check if LED matrix is available
     if (!m_ledMatrix) {
         DEBUG_LOG_API("WebAPI: Built-in animation request but LED Matrix pointer is null");
+        freeRequestBuffer(request);
         sendError(request, 503, "LED Matrix not configured");
         return;
     }
 
     if (!m_ledMatrix->isReady()) {
         DEBUG_LOG_API("WebAPI: Built-in animation request but LED Matrix not ready");
+        freeRequestBuffer(request);
         sendError(request, 503, "LED Matrix not initialized");
         return;
     }
 
-    // Parse JSON body
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        sendError(request, 500, "Out of memory");
-        return;
-    }
-
-    memcpy(jsonStr, data, total);
-    jsonStr[total] = '\0';
+    requestBuffer[total] = '\0';
 
     StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, jsonStr);
+    DeserializationError error = deserializeJson(doc, requestBuffer);
 
     if (error) {
-        free(jsonStr);
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -1246,9 +1387,8 @@ void WebAPI::handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t*
     const char* type = doc["type"];
     uint32_t duration = doc["duration"] | 0;
 
-    free(jsonStr);
-
     if (!type || strlen(type) == 0) {
+        freeRequestBuffer(request);
         sendError(request, 400, "Animation type required");
         return;
     }
@@ -1265,12 +1405,15 @@ void WebAPI::handlePlayBuiltInAnimation(AsyncWebServerRequest* request, uint8_t*
     } else if (strcmp(type, "WIFI_CONNECTED") == 0) {
         pattern = HAL_LEDMatrix_8x8::ANIM_WIFI_CONNECTED;
     } else {
+        freeRequestBuffer(request);
         sendError(request, 400, "Unknown animation type");
         return;
     }
 
     // Start the animation
     m_ledMatrix->startAnimation(pattern, duration);
+
+    freeRequestBuffer(request);
 
     StaticJsonDocument<256> response;
     response["success"] = true;
@@ -1405,25 +1548,44 @@ void WebAPI::handleGetAnimationTemplate(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
     }
 
-    // Parse JSON body
-    char* jsonStr = (char*)malloc(total + 1);
-    if (!jsonStr) {
-        sendError(request, 500, "Out of memory");
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
         return;
     }
-    memcpy(jsonStr, data, total);
-    jsonStr[total] = '\0';
+
+    requestBuffer[total] = '\0';
 
     StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, jsonStr);
-    free(jsonStr);
+    DeserializationError error = deserializeJson(doc, requestBuffer);
 
     if (error) {
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -1433,6 +1595,7 @@ void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data
     const char* animation = doc["animation"];
 
     if (!functionKey || !type || !animation) {
+        freeRequestBuffer(request);
         sendError(request, 400, "Missing required fields");
         return;
     }
@@ -1440,6 +1603,8 @@ void WebAPI::handleAssignAnimation(AsyncWebServerRequest* request, uint8_t* data
     // Store assignment in config
     // For now, we'll use a simple in-memory storage
     // TODO: Persist to ConfigManager
+
+    freeRequestBuffer(request);
 
     StaticJsonDocument<256> response;
     response["success"] = true;
@@ -1495,6 +1660,26 @@ void WebAPI::handleGetMode(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
+    }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
     // Only process when all data received
     if (index + len != total) {
         return;
@@ -1502,12 +1687,21 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
 
     DEBUG_LOG_API("POST /api/mode - %u bytes", total);
 
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
+        return;
+    }
+
+    requestBuffer[total] = '\0';
+
     // Parse JSON
     StaticJsonDocument<128> doc;
-    DeserializationError error = deserializeJson(doc, data, total);
+    DeserializationError error = deserializeJson(doc, requestBuffer);
 
     if (error) {
         DEBUG_LOG_API("Mode change FAILED: Invalid JSON");
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -1515,6 +1709,7 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
     // Get mode from request
     if (!doc.containsKey("mode")) {
         DEBUG_LOG_API("Mode change FAILED: Missing mode field");
+        freeRequestBuffer(request);
         sendError(request, 400, "Missing 'mode' field");
         return;
     }
@@ -1524,6 +1719,7 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
     // Validate mode
     if (mode < StateMachine::OFF || mode > StateMachine::MOTION_DETECT) {
         DEBUG_LOG_API("Mode change FAILED: Invalid mode value %d", mode);
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid mode value");
         return;
     }
@@ -1533,6 +1729,8 @@ void WebAPI::handlePostMode(AsyncWebServerRequest* request, uint8_t* data, size_
 
     DEBUG_LOG_API("Mode changed to %s via API", StateMachine::getModeName((StateMachine::OperatingMode)mode));
     DEBUG_LOG_API("Mode changed to %s", StateMachine::getModeName((StateMachine::OperatingMode)mode));
+
+    freeRequestBuffer(request);
 
     // Return new mode
     handleGetMode(request);
@@ -2144,11 +2342,18 @@ String WebAPI::buildDashboardHTML() {
     html += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
     html += "cfg.power=cfg.power||{};";
     html += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
+    html += "let jsonStr;";
+    html += "try{jsonStr=JSON.stringify(cfg);console.log('Saving config:',JSON.stringify(cfg,null,2));}";
+    html += "catch(e){console.error('JSON.stringify failed:',e);alert('Failed to serialize config: '+e.message);return;}";
     html += "try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},";
-    html += "body:JSON.stringify(cfg)});if(res.ok){";
+    html += "body:jsonStr});if(res.ok){";
     html += "document.getElementById('save-indicator').classList.add('show');";
     html += "setTimeout(()=>document.getElementById('save-indicator').classList.remove('show'),3000);";
-    html += "loadConfig();}else{alert('Failed to save configuration');}}catch(e){alert('Error: '+e.message);}}";
+    html += "loadConfig();}else{";
+    html += "const errorText=await res.text();";
+    html += "console.error('Config save failed:',res.status,errorText);";
+    html += "alert('Failed to save configuration: '+errorText);}}catch(e){";
+    html += "console.error('Config save error:',e);alert('Error: '+e.message);}}";
 
     // LittleFS Log Management
     html += "let availableLogs=[];";
@@ -2334,7 +2539,9 @@ String WebAPI::buildDashboardHTML() {
     html += "html+='<div style=\"line-height:1.6;\">';";
     html += "if(sensor.type===0){";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Debounce:</span> <span>'+sensor.debounceMs+'ms</span></div>';}";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Debounce:</span> <span>'+sensor.debounceMs+'ms</span></div>';";
+    html += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'Auto');";
+    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';}";
     html += "else if(sensor.type===2||sensor.type===4){";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
@@ -2421,7 +2628,9 @@ String WebAPI::buildDashboardHTML() {
     html += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
     html += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
     html += "const debounce=parseInt(prompt('Debounce time (ms):',sensor.debounceMs));";
-    html += "if(!isNaN(debounce)&&debounce>=10&&debounce<=1000)sensor.debounceMs=debounce;}";
+    html += "if(!isNaN(debounce)&&debounce>=10&&debounce<=1000)sensor.debounceMs=debounce;";
+    html += "const zoneStr=prompt('Distance Zone:\\n0=Auto (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
+    html += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}}";
     html += "else if(sensor.type===2||sensor.type===4){";
     html += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
     html += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
@@ -2921,15 +3130,45 @@ void WebAPI::handleGetDebugConfig(AsyncWebServerRequest* request) {
 }
 
 void WebAPI::handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-    if (index + len != total) {
-        return; // Wait for complete payload
+    // Allocate buffer on first chunk
+    if (index == 0) {
+        char* requestBuffer = allocateRequestBuffer(request, total);
+        if (!requestBuffer) {
+            sendError(request, 500, "Out of memory");
+            return;
+        }
+
+        // Set up disconnect handler to clean up buffer if request is aborted
+        request->onDisconnect([request]() {
+            freeRequestBuffer(request);
+        });
     }
+
+    // Get buffer and copy this chunk
+    char* requestBuffer = getRequestBuffer(request);
+    if (requestBuffer) {
+        memcpy(requestBuffer + index, data, len);
+    }
+
+    // Only process when all data received
+    if (index + len != total) {
+        return;
+    }
+
+    if (!requestBuffer) {
+        sendError(request, 500, "Internal error");
+        freeRequestBuffer(request);
+        return;
+    }
+
+    requestBuffer[total] = '\0';
 
     // Parse JSON body
     StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, (const char*)data, len);
+    DeserializationError error = deserializeJson(doc, requestBuffer);
 
     if (error) {
+        freeRequestBuffer(request);
         sendError(request, 400, "Invalid JSON");
         return;
     }
@@ -2959,6 +3198,8 @@ void WebAPI::handlePostDebugConfig(AsyncWebServerRequest* request, uint8_t* data
         DEBUG_LOG_API("Debug category mask changed to 0x%02X", mask);
         changed = true;
     }
+
+    freeRequestBuffer(request);
 
     if (changed) {
         sendJSON(request, 200, "{\"success\":true,\"message\":\"Debug config updated\"}");

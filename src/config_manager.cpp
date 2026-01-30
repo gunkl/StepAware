@@ -441,6 +441,55 @@ bool ConfigManager::validateAndCorrect() {
     }
 }
 
+void ConfigManager::autoConfigureDirectionDetector() {
+    // Scan all PIR sensors for distance zone settings
+    int8_t nearSlot = -1;
+    int8_t farSlot = -1;
+
+    for (uint8_t i = 0; i < 4; i++) {
+        if (m_config.sensors[i].active && m_config.sensors[i].enabled &&
+            m_config.sensors[i].type == SENSOR_TYPE_PIR) {
+
+            if (m_config.sensors[i].distanceZone == 1) {  // Near
+                if (nearSlot == -1) {
+                    nearSlot = i;
+                }
+            } else if (m_config.sensors[i].distanceZone == 2) {  // Far
+                if (farSlot == -1) {
+                    farSlot = i;
+                }
+            }
+        }
+    }
+
+    // Configure direction detector based on findings
+    if (nearSlot != -1 && farSlot != -1) {
+        // One near and one far sensor found - enable direction detection
+        m_config.directionDetector.enabled = true;
+        m_config.directionDetector.nearSensorSlot = nearSlot;
+        m_config.directionDetector.farSensorSlot = farSlot;
+        m_config.directionDetector.triggerOnApproaching = true;
+
+        // Set defaults if not already configured
+        if (m_config.directionDetector.confirmationWindowMs == 0) {
+            m_config.directionDetector.confirmationWindowMs = 5000;
+        }
+        if (m_config.directionDetector.simultaneousThresholdMs == 0) {
+            m_config.directionDetector.simultaneousThresholdMs = 500;
+        }
+        if (m_config.directionDetector.patternTimeoutMs == 0) {
+            m_config.directionDetector.patternTimeoutMs = 10000;
+        }
+
+        DEBUG_LOG_CONFIG("Auto-configured direction detector: Near=Slot%d, Far=Slot%d", nearSlot, farSlot);
+    } else {
+        // No valid near+far combination - disable direction detection
+        // (allows normal multi-sensor operation)
+        m_config.directionDetector.enabled = false;
+        DEBUG_LOG_CONFIG("Direction detector disabled (no near+far sensor pair found)");
+    }
+}
+
 const ConfigManager::Config& ConfigManager::getConfig() const {
     return m_config;
 }
@@ -458,7 +507,8 @@ bool ConfigManager::setConfig(const Config& config) {
 }
 
 bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
-    StaticJsonDocument<4096> doc;
+    // Use DynamicJsonDocument to avoid stack overflow with large configs
+    DynamicJsonDocument doc(8192);  // Allocates on heap instead of stack
 
     // Motion Detection
     JsonObject motion = doc.createNestedObject("motion");
@@ -542,6 +592,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
             sensorObj["directionSensitivity"] = m_config.sensors[i].directionSensitivity;
             sensorObj["sampleWindowSize"] = m_config.sensors[i].sampleWindowSize;
             sensorObj["sampleRateMs"] = m_config.sensors[i].sampleRateMs;
+            sensorObj["distanceZone"] = m_config.sensors[i].distanceZone;
         }
     }
 
@@ -596,12 +647,14 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 bool ConfigManager::fromJSON(const char* json) {
     DEBUG_LOG_CONFIG("Loading config from JSON (%u bytes)", strlen(json));
 
-    StaticJsonDocument<4096> doc;
+    // Use DynamicJsonDocument to avoid stack overflow with large configs
+    DynamicJsonDocument doc(8192);  // Allocates on heap instead of stack
     DeserializationError error = deserializeJson(doc, json);
 
     if (error) {
         setError(error.c_str());
         DEBUG_LOG_CONFIG("Config load FAILED: JSON parse error: %s", error.c_str());
+        DEBUG_LOG_CONFIG("JSON input (%u bytes): %s", strlen(json), json);
         return false;
     }
 
@@ -703,6 +756,7 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].directionSensitivity = sensorObj["directionSensitivity"] | 0;  // 0 = auto (adaptive threshold)
                 m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 3;  // 3 samples default
                 m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 75;  // 75ms sample interval (adaptive threshold)
+                m_config.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;  // 0 = Auto (default)
             }
         }
     }

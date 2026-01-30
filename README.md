@@ -68,18 +68,39 @@ Detect a human entering a specific area (e.g., hallway) and notify them of a haz
 
 ### Pin Connections (ESP32-C3)
 
-| GPIO Pin | Function | Notes |
-|----------|----------|-------|
-| GPIO0 | Mode Button | Built-in boot button, pull-up |
-| GPIO1 | PIR Sensor | AM312 output signal |
-| GPIO2 | Status LED | Built-in LED on board |
-| GPIO3 | Hazard LED | Main warning LED (PWM) |
-| GPIO4 | Light Sensor | Photoresistor (optional) |
-| GPIO5 | Battery Monitor | Built-in voltage divider |
-| GPIO7 | I2C SDA | LED Matrix data (optional) |
-| GPIO8 | Ultrasonic/IR | Distance sensor (optional) |
-| GPIO9 | Ultrasonic/IR | Distance sensor (optional) |
-| GPIO10 | I2C SCL | LED Matrix clock (optional) |
+| GPIO Pin | Function | Mode | Notes |
+|----------|----------|------|-------|
+| GPIO0 | Mode Button | All | Built-in boot button, pull-up ⚠️ **FIXED** |
+| GPIO1 | PIR Near | Dual-PIR | Primary motion sensor, deep sleep wakeup ✅ |
+| GPIO1 | PIR Sensor | Single-PIR | Motion sensor, deep sleep wakeup ✅ |
+| GPIO2 | Status LED | All | Built-in LED on board ⚠️ **FIXED** |
+| GPIO3 | Hazard LED | All | Main warning LED (PWM) |
+| GPIO4 | PIR Far | Dual-PIR | Direction detection, deep sleep wakeup ✅ |
+| GPIO4 | Light Sensor | Single-PIR | Photoresistor (ADC, optional) |
+| GPIO5 | Battery Monitor | All | Built-in voltage divider. **⚠️ NEVER use for external sensors!** |
+| GPIO6 | VBUS Detect | All | USB power detection |
+| GPIO7 | I2C SDA | All | LED Matrix data (optional) |
+| GPIO8 | Ultrasonic/IR | All | Distance sensor (optional) |
+| GPIO9 | Ultrasonic/IR | All | Distance sensor (optional) |
+| GPIO10 | I2C SCL | All | LED Matrix clock (optional) |
+| GPIO11 | (Reserved) | - | Available for future expansion |
+
+### Pin Assignment Notes:
+
+**Deep Sleep Wakeup Requirement:**
+- ESP32-C3 only supports GPIO 0-5 for deep sleep wakeup
+- Both PIR sensors MUST be on GPIO 0-5 in dual-PIR mode
+- This is why GPIO1 (PIR_NEAR) and GPIO4 (PIR_FAR) were chosen
+
+**GPIO5 Programming Issue:**
+- GPIO5 interferes with device programming/flashing when external sensors are connected
+- Reserved exclusively for internal battery monitoring
+- **NEVER connect PIR sensors or other external devices to GPIO5**
+- If you cannot program the device, disconnect all external sensors from GPIO5
+
+**Dual-PIR vs Single-PIR Mode:**
+- **Dual-PIR**: Uses GPIO1 (near) + GPIO4 (far) for direction detection. Light sensor NOT available.
+- **Single-PIR**: Uses GPIO1 only. Light sensor available on GPIO4 (optional).
 
 See [docs/hardware/wiring_diagram.png](docs/hardware/) for complete wiring schematic.
 
@@ -304,11 +325,12 @@ For common issues and solutions, see the comprehensive [Troubleshooting Guide](T
 | Issue | Quick Fix |
 |-------|-----------|
 | Device won't boot | Check battery charge, try different USB cable |
-| Motion not detected | Wait 60s PIR warm-up, verify GPIO1 connection |
+| Motion not detected | Wait 60s PIR warm-up, verify GPIO6 connection |
 | WiFi won't connect | Check 2.4GHz network, verify credentials |
 | Battery drains quickly | Use MOTION_DETECT mode, reduce WiFi usage |
 | Can't access web UI | Verify IP address from serial console |
 | LED not working | Check polarity (long leg = anode), verify 220Ω resistor |
+| Can't program/flash | Disconnect external sensors from GPIO5 during programming |
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed diagnostic procedures and recovery options.
 

@@ -81,9 +81,10 @@ void SensorManager::update() {
                 uint32_t dist = m_slots[i].sensor->getDistance();
                 bool motion = m_slots[i].sensor->motionDetected();
                 int8_t dir = (int8_t)m_slots[i].sensor->getDirection();
+                uint8_t sensorType = (uint8_t)m_slots[i].sensor->getSensorType();
 
                 // Use smart logging that only logs changes or periodic summaries
-                g_debugLogger.logSensorReadingIfChanged(i, dist, motion, dir);
+                g_debugLogger.logSensorReadingIfChanged(i, sensorType, dist, motion, dir);
 
                 // Log motion events at DEBUG level (state changes only)
                 if (motion && !m_lastMotionState[i]) {

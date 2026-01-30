@@ -144,13 +144,13 @@ Before diving into specific issues, run through this quick checklist:
 
 3. **Check Wiring:**
    - PIR VCC → ESP32 3.3V ✓
-   - PIR OUT → ESP32 GPIO1 ✓
+   - PIR OUT → ESP32 GPIO6 ✓
    - PIR GND → ESP32 GND ✓
    - Measure voltage at PIR VCC: Should be 3.3V
 
-4. **Test GPIO1 Signal:**
+4. **Test GPIO6 Signal:**
    - Use multimeter or oscilloscope
-   - Measure voltage at GPIO1
+   - Measure voltage at GPIO6
    - Should toggle HIGH (3.3V) when motion detected
 
 **Solutions:**
@@ -158,7 +158,7 @@ Before diving into specific issues, run through this quick checklist:
 | Cause | Solution |
 |-------|----------|
 | Sensor not warmed up | Wait 60 seconds, power cycle if necessary |
-| Wrong GPIO pin | Verify GPIO1 connection, check config.h |
+| Wrong GPIO pin | Verify GPIO6 connection, check config.h |
 | Sensor out of range | Move within 2-3 meters during testing |
 | Sensor too sensitive | Adjust potentiometer (if available) clockwise to decrease |
 | Sensor not sensitive enough | Adjust potentiometer counter-clockwise to increase |
@@ -630,6 +630,31 @@ Before diving into specific issues, run through this quick checklist:
 | Wrong upload speed | Try lower baud rate: `upload_speed = 115200` |
 | Device in deep sleep | Wake device, retry upload |
 | Corrupted bootloader | Flash via esptool.py directly |
+| GPIO5 interference | Disconnect external sensors from GPIO5 (see below) |
+
+### GPIO5 Programming Interference Issue
+
+**Symptoms:**
+- Device cannot be programmed/flashed via USB
+- Upload fails or hangs during programming
+- Device appears "bricked" but works after successful flash
+
+**Cause:**
+GPIO5 on the ESP32-C3 can interfere with the programming/flashing process when external sensors or devices are connected to it. This is particularly problematic with PIR sensors or other devices that may pull the pin high/low during the boot sequence.
+
+**Solution:**
+1. **Disconnect any external devices from GPIO5** before programming
+2. If you have a PIR sensor or other device connected to GPIO5, **move it to GPIO6** (the new default)
+3. After moving the sensor, update your configuration if needed
+4. Program the device with no external sensors on GPIO5
+5. Reconnect sensors after successful programming
+
+**Prevention:**
+- **Always use GPIO6 for PIR sensors** (current default)
+- Reserve GPIO5 exclusively for battery monitoring (internal use)
+- Avoid connecting any external sensors or pull-up/pull-down resistors to GPIO5
+
+**Note:** This issue was discovered through field testing and the default PIR sensor pin has been changed from GPIO1 to GPIO6, with GPIO5 reserved for internal battery monitoring only.
 
 ### Firmware Build Fails
 
