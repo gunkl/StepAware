@@ -1,6 +1,10 @@
 #include "logger.h"
+#include "web_api.h"  // For WebAPI::broadcastLogEntry()
 #include <SPIFFS.h>
 #include <stdarg.h>
+
+// Global WebAPI pointer (defined in main.cpp)
+extern WebAPI* g_webAPI;
 
 // Global logger instance
 Logger g_logger;
@@ -13,6 +17,7 @@ Logger::Logger()
     , m_bufferHead(0)
     , m_bufferTail(0)
     , m_totalEntries(0)
+    , m_sequenceCounter(0)
     , m_lastFlushTime(0)
     , m_pendingWrites(0)
 {
@@ -248,6 +253,7 @@ const char* Logger::getLevelName(LogLevel level) {
 void Logger::addEntry(LogLevel level, const char* message) {
     // Create entry
     LogEntry entry;
+    entry.sequenceNumber = m_sequenceCounter++;
     entry.timestamp = millis();
     entry.level = level;
     strlcpy(entry.message, message, sizeof(entry.message));
@@ -277,6 +283,11 @@ void Logger::addEntry(LogLevel level, const char* message) {
     // Auto-flush if enough time has passed
     if (m_fileEnabled && millis() - m_lastFlushTime >= LOG_FLUSH_INTERVAL) {
         flush();
+    }
+
+    // Broadcast to WebSocket if available
+    if (g_webAPI) {
+        g_webAPI->broadcastLogEntry(entry);
     }
 }
 
