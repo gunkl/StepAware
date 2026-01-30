@@ -144,13 +144,13 @@ Before diving into specific issues, run through this quick checklist:
 
 3. **Check Wiring:**
    - PIR VCC → ESP32 3.3V ✓
-   - PIR OUT → ESP32 GPIO6 ✓
+   - PIR OUT → ESP32 GPIO1 (single-PIR) or GPIO1+GPIO4 (dual-PIR) ✓
    - PIR GND → ESP32 GND ✓
    - Measure voltage at PIR VCC: Should be 3.3V
 
-4. **Test GPIO6 Signal:**
+4. **Test PIR Signal:**
    - Use multimeter or oscilloscope
-   - Measure voltage at GPIO6
+   - Measure voltage at GPIO1 (or GPIO4 for far zone)
    - Should toggle HIGH (3.3V) when motion detected
 
 **Solutions:**
@@ -158,7 +158,7 @@ Before diving into specific issues, run through this quick checklist:
 | Cause | Solution |
 |-------|----------|
 | Sensor not warmed up | Wait 60 seconds, power cycle if necessary |
-| Wrong GPIO pin | Verify GPIO6 connection, check config.h |
+| Wrong GPIO pin | Verify GPIO1 connection (GPIO4 for dual-PIR), check config.h |
 | Sensor out of range | Move within 2-3 meters during testing |
 | Sensor too sensitive | Adjust potentiometer (if available) clockwise to decrease |
 | Sensor not sensitive enough | Adjust potentiometer counter-clockwise to increase |

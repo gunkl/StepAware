@@ -325,7 +325,7 @@ For common issues and solutions, see the comprehensive [Troubleshooting Guide](T
 | Issue | Quick Fix |
 |-------|-----------|
 | Device won't boot | Check battery charge, try different USB cable |
-| Motion not detected | Wait 60s PIR warm-up, verify GPIO6 connection |
+| Motion not detected | Wait 60s PIR warm-up, verify GPIO1 connection (GPIO4 for dual-PIR) |
 | WiFi won't connect | Check 2.4GHz network, verify credentials |
 | Battery drains quickly | Use MOTION_DETECT mode, reduce WiFi usage |
 | Can't access web UI | Verify IP address from serial console |
