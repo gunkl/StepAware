@@ -126,6 +126,7 @@ private:
     void cmdReboot();
     void cmdStatus();
     void cmdVersion();
+    void cmdFormat();
     void cmdWifi(size_t argc, char** argv);
     void cmdSensor(size_t argc, char** argv);
 

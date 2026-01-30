@@ -57,6 +57,7 @@ SerialConfigUI serialConfig(configManager, sensorManager);
 WiFiManager wifiManager;
 AsyncWebServer webServer(80);
 WebAPI* webAPI = nullptr;
+WebAPI* g_webAPI = nullptr;  // Global pointer for logger integration
 bool webServerStarted = false;
 
 // Diagnostic Mode
@@ -103,6 +104,7 @@ void startWebAPI() {
     }
 
     if (webAPI && webAPI->begin()) {
+        g_webAPI = webAPI;  // Set global pointer for logger integration
         webServer.begin();
         webServerStarted = true;
         Serial.println("[WebAPI] Web API started on port 80");
@@ -707,11 +709,45 @@ void setup() {
     // The web UI is served as inline HTML (buildDashboardHTML).
     // LittleFS is ONLY for user-uploaded animations and other user content.
     Serial.println("[Setup] Initializing LittleFS for user content...");
-    if (!LittleFS.begin(true)) {  // true = format on fail
-        Serial.println("[Setup] WARNING: LittleFS mount failed!");
-        Serial.println("[Setup] Animation uploads will not work");
-    } else {
-        Serial.println("[Setup] LittleFS mounted successfully");
+
+    bool littleFSReady = false;
+
+    // First attempt: Try to mount
+    if (LittleFS.begin(false)) {
+        Serial.println("[Setup] LittleFS mounted");
+
+        // Verify filesystem is actually working by testing write
+        File testFile = LittleFS.open("/.test", "w");
+        if (testFile) {
+            testFile.print("test");
+            testFile.close();
+            LittleFS.remove("/.test");
+            littleFSReady = true;
+            Serial.println("[Setup] ✓ LittleFS verified and ready");
+        } else {
+            Serial.println("[Setup] LittleFS mount succeeded but filesystem not working");
+            LittleFS.end();
+        }
+    }
+
+    // If mount failed or filesystem not working, format and retry
+    if (!littleFSReady) {
+        Serial.println("[Setup] Formatting LittleFS (this may take 30-60 seconds)...");
+        if (LittleFS.format()) {
+            Serial.println("[Setup] Format complete, mounting...");
+            if (LittleFS.begin(false)) {
+                littleFSReady = true;
+                Serial.println("[Setup] ✓ LittleFS formatted and mounted successfully");
+            } else {
+                Serial.println("[Setup] ERROR: Failed to mount after format!");
+            }
+        } else {
+            Serial.println("[Setup] ERROR: LittleFS format failed!");
+        }
+    }
+
+    if (!littleFSReady) {
+        Serial.println("[Setup] WARNING: LittleFS unavailable - logs and config will not persist!");
     }
 #endif
 
