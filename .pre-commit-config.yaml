@@ -51,6 +51,17 @@ repos:
         args: [--fix=lf]
         exclude: ^(\.bat|\.cmd)$
 
+  # C++ Static Analysis (manual stage - run before push)
+  - repo: local
+    hooks:
+      - id: cppcheck-native
+        name: cppcheck (native platform only)
+        entry: pio check --environment native --fail-on-defect=medium
+        language: system
+        files: \.(cpp|h)$
+        pass_filenames: false
+        stages: [manual]  # Run manually: pre-commit run cppcheck-native --all-files
+
 # Note: PlatformIO build/test checks are intentionally excluded
 # They are too slow for pre-commit hooks and should be run separately
 # Run manually:

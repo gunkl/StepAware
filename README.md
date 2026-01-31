@@ -307,6 +307,18 @@ pio test -e native
 
 See [AGENTS.md](AGENTS.md) for complete development workflows, build procedures, and code quality standards.
 
+### Code Quality Checks
+
+StepAware enforces code quality through static analysis and testing:
+
+- **Linting**: See [docs/CI_LINTING.md](docs/CI_LINTING.md) for our static analysis strategy
+- **Run locally**: `pio check --environment native --fail-on-defect=medium`
+- **Run in Docker**: `docker-compose run --rm stepaware-dev pio check --environment native --fail-on-defect=medium`
+- **Pre-commit hooks**: `pre-commit run cppcheck-native --all-files` (after installing pre-commit)
+- **CI enforcement**: All pull requests must pass linting checks
+
+For details on suppressions and configuration, see the linting documentation.
+
 ### Pre-commit Hooks (Optional)
 
 This project supports pre-commit hooks to automatically check code quality before commits:
