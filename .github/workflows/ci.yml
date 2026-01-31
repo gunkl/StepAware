@@ -18,7 +18,7 @@ jobs:
       - name: Check for trailing whitespace
         run: |
           echo "Checking for trailing whitespace in source files..."
-          if git grep -I --line-number '\s$' -- '*.cpp' '*.h' '*.py' '*.md' ':!*.patch'; then
+          if git grep -I --line-number '\s$' -- '*.cpp' '*.h' '*.py' '*.md' ':!*.patch' ':!.pio/*'; then
             echo "::error::Trailing whitespace found (see above)"
             exit 1
           fi

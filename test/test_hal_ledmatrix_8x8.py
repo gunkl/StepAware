@@ -202,11 +202,11 @@ class TestHALLEDMatrix8x8Initialization(unittest.TestCase):
         self.assertFalse(matrix.initialized)
 
     def test_default_brightness(self):
-        """Test default brightness is 5"""
+        """Test default brightness is 15 (max brightness)"""
         matrix = MockLEDMatrix8x8()
         matrix.begin()
 
-        self.assertEqual(matrix.get_brightness(), 5)
+        self.assertEqual(matrix.get_brightness(), 15)
 
     def test_default_rotation(self):
         """Test default rotation is 0"""
