@@ -2991,7 +2991,7 @@ String WebAPI::buildDashboardHTML() {
     html += "});";
     // Hardware Tab - Sensor Management
     html += "let sensorSlots=[null,null,null,null];";
-    html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','debounce']},";
+    html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','distanceZone']},";
     html += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
     html += "ULTRASONIC:{name:'Ultrasonic (HC-SR04)',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']},";
     html += "ULTRASONIC_GROVE:{name:'Ultrasonic (Grove)',pins:1,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
@@ -3073,8 +3073,7 @@ String WebAPI::buildDashboardHTML() {
     html += "html+='<div style=\"line-height:1.6;\">';";
     html += "if(sensor.type===0){";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Debounce:</span> <span>'+sensor.debounceMs+'ms</span></div>';";
-    html += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'Auto');";
+    html += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'None');";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';}";
     html += "else if(sensor.type===2||sensor.type===4){";
     html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
@@ -3139,7 +3138,7 @@ String WebAPI::buildDashboardHTML() {
     html += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
     html += "sensor.secondaryPin=echoPin;}";
     html += "if(typeNum===4){sensor.secondaryPin=0;}";
-    html += "if(typeNum===0){sensor.warmupMs=60000;sensor.debounceMs=50;sensor.enableDirectionDetection=false;}";  // PIR-specific overrides
+    html += "if(typeNum===0){sensor.warmupMs=60000;sensor.debounceMs=0;sensor.enableDirectionDetection=false;sensor.distanceZone=0;}";  // PIR-specific overrides
     html += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
 
     // Remove sensor
@@ -3161,9 +3160,7 @@ String WebAPI::buildDashboardHTML() {
     html += "if(sensor.type===0){";
     html += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
     html += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
-    html += "const debounce=parseInt(prompt('Debounce time (ms):',sensor.debounceMs));";
-    html += "if(!isNaN(debounce)&&debounce>=10&&debounce<=1000)sensor.debounceMs=debounce;";
-    html += "const zoneStr=prompt('Distance Zone:\\n0=Auto (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
+    html += "const zoneStr=prompt('Distance Zone:\\n0=None (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
     html += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}}";
     html += "else if(sensor.type===2||sensor.type===4){";
     html += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";

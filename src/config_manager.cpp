@@ -230,12 +230,14 @@ bool ConfigManager::validateAndCorrect() {
             sensorHadError = true;
         }
 
-        // Validate debounce (10ms to 1000ms)
-        if (sensor.debounceMs < 10 || sensor.debounceMs > 1000) {
-            DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED debounceMs: %u ms → 75 ms (out of range 10-1000)",
-                     i, sensor.debounceMs);
-            sensor.debounceMs = 75;
-            sensorHadError = true;
+        // Validate debounce (10ms to 1000ms) - only for sensors that use it (not PIR)
+        if (sensor.type != SENSOR_TYPE_PIR) {
+            if (sensor.debounceMs < 10 || sensor.debounceMs > 1000) {
+                DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED debounceMs: %u ms → 75 ms (out of range 10-1000)",
+                         i, sensor.debounceMs);
+                sensor.debounceMs = 75;
+                sensorHadError = true;
+            }
         }
 
         // Validate warmup time (0 to 120000ms = 2 minutes)
@@ -749,14 +751,14 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].isPrimary = sensorObj["isPrimary"] | false;
                 m_config.sensors[slot].detectionThreshold = sensorObj["detectionThreshold"] | 1100;  // 1100mm warn threshold
                 m_config.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;  // 3000mm max range
-                m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 75;  // 75ms sample interval (ultrasonic) / 50ms debounce (PIR)
+                m_config.sensors[slot].debounceMs = sensorObj["debounceMs"] | 75;  // 75ms for ultrasonic/IR (not used by PIR)
                 m_config.sensors[slot].warmupMs = sensorObj["warmupMs"] | 0;
                 m_config.sensors[slot].enableDirectionDetection = sensorObj["enableDirectionDetection"] | true;  // Direction enabled by default
                 m_config.sensors[slot].directionTriggerMode = sensorObj["directionTriggerMode"] | 0;  // APPROACHING
                 m_config.sensors[slot].directionSensitivity = sensorObj["directionSensitivity"] | 0;  // 0 = auto (adaptive threshold)
                 m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 3;  // 3 samples default
                 m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 75;  // 75ms sample interval (adaptive threshold)
-                m_config.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;  // 0 = Auto (default)
+                m_config.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;  // 0 = None (default)
             }
         }
     }
@@ -1015,7 +1017,7 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].isPrimary = true;
     m_config.sensors[0].detectionThreshold = 0;  // N/A for PIR
     m_config.sensors[0].maxDetectionDistance = 0;  // N/A for PIR
-    m_config.sensors[0].debounceMs = 100;
+    m_config.sensors[0].debounceMs = 0;  // Not used by PIR sensors
     m_config.sensors[0].warmupMs = PIR_WARMUP_TIME_MS;
     m_config.sensors[0].enableDirectionDetection = false;
     m_config.sensors[0].directionTriggerMode = 0;  // Approaching

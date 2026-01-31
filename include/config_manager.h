@@ -34,14 +34,14 @@ public:
         bool isPrimary;                   // Primary sensor flag
         uint32_t detectionThreshold;      // mm - warning trigger distance
         uint32_t maxDetectionDistance;    // mm - max detection range (0=use threshold)
-        uint32_t debounceMs;              // ms
+        uint32_t debounceMs;              // ms (not used by PIR sensors)
         uint32_t warmupMs;                // ms
         bool enableDirectionDetection;    // Direction detection enabled
         uint8_t directionTriggerMode;     // 0=approaching, 1=receding, 2=both
         uint16_t directionSensitivity;    // Direction change threshold (mm), 0 = auto (adaptive threshold)
         uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
-        uint8_t distanceZone;             // PIR distance zone: 0=Auto, 1=Near (0.5-4m), 2=Far (3-12m)
+        uint8_t distanceZone;             // PIR distance zone: 0=None, 1=Near (0.5-4m), 2=Far (3-12m)
     };
 
     /**
