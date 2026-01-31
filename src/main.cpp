@@ -29,6 +29,7 @@
 #include "wifi_manager.h"
 #include "web_api.h"
 #include "debug_logger.h"
+#include "power_manager.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -215,6 +216,26 @@ void printStatus() {
     }
     if (wifiStatus.failureCount > 0) {
         Serial.printf("  Failures: %u\n", wifiStatus.failureCount);
+    }
+
+    // Battery Status
+    Serial.println();
+    const PowerManager::BatteryStatus& battery = g_power.getBatteryStatus();
+    Serial.printf("Battery: %.2fV  %u%%\n", battery.voltage, battery.percentage);
+    if (battery.charging) {
+        Serial.println("  Charging: YES (USB connected)");
+    } else {
+        Serial.println("  Charging: NO");
+        if (battery.timeToEmpty > 0) {
+            uint32_t hours = battery.timeToEmpty / 3600;
+            uint32_t mins = (battery.timeToEmpty % 3600) / 60;
+            Serial.printf("  Time remaining: %uh %um\n", hours, mins);
+        }
+    }
+    if (battery.critical) {
+        Serial.println("  WARNING: CRITICAL battery level!");
+    } else if (battery.low) {
+        Serial.println("  WARNING: LOW battery level");
     }
 
     Serial.println("========================================\n");
