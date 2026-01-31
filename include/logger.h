@@ -214,14 +214,6 @@ private:
     void writeToSerial(const LogEntry& entry);
 
     /**
-     * @brief Write entry to file
-     *
-     * @param entry Log entry
-     * @return true if write successful
-     */
-    bool writeToFile(const LogEntry& entry);
-
-    /**
      * @brief Format timestamp as string
      *
      * @param timestamp Timestamp in milliseconds
@@ -229,6 +221,9 @@ private:
      * @param bufferSize Buffer size
      */
     void formatTimestamp(uint32_t timestamp, char* buffer, size_t bufferSize);
+
+    // Removed unused private function (2026-01-30):
+    // - bool writeToFile(const LogEntry& entry) - Never called, flush() writes directly to file
 };
 
 // Global logger instance

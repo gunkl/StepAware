@@ -32,7 +32,7 @@
  */
 class HAL_Ultrasonic_Grove : public HAL_MotionSensor, public DistanceSensorBase {
 public:
-    HAL_Ultrasonic_Grove(uint8_t sigPin, bool mock_mode = false);
+    explicit HAL_Ultrasonic_Grove(uint8_t sigPin, bool mock_mode = false);
     ~HAL_Ultrasonic_Grove() override;
 
     // =========================================================================

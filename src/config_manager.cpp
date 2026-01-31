@@ -289,7 +289,9 @@ bool ConfigManager::validateAndCorrect() {
             continue;
         }
 
-        if (sensor.secondaryPin > 21 && sensor.secondaryPin != 0) {
+        // Validate secondary pin (0 means disabled, or valid GPIO 0-21)
+        // Note: Condition simplified - if secondaryPin > 21, it's already != 0
+        if (sensor.secondaryPin > 21) {
             DEBUG_LOG_CONFIG("Sensor[%u]: CORRECTED secondaryPin: %u → 0 (max 21)",
                      i, sensor.secondaryPin);
             sensor.secondaryPin = 0;
@@ -1133,29 +1135,6 @@ void ConfigManager::setError(const char* error) {
     strlcpy(m_lastError, error, sizeof(m_lastError));
 }
 
-bool ConfigManager::setWiFiCredentials(const char* ssid, const char* password) {
-    if (!m_initialized) {
-        setError("Config manager not initialized");
-        return false;
-    }
-
-    // Update WiFi SSID
-    if (ssid) {
-        strlcpy(m_config.wifiSSID, ssid, sizeof(m_config.wifiSSID));
-    } else {
-        m_config.wifiSSID[0] = '\0';
-    }
-
-    // Update WiFi password
-    if (password) {
-        strlcpy(m_config.wifiPassword, password, sizeof(m_config.wifiPassword));
-    } else {
-        m_config.wifiPassword[0] = '\0';
-    }
-
-    // Update metadata
-    m_config.lastModified = millis();
-
-    // Save to FILESYSTEM
-    return save();
-}
+// NOTE: setWiFiCredentials() removed as unused (Wave 3b cleanup)
+// WiFi credentials are set via getConfig/setConfig pattern in serial_config.cpp
+// This function was never called anywhere in the codebase.

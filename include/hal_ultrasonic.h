@@ -30,6 +30,10 @@ public:
     HAL_Ultrasonic(uint8_t triggerPin, uint8_t echoPin, bool mock_mode = false);
     ~HAL_Ultrasonic() override;
 
+    // Disable copying (sensors shouldn't be copied)
+    HAL_Ultrasonic(const HAL_Ultrasonic&) = delete;
+    HAL_Ultrasonic& operator=(const HAL_Ultrasonic&) = delete;
+
     // =========================================================================
     // HAL_MotionSensor Interface Implementation
     // =========================================================================

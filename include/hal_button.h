@@ -44,8 +44,8 @@ public:
      * @param long_press_ms Long press duration in milliseconds (default: 1000ms)
      * @param mock_mode True to enable mock/simulation mode for testing
      */
-    HAL_Button(uint8_t pin, uint32_t debounce_ms = 50,
-               uint32_t long_press_ms = 1000, bool mock_mode = false);
+    explicit HAL_Button(uint8_t pin, uint32_t debounce_ms = 50,
+                        uint32_t long_press_ms = 1000, bool mock_mode = false);
 
     /**
      * @brief Destructor

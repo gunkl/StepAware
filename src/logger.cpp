@@ -301,27 +301,8 @@ void Logger::writeToSerial(const LogEntry& entry) {
                   entry.message);
 }
 
-bool Logger::writeToFile(const LogEntry& entry) {
-    if (!m_fileEnabled) {
-        return false;
-    }
-
-    File file = SPIFFS.open("/logs.txt", "a");
-    if (!file) {
-        return false;
-    }
-
-    char timestamp[16];
-    formatTimestamp(entry.timestamp, timestamp, sizeof(timestamp));
-
-    file.printf("[%s] [%s] %s\n",
-               timestamp,
-               getLevelName((LogLevel)entry.level),
-               entry.message);
-
-    file.close();
-    return true;
-}
+// Removed unused private function (2026-01-30):
+// bool Logger::writeToFile(const LogEntry& entry) - Never called, flush() writes directly to file
 
 void Logger::formatTimestamp(uint32_t timestamp, char* buffer, size_t bufferSize) {
     uint32_t seconds = timestamp / 1000;

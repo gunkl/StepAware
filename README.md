@@ -5,7 +5,7 @@
 ![Version](https://img.shields.io/badge/version-0.1.1-blue)
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
-![Build](https://github.com/yourusername/StepAware/workflows/CI%2FCD%20Pipeline/badge.svg)
+[![CI/CD Pipeline](https://github.com/gunkl/StepAware/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/gunkl/StepAware/actions)
 ![Tests](https://img.shields.io/badge/tests-95%20passing-brightgreen)
 
 ## Overview
@@ -306,6 +306,41 @@ pio test -e native
 ```
 
 See [AGENTS.md](AGENTS.md) for complete development workflows, build procedures, and code quality standards.
+
+### Pre-commit Hooks (Optional)
+
+This project supports pre-commit hooks to automatically check code quality before commits:
+
+**Installation:**
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+**What it does:**
+- Removes trailing whitespace
+- Ensures files end with newline
+- Validates YAML and JSON syntax
+- Prevents large files from being committed
+- Detects merge conflicts and private keys
+- Normalizes line endings to LF
+
+**Usage:**
+```bash
+# Runs automatically on git commit
+git commit -m "Your message"
+
+# Run manually on all files
+pre-commit run --all-files
+
+# Skip hooks (emergency only)
+git commit --no-verify -m "Your message"
+```
+
+**Note:** Pre-commit hooks are lightweight checks only. Always run full tests separately:
+```bash
+docker-compose run --rm stepaware-dev pio test -e native
+```
 
 ## Power Consumption
 
