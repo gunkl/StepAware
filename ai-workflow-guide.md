@@ -240,11 +240,11 @@ When starting a new project with AI:
 [High-level structure - frontend/backend/database/etc.]
 
 ## Tech Stack
-- Language: 
-- Framework: 
-- Database: 
-- Testing: 
-- Other: 
+- Language:
+- Framework:
+- Database:
+- Testing:
+- Other:
 
 ## Development Workflow
 1. [Project-specific workflow steps]

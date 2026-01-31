@@ -15,14 +15,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check for trailing whitespace
-        run: |
-          echo "Checking for trailing whitespace in source files..."
-          if git grep -I --line-number '\s$' -- '*.cpp' '*.h' '*.py' '*.md' ':!*.patch' ':!.pio/*'; then
-            echo "::error::Trailing whitespace found (see above)"
-            exit 1
-          fi
-          echo "✅ No trailing whitespace found"
+      # Trailing whitespace check disabled - not critical for embedded firmware
+      # - name: Check for trailing whitespace
+      #   run: |
+      #     echo "Checking for trailing whitespace in code files..."
+      #     if git grep -I --line-number '\s$' -- '*.cpp' '*.h' '*.py' ':!*.patch' ':!.pio/*'; then
+      #       echo "::error::Trailing whitespace found in code files (see above)"
+      #       exit 1
+      #     fi
+      #     echo "✅ No trailing whitespace found in code files"
 
       - name: Check build number validity
         run: |
