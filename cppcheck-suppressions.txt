@@ -1,0 +1,17 @@
+// ArduinoJson API Pattern - Bitwise OR with Defaults
+// Pattern: json["key"] | default_value
+// This is the documented ArduinoJson API for providing default values
+// when a JSON key is missing. The '|' operator is overloaded.
+badBitmaskCheck:src/config_manager.cpp
+badBitmaskCheck:src/web_api.cpp
+
+// Library-Style Public APIs - Unused in Monolithic Build
+// PlatformIO sees the entire codebase as a single compilation unit
+// and marks public APIs as "unused" even though they're legitimate
+// interfaces for component-based architecture, mocking, and testing.
+unusedFunction
+
+// Embedded HAL - Implicit Conversions Acceptable
+// Single-argument constructors without 'explicit' keyword
+// In embedded context, implicit conversions are acceptable for HAL layer
+noExplicitConstructor

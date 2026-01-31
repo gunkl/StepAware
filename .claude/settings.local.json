@@ -83,7 +83,9 @@
       "Bash(platformio test:*)",
       "Bash(C:/Python310/python.exe -m pip:*)",
       "Bash(\"$HOME/.platformio/penv/Scripts/platformio.exe\" test -e native)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
     ]
   }
 }
