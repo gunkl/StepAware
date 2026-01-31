@@ -544,6 +544,7 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
         powerObj["charging"] = battery.charging;
         powerObj["low"] = battery.low;
         powerObj["critical"] = battery.critical;
+        powerObj["timeToEmpty"] = battery.timeToEmpty;
 
         const PowerManager::PowerStats& powerStats = m_power->getStats();
         powerObj["activeTime"] = powerStats.activeTime;
@@ -2442,6 +2443,8 @@ String WebAPI::buildDashboardHTML() {
     html += "<div><div class=\"status-label-compact\">Uptime</div><div class=\"status-value-compact\" id=\"uptime\">--</div></div></div>";
     html += "<div class=\"status-item-compact\"><div class=\"status-icon\" id=\"wifi-icon\"></div>";
     html += "<div><div class=\"status-label-compact\">WiFi</div><div class=\"status-value-compact\" id=\"wifi-status-compact\">--</div></div></div>";
+    html += "<div class=\"status-item-compact\"><div class=\"status-icon\" id=\"battery-icon\"></div>";
+    html += "<div><div class=\"status-label-compact\">Battery</div><div class=\"status-value-compact\" id=\"battery-status\">--</div></div></div>";
     html += "</div></div>";
 
     // Tab Navigation
@@ -2799,6 +2802,23 @@ String WebAPI::buildDashboardHTML() {
     html += "if(data.wifi.state===3){wifiCompact.textContent=data.wifi.ssid;wifiIcon.className='status-icon active';}";
     html += "else if(data.wifi.state===2){wifiCompact.textContent='Connecting';wifiIcon.className='status-icon warning';}";
     html += "else{wifiCompact.textContent='Disconnected';wifiIcon.className='status-icon inactive';}}";
+
+    // Battery compact status
+    html += "if(data.power){";
+    html += "const battPct=data.power.batteryPercent;";
+    html += "const battIcon=document.getElementById('battery-icon');";
+    html += "const battStatus=document.getElementById('battery-status');";
+    html += "if(data.power.charging){battIcon.className='status-icon active';";
+    html += "battStatus.textContent=battPct+'% (charging)';}";
+    html += "else if(data.power.critical){battIcon.className='status-icon warning';";
+    html += "battStatus.textContent=battPct+'% CRITICAL';}";
+    html += "else if(data.power.low){battIcon.className='status-icon warning';";
+    html += "battStatus.textContent=battPct+'% LOW';}";
+    html += "else{battIcon.className='status-icon '+(battPct>20?'active':'inactive');";
+    html += "if(data.power.timeToEmpty>0){const tte=data.power.timeToEmpty;";
+    html += "const h=Math.floor(tte/3600);const m=Math.floor((tte%3600)/60);";
+    html += "battStatus.textContent=battPct+'% ('+h+'h '+m+'m)';}";
+    html += "else{battStatus.textContent=battPct+'%';}}}";
 
     // Update detailed WiFi info on Status tab
     html += "if(document.getElementById('status-tab').classList.contains('active')){";
