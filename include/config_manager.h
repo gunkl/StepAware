@@ -260,17 +260,8 @@ public:
      */
     const char* getLastError() const;
 
-    /**
-     * @brief Set WiFi credentials only (preserves other settings)
-     *
-     * Updates only the WiFi SSID and password fields, leaving all other
-     * configuration unchanged. Useful for WiFi-only resets.
-     *
-     * @param ssid WiFi SSID (empty string to clear)
-     * @param password WiFi password (empty string to clear)
-     * @return true if credentials updated successfully
-     */
-    bool setWiFiCredentials(const char* ssid, const char* password);
+    // NOTE: setWiFiCredentials() removed as unused (Wave 3b cleanup)
+    // WiFi credentials are set via setConfig() in serial_config.cpp
 
 private:
     Config m_config;                       ///< Current configuration

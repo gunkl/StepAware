@@ -1,0 +1,58 @@
+# Pre-commit hooks for StepAware
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for hook configuration
+
+# Installation:
+#   pip install pre-commit
+#   pre-commit install
+
+# Usage:
+#   pre-commit run --all-files  # Run on all files manually
+#   git commit -m "message"     # Runs automatically on staged files
+
+repos:
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+
+      # Ensure files end with a newline
+      - id: end-of-file-fixer
+        exclude: ^test/reports/
+
+      # Check YAML syntax
+      - id: check-yaml
+        args: [--safe]
+
+      # Check JSON syntax
+      - id: check-json
+
+      # Prevent large files from being committed (10MB limit)
+      - id: check-added-large-files
+        args: [--maxkb=10240]
+
+      # Check for merge conflict markers
+      - id: check-merge-conflict
+
+      # Check for files that would conflict in case-insensitive filesystems
+      - id: check-case-conflict
+
+      # Detect private keys
+      - id: detect-private-key
+
+  # Mixed line ending detection
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: ^(\.bat|\.cmd)$
+
+# Note: PlatformIO build/test checks are intentionally excluded
+# They are too slow for pre-commit hooks and should be run separately
+# Run manually:
+#   docker-compose run --rm stepaware-dev pio test -e native
+#   docker-compose run --rm stepaware-dev pio run -e esp32-devkitlipo

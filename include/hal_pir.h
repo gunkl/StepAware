@@ -31,7 +31,7 @@ public:
      * @param pin GPIO pin number for PIR sensor output
      * @param mock_mode True to enable mock/simulation mode for testing
      */
-    HAL_PIR(uint8_t pin, bool mock_mode = false);
+    explicit HAL_PIR(uint8_t pin, bool mock_mode = false);
 
     /**
      * @brief Destructor

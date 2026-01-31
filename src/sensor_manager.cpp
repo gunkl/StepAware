@@ -194,26 +194,7 @@ bool SensorManager::removeSensor(uint8_t slotIndex) {
     return true;
 }
 
-bool SensorManager::setSensorEnabled(uint8_t slotIndex, bool enabled) {
-    if (slotIndex >= MAX_SENSORS) {
-        setError("Invalid slot index");
-        return false;
-    }
-
-    if (!m_slots[slotIndex].sensor) {
-        setError("No sensor in slot");
-        return false;
-    }
-
-    m_slots[slotIndex].enabled = enabled;
-    updateActiveSensorCount();
-
-    DEBUG_LOG_SENSOR("SensorManager: Sensor %u (%s) %s",
-            slotIndex, m_slots[slotIndex].name,
-            enabled ? "enabled" : "disabled");
-
-    return true;
-}
+// Removed unused function: setSensorEnabled (cppcheck cleanup 2026-01-30)
 
 HAL_MotionSensor* SensorManager::getSensor(uint8_t slotIndex) {
     if (slotIndex >= MAX_SENSORS) {
@@ -222,12 +203,7 @@ HAL_MotionSensor* SensorManager::getSensor(uint8_t slotIndex) {
     return m_slots[slotIndex].sensor;
 }
 
-const SensorSlot* SensorManager::getSensorSlot(uint8_t slotIndex) const {
-    if (slotIndex >= MAX_SENSORS) {
-        return nullptr;
-    }
-    return &m_slots[slotIndex];
-}
+// Removed unused function: getSensorSlot (cppcheck cleanup 2026-01-30)
 
 HAL_MotionSensor* SensorManager::getPrimarySensor() {
     if (m_primarySlotIndex == 0xFF || m_primarySlotIndex >= MAX_SENSORS) {
@@ -417,39 +393,11 @@ bool SensorManager::allSensorsReady() {
     return true;
 }
 
-uint32_t SensorManager::getNearestDistance() {
-    uint32_t nearest = 0;
+// Removed unused function: getNearestDistance (cppcheck cleanup 2026-01-30)
 
-    for (uint8_t i = 0; i < MAX_SENSORS; i++) {
-        if (m_slots[i].sensor && m_slots[i].enabled) {
-            if (m_slots[i].sensor->getCapabilities().supportsDistanceMeasurement) {
-                uint32_t dist = m_slots[i].sensor->getDistance();
-                if (nearest == 0 || dist < nearest) {
-                    nearest = dist;
-                }
-            }
-        }
-    }
+// Removed unused function: getPrimaryDirection (cppcheck cleanup 2026-01-30)
 
-    return nearest;
-}
-
-MotionDirection SensorManager::getPrimaryDirection() {
-    HAL_MotionSensor* primary = getPrimarySensor();
-    if (primary && primary->getCapabilities().supportsDirectionDetection) {
-        return primary->getDirection();
-    }
-    return DIRECTION_UNKNOWN;
-}
-
-void SensorManager::resetEventCounts() {
-    for (uint8_t i = 0; i < MAX_SENSORS; i++) {
-        if (m_slots[i].sensor) {
-            m_slots[i].sensor->resetEventCount();
-        }
-    }
-    DEBUG_LOG_SENSOR("SensorManager: Reset all event counts");
-}
+// Removed unused function: resetEventCounts (cppcheck cleanup 2026-01-30)
 
 void SensorManager::printStatus() {
     Serial.println("\n========== Sensor Manager Status ==========");
@@ -510,34 +458,7 @@ void SensorManager::printStatus() {
     Serial.println("===========================================\n");
 }
 
-bool SensorManager::validateConfiguration() {
-    // Check for conflicting configurations
-    uint8_t primaryCount = 0;
-    for (uint8_t i = 0; i < MAX_SENSORS; i++) {
-        if (m_slots[i].sensor && m_slots[i].isPrimary) {
-            primaryCount++;
-        }
-    }
-
-    if (primaryCount > 1) {
-        setError("Multiple primary sensors configured");
-        return false;
-    }
-
-    // Validate fusion mode
-    if (m_fusionMode == FUSION_MODE_TRIGGER_MEASURE) {
-        if (m_activeSensorCount < 2) {
-            setError("TRIGGER_MEASURE mode requires at least 2 sensors");
-            return false;
-        }
-        if (primaryCount == 0) {
-            setError("TRIGGER_MEASURE mode requires a primary sensor");
-            return false;
-        }
-    }
-
-    return true;
-}
+// Removed unused function: validateConfiguration (cppcheck cleanup 2026-01-30)
 
 const char* SensorManager::getLastError() const {
     return m_lastError;

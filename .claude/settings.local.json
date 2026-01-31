@@ -79,7 +79,11 @@
       "Bash(curl http://10.123.0.98/api/ota/coredump -o \"c:\\\\Users\\\\David\\\\Documents\\\\VSCode Projects\\\\ESP32\\\\StepAware\\\\coredump.elf\" -v)",
       "Bash(pio pkg exec:*)",
       "Bash(findstr:*)",
-      "Bash(~/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-addr2line.exe:*)"
+      "Bash(~/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-addr2line.exe:*)",
+      "Bash(platformio test:*)",
+      "Bash(C:/Python310/python.exe -m pip:*)",
+      "Bash(\"$HOME/.platformio/penv/Scripts/platformio.exe\" test -e native)",
+      "Bash(test:*)"
     ]
   }
 }

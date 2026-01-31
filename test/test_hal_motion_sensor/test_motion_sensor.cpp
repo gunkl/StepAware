@@ -73,13 +73,13 @@ void test_sensor_capabilities_default_ultrasonic(void) {
     TEST_ASSERT_TRUE(caps.supportsDirectionDetection);
     TEST_ASSERT_FALSE(caps.requiresWarmup);
     TEST_ASSERT_FALSE(caps.supportsDeepSleepWake);
-    TEST_ASSERT_EQUAL_STRING("Ultrasonic Distance Sensor", caps.sensorTypeName);
+    TEST_ASSERT_EQUAL_STRING("Ultrasonic (HC-SR04 4-pin)", caps.sensorTypeName);
 }
 
 void test_sensor_type_name(void) {
     TEST_ASSERT_EQUAL_STRING("PIR", getSensorTypeName(SENSOR_TYPE_PIR));
     TEST_ASSERT_EQUAL_STRING("IR", getSensorTypeName(SENSOR_TYPE_IR));
-    TEST_ASSERT_EQUAL_STRING("Ultrasonic", getSensorTypeName(SENSOR_TYPE_ULTRASONIC));
+    TEST_ASSERT_EQUAL_STRING("Ultrasonic (HC-SR04)", getSensorTypeName(SENSOR_TYPE_ULTRASONIC));
     TEST_ASSERT_EQUAL_STRING("Passive IR", getSensorTypeName(SENSOR_TYPE_PASSIVE_IR));
     TEST_ASSERT_EQUAL_STRING("Unknown", getSensorTypeName((SensorType)99));
 }

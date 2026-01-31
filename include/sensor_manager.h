@@ -136,14 +136,7 @@ public:
      */
     bool removeSensor(uint8_t slotIndex);
 
-    /**
-     * @brief Enable or disable a sensor slot
-     *
-     * @param slotIndex Slot index
-     * @param enabled True to enable, false to disable
-     * @return true if successful
-     */
-    bool setSensorEnabled(uint8_t slotIndex, bool enabled);
+    // Removed unused function: setSensorEnabled (cppcheck cleanup 2026-01-30)
 
     /**
      * @brief Get sensor at specific slot
@@ -153,13 +146,7 @@ public:
      */
     HAL_MotionSensor* getSensor(uint8_t slotIndex);
 
-    /**
-     * @brief Get sensor slot information
-     *
-     * @param slotIndex Slot index
-     * @return Pointer to slot info, nullptr if invalid
-     */
-    const SensorSlot* getSensorSlot(uint8_t slotIndex) const;
+    // Removed unused function: getSensorSlot (cppcheck cleanup 2026-01-30)
 
     /**
      * @brief Get primary sensor
@@ -216,24 +203,11 @@ public:
      */
     bool allSensorsReady();
 
-    /**
-     * @brief Get nearest distance from all distance sensors
-     *
-     * @return Nearest distance in mm, 0 if no distance sensors
-     */
-    uint32_t getNearestDistance();
+    // Removed unused function: getNearestDistance (cppcheck cleanup 2026-01-30)
 
-    /**
-     * @brief Get direction from primary sensor
-     *
-     * @return Direction if primary sensor supports it, UNKNOWN otherwise
-     */
-    MotionDirection getPrimaryDirection();
+    // Removed unused function: getPrimaryDirection (cppcheck cleanup 2026-01-30)
 
-    /**
-     * @brief Reset event counts for all sensors
-     */
-    void resetEventCounts();
+    // Removed unused function: resetEventCounts (cppcheck cleanup 2026-01-30)
 
     /**
      * @brief Print sensor manager status
@@ -242,14 +216,7 @@ public:
      */
     void printStatus();
 
-    /**
-     * @brief Validate sensor configuration
-     *
-     * Checks for conflicts and invalid configurations.
-     *
-     * @return true if configuration is valid
-     */
-    bool validateConfiguration();
+    // Removed unused function: validateConfiguration (cppcheck cleanup 2026-01-30)
 
     /**
      * @brief Get last error message
