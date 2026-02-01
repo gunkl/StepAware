@@ -120,7 +120,8 @@ public:
         bool rememberLastMode;             // Remember mode on reboot
 
         // Power Management
-        bool powerSavingEnabled;           // Enable power saving
+        bool batteryMonitoringEnabled;     // Enable battery monitoring (requires external voltage divider on GPIO5)
+        bool powerSavingEnabled;           // Enable power saving (forced off when battery monitoring is disabled)
         uint32_t deepSleepAfterMs;         // ms of inactivity before deep sleep
 
         // Logging

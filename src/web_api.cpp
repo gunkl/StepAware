@@ -21,8 +21,10 @@
 // Using std::map instead of request->_tempObject to avoid heap corruption
 static std::map<AsyncWebServerRequest*, char*> s_requestBuffers;
 
-// Static buffer for HTML dashboard (single-user device)
-static String g_htmlResponseBuffer;
+// Static buffers for HTML dashboard (split into two parts to stay under ESP32's
+// ~64KB max contiguous heap allocation limit; each part is reserved independently)
+static String g_htmlPart1;  // HTML head + CSS + body + tab content (no <script>)
+static String g_htmlPart2;  // <script>...</script></body></html>
 static unsigned long g_lastHTMLBuildTime = 0;
 static bool g_htmlResponseInProgress = false;
 
@@ -541,10 +543,10 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
         const PowerManager::BatteryStatus& battery = m_power->getBatteryStatus();
         powerObj["batteryVoltage"] = battery.voltage;
         powerObj["batteryPercent"] = battery.percentage;
-        powerObj["charging"] = battery.charging;
+        powerObj["usbPower"] = battery.usbPower;
         powerObj["low"] = battery.low;
         powerObj["critical"] = battery.critical;
-        powerObj["timeToEmpty"] = battery.timeToEmpty;
+        powerObj["monitoringEnabled"] = m_power->isBatteryMonitoringEnabled();
 
         const PowerManager::PowerStats& powerStats = m_power->getStats();
         powerObj["activeTime"] = powerStats.activeTime;
@@ -697,6 +699,15 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
     g_logger.setLevel(loggerLevel);
 
     DEBUG_LOG_API("Log level updated to %u from config", cfg.logLevel);
+
+    // Apply direction detector config changes at runtime
+    if (m_directionDetector) {
+        const ConfigManager::DirectionDetectorConfig& dirCfg = cfg.directionDetector;
+        m_directionDetector->setSimultaneousThresholdMs(dirCfg.simultaneousThresholdMs);
+        m_directionDetector->setConfirmationWindowMs(dirCfg.confirmationWindowMs);
+        m_directionDetector->setPatternTimeoutMs(dirCfg.patternTimeoutMs);
+        DEBUG_LOG_API("Direction detector config applied at runtime");
+    }
 
     // Return updated config
     char buffer[2048];
@@ -2170,40 +2181,60 @@ void WebAPI::handleRoot(AsyncWebServerRequest* request) {
     // 2. Simpler deployment (no filesystem upload step)
     // 3. No LittleFS mount/filesystem issues
     // 4. For single-developer embedded projects, reflashing is acceptable
-    if (g_htmlResponseBuffer.length() == 0 || !g_htmlResponseBuffer.endsWith("</html>")) {
+    if (g_htmlPart1.length() == 0 || !g_htmlPart2.endsWith("</html>")) {
         LOG_INFO("Building dashboard HTML...");
-        g_htmlResponseBuffer = buildDashboardHTML();
+        buildDashboardHTML();  // populates g_htmlPart1 and g_htmlPart2
 
-        // Verify build succeeded
-        if (g_htmlResponseBuffer.length() == 0 || !g_htmlResponseBuffer.endsWith("</html>")) {
-            LOG_ERROR("Dashboard HTML build failed - truncated or empty");
+        // Verify build succeeded (part2 must end with </html>)
+        if (g_htmlPart1.length() == 0 || !g_htmlPart2.endsWith("</html>")) {
+            LOG_ERROR("Dashboard HTML build failed - truncated or empty (part1=%u, part2=%u)",
+                      g_htmlPart1.length(), g_htmlPart2.length());
             g_htmlResponseInProgress = false;
             request->send(500, "text/plain", "Dashboard build failed - low memory");
             return;
         }
 
-        LOG_INFO("Dashboard HTML built: %u bytes, free heap: %u",
-                 g_htmlResponseBuffer.length(), ESP.getFreeHeap());
+        LOG_INFO("Dashboard HTML built: %u bytes (part1=%u, part2=%u), free heap: %u",
+                 g_htmlPart1.length() + g_htmlPart2.length(),
+                 g_htmlPart1.length(), g_htmlPart2.length(), ESP.getFreeHeap());
     } else {
-        LOG_DEBUG("Using cached dashboard HTML (%u bytes)", g_htmlResponseBuffer.length());
+        LOG_DEBUG("Using cached dashboard HTML (%u bytes, part1=%u part2=%u)",
+                  g_htmlPart1.length() + g_htmlPart2.length(),
+                  g_htmlPart1.length(), g_htmlPart2.length());
     }
 
-    size_t len = g_htmlResponseBuffer.length();
-    const char* htmlPtr = g_htmlResponseBuffer.c_str();
+    size_t totalLen = g_htmlPart1.length() + g_htmlPart2.length();
+    const char* p1 = g_htmlPart1.c_str();
+    size_t p1Len = g_htmlPart1.length();
+    const char* p2 = g_htmlPart2.c_str();
+    size_t p2Len = g_htmlPart2.length();
 
-    // Send using chunked response callback (reads directly from static buffer)
+    // Send using chunked response callback — streams across both cached parts
     AsyncWebServerResponse *response = request->beginResponse(
-        "text/html", len,
-        [htmlPtr, len](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-            if (index >= len) {
-                g_htmlResponseInProgress = false;  // Mark as complete
+        "text/html", totalLen,
+        [p1, p1Len, p2, p2Len, totalLen](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            if (index >= totalLen) {
+                g_htmlResponseInProgress = false;
                 return 0;
             }
 
-            size_t remaining = len - index;
-            size_t toSend = (remaining < maxLen) ? remaining : maxLen;
-            memcpy(buffer, htmlPtr + index, toSend);
+            size_t toSend = 0;
+            if (index < p1Len) {
+                size_t available = p1Len - index;
+                size_t chunk = (available < maxLen) ? available : maxLen;
+                memcpy(buffer, p1 + index, chunk);
+                toSend = chunk;
+            } else {
+                size_t p2Index = index - p1Len;
+                size_t available = p2Len - p2Index;
+                size_t chunk = (available < maxLen) ? available : maxLen;
+                memcpy(buffer, p2 + p2Index, chunk);
+                toSend = chunk;
+            }
 
+            if (index + toSend >= totalLen) {
+                g_htmlResponseInProgress = false;
+            }
             return toSend;
         }
     );
@@ -2211,7 +2242,7 @@ void WebAPI::handleRoot(AsyncWebServerRequest* request) {
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
 
-    LOG_INFO("Dashboard HTML response started (chunked, %u bytes)", len);
+    LOG_INFO("Dashboard HTML response started (chunked, %u bytes)", totalLen);
 }
 
 void WebAPI::handleLiveLogs(AsyncWebServerRequest* request) {
@@ -2315,16 +2346,21 @@ void WebAPI::handleLiveLogs(AsyncWebServerRequest* request) {
     request->send(200, "text/html", html);
 }
 
-String WebAPI::buildDashboardHTML() {
+void WebAPI::buildDashboardHTML() {
     LOG_DEBUG("buildDashboardHTML() starting, free heap: %u", ESP.getFreeHeap());
-    String html;
-    // Reserve 60KB - conservative to avoid allocation failures on ESP32-C3
-    // Actual HTML is ~65KB, but String will auto-grow if needed
-    html.reserve(61440);
-    LOG_DEBUG("Reserved 60KB for HTML buffer");
+
+    // The full dashboard HTML is ~67KB.  ESP32 heap fragmentation limits the
+    // largest single contiguous allocation to ~64KB.  Split into two Strings:
+    //   Part 1 — HTML head + CSS + body + all tab content (no <script>)
+    //   Part 2 — <script>...</script></body></html>
+    // Each part is well under 64KB so reserve() succeeds independently.
+    g_htmlPart1.clear();
+    g_htmlPart1.reserve(45056);  // 44KB — comfortably fits the HTML/CSS portion
+    String& html = g_htmlPart1;  // alias for the build loop below
+    LOG_DEBUG("Reserved 44KB for HTML part 1");
 
     // HTML Head
-    html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
     html += "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">";
     html += "<title>StepAware Dashboard</title><style>";
 
@@ -2452,29 +2488,49 @@ String WebAPI::buildDashboardHTML() {
     html += "<button class=\"tab active\" onclick=\"showTab('status')\">Status</button>";
     html += "<button class=\"tab\" onclick=\"showTab('hardware')\">Hardware</button>";
     html += "<button class=\"tab\" onclick=\"showTab('config')\">Configuration</button>";
-    html += "<button class=\"tab\" onclick=\"window.open('/live-logs','logs','width=900,height=600')\">Live Logs</button>";
     html += "<button class=\"tab\" onclick=\"showTab('firmware')\">Firmware</button>";
     html += "</div>";
 
     // STATUS TAB
     html += "<div id=\"status-tab\" class=\"tab-content active\">";
 
+    // Control Panel card
     html += "<div class=\"card\"><h2>Control Panel</h2><div class=\"mode-buttons\">";
     html += "<button class=\"btn btn-off\" onclick=\"setMode(0)\" id=\"btn-0\">OFF</button>";
     html += "<button class=\"btn btn-always\" onclick=\"setMode(1)\" id=\"btn-1\">ALWAYS ON</button>";
     html += "<button class=\"btn btn-motion\" onclick=\"setMode(2)\" id=\"btn-2\">MOTION DETECT</button>";
     html += "</div></div>";
 
-    html += "<div class=\"card\"><h2>Network Details</h2><div id=\"wifi-details-full\">";
-    html += "<p>Loading WiFi information...</p>";
-    html += "</div></div>";
-
+    // System card — tabular: Network + Battery
     html += "<div class=\"card\"><h2>System</h2>";
-    html += "<div style=\"display:flex;justify-content:center;\">";
-    html += "<button class=\"btn btn-danger\" onclick=\"rebootDevice()\" style=\"width:50%;max-width:200px;font-weight:600;\">Reboot Device</button>";
+    html += "<table style=\"width:100%;border-collapse:collapse;\">";
+    html += "<tr style=\"background:#f8fafc;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;width:38%;\">WiFi</td><td style=\"padding:6px 10px;\" id=\"sys-wifi\">--</td></tr>";
+    html += "<tr><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">IP Address</td><td style=\"padding:6px 10px;\" id=\"sys-ip\">--</td></tr>";
+    html += "<tr style=\"background:#f8fafc;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Signal</td><td style=\"padding:6px 10px;\" id=\"sys-rssi\">--</td></tr>";
+    html += "<tr style=\"border-top:1px solid #e2e8f0;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Battery</td><td style=\"padding:6px 10px;\" id=\"sys-battery\">--</td></tr>";
+    html += "<tr style=\"background:#f8fafc;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Voltage</td><td style=\"padding:6px 10px;\" id=\"sys-voltage\">--</td></tr>";
+    html += "<tr><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Power State</td><td style=\"padding:6px 10px;\" id=\"sys-power-state\">--</td></tr>";
+    html += "</table></div>";
+
+    // Logs card — file download management
+    html += "<div class=\"card\"><div style=\"display:flex;justify-content:space-between;align-items:center;\"><h2 style=\"margin:0;\">Logs</h2>";
+    html += "<button class=\"btn btn-primary btn-small\" onclick=\"window.open('/live-logs','logs','width=900,height=600')\">&#129717; Live Logs &#129717;</button></div>";
+    html += "<div style=\"margin-bottom:10px;\">";
+    html += "<label for=\"logSelect\" style=\"display:block;font-weight:600;margin-bottom:4px;\">Select Log File:</label>";
+    html += "<select id=\"logSelect\" style=\"width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:4px;\">";
+    html += "<option value=\"\">-- Select a log file --</option>";
+    html += "</select>";
     html += "</div>";
-    html += "<p class=\"form-help\" style=\"margin-top:8px;margin-bottom:0;text-align:center;\">Restart the ESP32 device. The web interface will be unavailable for ~10 seconds.</p>";
+    html += "<div id=\"logActions\" style=\"display:none;margin-bottom:10px;\">";
+    html += "<button class=\"btn btn-primary btn-small\" onclick=\"downloadLog()\">Download</button>";
+    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:8px;\" onclick=\"eraseLog()\">Erase</button>";
+    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:16px;\" onclick=\"eraseAllLogs()\">Erase All Logs</button>";
     html += "</div>";
+    html += "<div id=\"logInfo\" style=\"display:none;padding:12px;background:#f5f5f5;border-radius:6px;\">";
+    html += "<p><strong>File:</strong> <span id=\"selectedLogName\">-</span></p>";
+    html += "<p><strong>Size:</strong> <span id=\"selectedLogSize\">-</span> bytes (<span id=\"selectedLogSizeKB\">-</span> KB)</p>";
+    html += "<p><strong>Path:</strong> <span id=\"selectedLogPath\">-</span></p>";
+    html += "</div></div>";
 
     html += "</div>"; // End status tab
 
@@ -2648,12 +2704,22 @@ String WebAPI::buildDashboardHTML() {
     html += "<option value=\"5\">NONE</option>";
     html += "</select>";
     html += "<div class=\"form-help\">Higher levels log less detail. VERBOSE logs everything (battery intensive)</div></div>";
+    html += "</div>";
+
+    html += "<h3>Power</h3>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Battery Monitoring</label>";
+    html += "<select id=\"cfg-batteryMonitoring\" class=\"form-select\">";
+    html += "<option value=\"0\">Disabled</option>";
+    html += "<option value=\"1\">Enabled</option>";
+    html += "</select>";
+    html += "<div class=\"form-help\">Requires external voltage divider on GPIO5 (see hardware docs). Disabling forces Power Saving off.</div></div>";
     html += "<div class=\"form-group\"><label class=\"form-label\">Power Saving</label>";
     html += "<select id=\"cfg-powerSaving\" class=\"form-select\">";
     html += "<option value=\"0\">Disabled</option>";
     html += "<option value=\"1\">Enabled</option>";
     html += "</select>";
-    html += "<div class=\"form-help\">Enable to reduce power consumption</div></div>";
+    html += "<div class=\"form-help\">Enable to reduce power consumption. Requires Battery Monitoring to be enabled.</div></div>";
     html += "</div>";
 
     html += "<div style=\"margin-top:24px;\">";
@@ -2661,63 +2727,16 @@ String WebAPI::buildDashboardHTML() {
     html += "<button type=\"button\" class=\"btn btn-off btn-small\" style=\"margin-left:12px;\" onclick=\"loadConfig()\">Reload</button>";
     html += "</div>";
     html += "<div id=\"save-indicator\" class=\"save-indicator\">Configuration saved successfully!</div>";
-    html += "</form></div></div>";
+    html += "</form></div>";
 
-    // LOGS TAB
-    html += "<div id=\"logs-tab\" class=\"tab-content\">";
-
-    // Real-time System Logs Card
-    html += "<div class=\"card\"><h2>System Logs</h2>";
-    html += "<div class=\"log-header\">";
-    html += "<span id=\"ws-status\" class=\"badge badge-info\">Connecting...</span>";
-    html += "<label style=\"margin-left:10px;\">";
-    html += "<input type=\"checkbox\" id=\"auto-scroll\" checked> Auto-scroll";
-    html += "</label>";
+    // Reboot card at bottom of config tab
+    html += "<div class=\"card\"><h2>Device Management</h2>";
+    html += "<div style=\"display:flex;justify-content:center;\">";
+    html += "<button class=\"btn btn-danger\" onclick=\"rebootDevice()\" style=\"width:50%;max-width:200px;font-weight:600;\">Reboot Device</button>";
     html += "</div>";
-    html += "<div class=\"log-controls\">";
-    html += "<input type=\"text\" id=\"log-search\" placeholder=\"Search logs...\" ";
-    html += "onkeyup=\"filterLogs()\" style=\"width:200px;margin-right:10px;\">";
-    html += "<div class=\"log-filter-buttons\">";
-    html += "<button class=\"filter-btn active\" data-level=\"0\" onclick=\"toggleLevelFilter(this)\">VERBOSE</button>";
-    html += "<button class=\"filter-btn active\" data-level=\"1\" onclick=\"toggleLevelFilter(this)\">DEBUG</button>";
-    html += "<button class=\"filter-btn active\" data-level=\"2\" onclick=\"toggleLevelFilter(this)\">INFO</button>";
-    html += "<button class=\"filter-btn active\" data-level=\"3\" onclick=\"toggleLevelFilter(this)\">WARN</button>";
-    html += "<button class=\"filter-btn active\" data-level=\"4\" onclick=\"toggleLevelFilter(this)\">ERROR</button>";
+    html += "<p class=\"form-help\" style=\"margin-top:8px;margin-bottom:0;text-align:center;\">Restart the ESP32 device. The web interface will be unavailable for ~10 seconds.</p>";
     html += "</div>";
-    html += "<button class=\"btn btn-sm\" onclick=\"clearLogViewer()\" style=\"margin-left:10px;\">Clear Display</button>";
-    html += "</div>";
-    html += "<div id=\"log-viewer\" class=\"log-viewer\"></div>";
-    html += "</div>";
-
-    // Boot Information Card
-    html += "<div class=\"card\"><h2>Boot Information</h2>";
-    html += "<div id=\"bootInfo\">";
-    html += "<p><strong>Boot Cycle:</strong> <span id=\"bootCycle\">-</span></p>";
-    html += "<p><strong>Firmware:</strong> <span id=\"firmware\">-</span></p>";
-    html += "<p><strong>Free Heap:</strong> <span id=\"freeHeap\">-</span> bytes</p>";
-    html += "<p><strong>Filesystem Usage:</strong> <span id=\"fsUsage\">-</span>%</p>";
-    html += "<p><strong>Total Logs Size:</strong> <span id=\"logsSize\">-</span> bytes</p>";
-    html += "<p><strong>Current Log Level:</strong> <span id=\"currentLogLevel\" style=\"font-weight:600;\">-</span></p>";
-    html += "</div></div>";
-
-    // Debug Logs (LittleFS) Card
-    html += "<div class=\"card\"><h2>Debug Logs (LittleFS)</h2>";
-    html += "<div style=\"margin-bottom:10px;\">";
-    html += "<label for=\"logSelect\" style=\"display:block;font-weight:600;margin-bottom:4px;\">Select Log File:</label>";
-    html += "<select id=\"logSelect\" style=\"width:100%;padding:8px;margin:5px 0;border:1px solid #cbd5e1;border-radius:4px;\">";
-    html += "<option value=\"\">-- Select a log file --</option>";
-    html += "</select>";
-    html += "</div>";
-    html += "<div id=\"logActions\" style=\"display:none;margin-bottom:10px;\">";
-    html += "<button class=\"btn btn-primary btn-small\" onclick=\"downloadLog()\">Download</button>";
-    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:8px;\" onclick=\"eraseLog()\">Erase</button>";
-    html += "<button class=\"btn btn-danger btn-small\" style=\"margin-left:16px;\" onclick=\"eraseAllLogs()\">Erase All Logs</button>";
-    html += "</div>";
-    html += "<div id=\"logInfo\" style=\"display:none;padding:12px;background:#f5f5f5;border-radius:6px;\">";
-    html += "<p><strong>File:</strong> <span id=\"selectedLogName\">-</span></p>";
-    html += "<p><strong>Size:</strong> <span id=\"selectedLogSize\">-</span> bytes (<span id=\"selectedLogSizeKB\">-</span> KB)</p>";
-    html += "<p><strong>Path:</strong> <span id=\"selectedLogPath\">-</span></p>";
-    html += "</div></div></div>";
+    html += "</div>"; // End config tab
 
     // FIRMWARE TAB
     html += "<div id=\"firmware-tab\" class=\"tab-content\">";
@@ -2759,1018 +2778,939 @@ String WebAPI::buildDashboardHTML() {
 
     html += "</div>"; // End container
 
-    // JavaScript
-    html += "<script>";
+    LOG_DEBUG("Part 1 complete: %u bytes, free heap: %u", g_htmlPart1.length(), ESP.getFreeHeap());
+
+    // --- Part 2: JavaScript ---
+    g_htmlPart2.clear();
+    g_htmlPart2.reserve(40960);  // 40KB — fits the JS portion (last measured: ~38.4KB)
+    String& html2 = g_htmlPart2;
+    LOG_DEBUG("Reserved 40KB for HTML part 2");
+
+    html2 += "<script>";
 
     // Tab switching
-    html += "function showTab(tab){";
-    html += "document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));";
-    html += "document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));";
-    html += "event.target.classList.add('active');";
-    html += "document.getElementById(tab+'-tab').classList.add('active');";
-    html += "if(tab==='config')loadConfig();";
-    html += "if(tab==='hardware'){loadSensors();loadDisplays();loadAnimations();}";
-    html += "if(tab==='logs'){loadAvailableLogs();}";
-    html += "}";
+    html2 += "function showTab(tab){";
+    html2 += "document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));";
+    html2 += "document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));";
+    html2 += "event.target.classList.add('active');";
+    html2 += "document.getElementById(tab+'-tab').classList.add('active');";
+    html2 += "if(tab==='config')loadConfig();";
+    html2 += "if(tab==='hardware'){loadSensors();loadDisplays();loadAnimations();}";
+    html2 += "}";
 
     // Status fetching
-    html += "let currentMode=-1;";
-    html += "async function fetchStatus(){";
-    html += "try{const res=await fetch('/api/status');const data=await res.json();";
-    html += "currentMode=data.stateMachine.mode;";
+    html2 += "let currentMode=-1;";
+    html2 += "async function fetchStatus(){";
+    html2 += "try{const res=await fetch('/api/status');const data=await res.json();";
+    html2 += "currentMode=data.stateMachine.mode;";
 
     // Update compact status bar
-    html += "document.getElementById('mode-display').textContent=data.stateMachine.modeName;";
-    html += "const modeIcon=document.getElementById('mode-icon');";
-    html += "modeIcon.className='status-icon '+(data.stateMachine.mode===0?'inactive':data.stateMachine.mode===1?'active':'');";
+    html2 += "document.getElementById('mode-display').textContent=data.stateMachine.modeName;";
+    html2 += "const modeIcon=document.getElementById('mode-icon');";
+    html2 += "modeIcon.className='status-icon '+(data.stateMachine.mode===0?'inactive':data.stateMachine.mode===1?'active':'');";
 
-    html += "const warningEl=document.getElementById('warning-status');";
-    html += "const warningIcon=document.getElementById('warning-icon');";
-    html += "if(data.stateMachine.warningActive){warningEl.textContent='Active';warningIcon.className='status-icon warning';}";
-    html += "else{warningEl.textContent='Idle';warningIcon.className='status-icon inactive';}";
+    html2 += "const warningEl=document.getElementById('warning-status');";
+    html2 += "const warningIcon=document.getElementById('warning-icon');";
+    html2 += "if(data.stateMachine.warningActive){warningEl.textContent='Active';warningIcon.className='status-icon warning';}";
+    html2 += "else{warningEl.textContent='Idle';warningIcon.className='status-icon inactive';}";
 
-    html += "document.getElementById('motion-events').textContent=data.stateMachine.motionEvents;";
+    html2 += "document.getElementById('motion-events').textContent=data.stateMachine.motionEvents;";
 
-    html += "const uptime=Math.floor(data.uptime/1000);";
-    html += "const hours=Math.floor(uptime/3600);const mins=Math.floor((uptime%3600)/60);";
-    html += "document.getElementById('uptime').textContent=hours+'h '+mins+'m';";
+    html2 += "const uptime=Math.floor(data.uptime/1000);";
+    html2 += "const hours=Math.floor(uptime/3600);const mins=Math.floor((uptime%3600)/60);";
+    html2 += "document.getElementById('uptime').textContent=hours+'h '+mins+'m';";
 
     // WiFi compact status
-    html += "const wifiIcon=document.getElementById('wifi-icon');";
-    html += "const wifiCompact=document.getElementById('wifi-status-compact');";
-    html += "if(data.wifi){";
-    html += "if(data.wifi.state===3){wifiCompact.textContent=data.wifi.ssid;wifiIcon.className='status-icon active';}";
-    html += "else if(data.wifi.state===2){wifiCompact.textContent='Connecting';wifiIcon.className='status-icon warning';}";
-    html += "else{wifiCompact.textContent='Disconnected';wifiIcon.className='status-icon inactive';}}";
+    html2 += "const wifiIcon=document.getElementById('wifi-icon');";
+    html2 += "const wifiCompact=document.getElementById('wifi-status-compact');";
+    html2 += "if(data.wifi){";
+    html2 += "if(data.wifi.state===3){wifiCompact.textContent=data.wifi.ssid;wifiIcon.className='status-icon active';}";
+    html2 += "else if(data.wifi.state===2){wifiCompact.textContent='Connecting';wifiIcon.className='status-icon warning';}";
+    html2 += "else{wifiCompact.textContent='Disconnected';wifiIcon.className='status-icon inactive';}}";
 
     // Battery compact status
-    html += "if(data.power){";
-    html += "const battPct=data.power.batteryPercent;";
-    html += "const battIcon=document.getElementById('battery-icon');";
-    html += "const battStatus=document.getElementById('battery-status');";
-    html += "if(data.power.charging){battIcon.className='status-icon active';";
-    html += "battStatus.textContent=battPct+'% (charging)';}";
-    html += "else if(data.power.critical){battIcon.className='status-icon warning';";
-    html += "battStatus.textContent=battPct+'% CRITICAL';}";
-    html += "else if(data.power.low){battIcon.className='status-icon warning';";
-    html += "battStatus.textContent=battPct+'% LOW';}";
-    html += "else{battIcon.className='status-icon '+(battPct>20?'active':'inactive');";
-    html += "if(data.power.timeToEmpty>0){const tte=data.power.timeToEmpty;";
-    html += "const h=Math.floor(tte/3600);const m=Math.floor((tte%3600)/60);";
-    html += "battStatus.textContent=battPct+'% ('+h+'h '+m+'m)';}";
-    html += "else{battStatus.textContent=battPct+'%';}}}";
+    html2 += "if(data.power){";
+    html2 += "const battPct=data.power.batteryPercent;";
+    html2 += "const battIcon=document.getElementById('battery-icon');";
+    html2 += "const battStatus=document.getElementById('battery-status');";
+    html2 += "if(!data.power.monitoringEnabled){";
+    html2 += "if(data.power.usbPower){battIcon.className='status-icon active';battStatus.textContent='USB Power';}";
+    html2 += "else{battIcon.className='status-icon inactive';battStatus.textContent='No battery';}}";
+    html2 += "else if(data.power.usbPower){battIcon.className='status-icon active';";
+    html2 += "battStatus.textContent='USB Power';}";
+    html2 += "else if(data.power.critical){battIcon.className='status-icon warning';";
+    html2 += "battStatus.textContent=battPct+'% CRITICAL';}";
+    html2 += "else if(data.power.low){battIcon.className='status-icon warning';";
+    html2 += "battStatus.textContent=battPct+'% LOW';}";
+    html2 += "else{battIcon.className='status-icon '+(battPct>20?'active':'inactive');";
+    html2 += "battStatus.textContent=battPct+'%';}}";
 
-    // Update detailed WiFi info on Status tab
-    html += "if(document.getElementById('status-tab').classList.contains('active')){";
-    html += "const detailsFull=document.getElementById('wifi-details-full');";
-    html += "if(data.wifi && data.wifi.state===3){";
-    html += "detailsFull.innerHTML='<p><strong>SSID:</strong> '+data.wifi.ssid+'</p>';";
-    html += "detailsFull.innerHTML+='<p><strong>IP Address:</strong> '+data.wifi.ipAddress+'</p>';";
-    html += "detailsFull.innerHTML+='<p><strong>Signal Strength:</strong> '+data.wifi.rssi+' dBm</p>';";
-    html += "detailsFull.innerHTML+='<p><strong>Status:</strong> <span class=\"badge badge-success\">Connected</span></p>';}";
-    html += "else if(data.wifi && data.wifi.state===2){detailsFull.innerHTML='<p>Connecting to WiFi...</p>';}";
-    html += "else{detailsFull.innerHTML='<p>WiFi disconnected or disabled</p>';}}";
+    // Update System table — WiFi rows
+    html2 += "if(data.wifi){";
+    html2 += "if(data.wifi.state===3){";
+    html2 += "document.getElementById('sys-wifi').innerHTML=data.wifi.ssid+' <span class=\"badge badge-success\">Connected</span>';";
+    html2 += "document.getElementById('sys-ip').textContent=data.wifi.ipAddress;";
+    html2 += "document.getElementById('sys-rssi').textContent=data.wifi.rssi+' dBm';}";
+    html2 += "else if(data.wifi.state===2){";
+    html2 += "document.getElementById('sys-wifi').innerHTML='<span class=\"badge badge-warning\">Connecting...</span>';";
+    html2 += "document.getElementById('sys-ip').textContent='--';";
+    html2 += "document.getElementById('sys-rssi').textContent='--';}";
+    html2 += "else{";
+    html2 += "document.getElementById('sys-wifi').innerHTML='<span class=\"badge badge-error\">Disconnected</span>';";
+    html2 += "document.getElementById('sys-ip').textContent='--';";
+    html2 += "document.getElementById('sys-rssi').textContent='--';}}";
+
+    // Update System table — Battery rows
+    html2 += "if(data.power){";
+    html2 += "if(!data.power.monitoringEnabled){";
+    html2 += "document.getElementById('sys-battery').textContent=data.power.usbPower?'USB Power':'No battery';";
+    html2 += "document.getElementById('sys-voltage').textContent='--';";
+    html2 += "document.getElementById('sys-power-state').textContent=data.power.usbPower?'USB_POWER':'--';}";
+    html2 += "else{";
+    html2 += "let battText;";
+    html2 += "if(data.power.usbPower){battText='USB Power';}";
+    html2 += "else if(data.power.critical){battText=data.power.batteryPercent+'% CRITICAL';}";
+    html2 += "else if(data.power.low){battText=data.power.batteryPercent+'% LOW';}";
+    html2 += "else{battText=data.power.batteryPercent+'%';}";
+    html2 += "document.getElementById('sys-battery').textContent=battText;";
+    html2 += "document.getElementById('sys-voltage').textContent=data.power.batteryVoltage.toFixed(2)+' V';";
+    html2 += "document.getElementById('sys-power-state').textContent=data.power.stateName;}}";
 
     // Update mode buttons
-    html += "for(let i=0;i<=2;i++){const btn=document.getElementById('btn-'+i);";
-    html += "if(i===currentMode)btn.classList.add('active');else btn.classList.remove('active');}";
-    html += "}catch(e){console.error('Status fetch error:',e);}}";
+    html2 += "for(let i=0;i<=2;i++){const btn=document.getElementById('btn-'+i);";
+    html2 += "if(i===currentMode)btn.classList.add('active');else btn.classList.remove('active');}";
+    html2 += "}catch(e){console.error('Status fetch error:',e);}}";
 
-    html += "async function setMode(mode){";
-    html += "try{const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},";
-    html += "body:JSON.stringify({mode:mode})});if(res.ok)fetchStatus();}catch(e){}}";
+    html2 += "async function setMode(mode){";
+    html2 += "try{const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},";
+    html2 += "body:JSON.stringify({mode:mode})});if(res.ok)fetchStatus();}catch(e){}}";
 
     // Reboot device
-    html += "async function rebootDevice(){";
-    html += "if(!confirm('Are you sure you want to reboot the device?\\n\\nThe device will restart and the web interface will be unavailable for ~10 seconds.'))return;";
-    html += "alert('Rebooting device now...\\n\\nThe page will reload automatically in 15 seconds.');";
-    html += "setTimeout(()=>location.reload(),15000);";
-    html += "try{";
-    html += "await fetch('/api/reboot',{method:'POST'});";
-    html += "}catch(e){}}"; // Connection lost during reboot is expected
+    html2 += "async function rebootDevice(){";
+    html2 += "if(!confirm('Are you sure you want to reboot the device?\\n\\nThe device will restart and the web interface will be unavailable for ~10 seconds.'))return;";
+    html2 += "alert('Rebooting device now...\\n\\nThe page will reload automatically in 15 seconds.');";
+    html2 += "setTimeout(()=>location.reload(),15000);";
+    html2 += "try{";
+    html2 += "await fetch('/api/reboot',{method:'POST'});";
+    html2 += "}catch(e){}}"; // Connection lost during reboot is expected
 
     // Config loading
-    html += "let currentConfig={};";
-    html += "async function loadConfig(){";
-    html += "try{const res=await fetch('/api/config');const cfg=await res.json();";
-    html += "currentConfig=cfg;";
-    html += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
-    html += "document.getElementById('cfg-defaultMode').value=cfg.device?.defaultMode||0;";
-    html += "document.getElementById('cfg-wifiSSID').value=cfg.wifi?.ssid||'';";
-    html += "if(cfg.wifi?.password&&cfg.wifi.password.length>0){";
-    html += "document.getElementById('cfg-wifiPassword').value='';";
-    html += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
-    html += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
-    html += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
-    html += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
-    html += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
-    html += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
-    html += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
-    html += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||150;";
-    html += "document.getElementById('cfg-dirConfirmationWindow').value=cfg.directionDetector?.confirmationWindowMs||5000;";
-    html += "document.getElementById('cfg-dirPatternTimeout').value=cfg.directionDetector?.patternTimeoutMs||10000;";
-    html += "}catch(e){console.error('Config load error:',e);}}";
+    html2 += "let currentConfig={};";
+    html2 += "async function loadConfig(){";
+    html2 += "try{const res=await fetch('/api/config');const cfg=await res.json();";
+    html2 += "currentConfig=cfg;";
+    html2 += "document.getElementById('cfg-deviceName').value=cfg.device?.name||'';";
+    html2 += "document.getElementById('cfg-defaultMode').value=cfg.device?.defaultMode||0;";
+    html2 += "document.getElementById('cfg-wifiSSID').value=cfg.wifi?.ssid||'';";
+    html2 += "if(cfg.wifi?.password&&cfg.wifi.password.length>0){";
+    html2 += "document.getElementById('cfg-wifiPassword').value='';";
+    html2 += "document.getElementById('cfg-wifiPassword').placeholder='••••••••';}";
+    html2 += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
+    html2 += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
+    html2 += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
+    html2 += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
+    html2 += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
+    html2 += "document.getElementById('cfg-batteryMonitoring').value=cfg.power?.batteryMonitoringEnabled?1:0;";
+    html2 += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
+    html2 += "var bmSel=document.getElementById('cfg-batteryMonitoring');";
+    html2 += "var psSel=document.getElementById('cfg-powerSaving');";
+    html2 += "if(bmSel.value==='0'){psSel.value='0';psSel.disabled=true;}";
+    html2 += "bmSel.addEventListener('change',function(){if(this.value==='0'){psSel.value='0';psSel.disabled=true;}else{psSel.disabled=false;}});";
+    html2 += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||150;";
+    html2 += "document.getElementById('cfg-dirConfirmationWindow').value=cfg.directionDetector?.confirmationWindowMs||5000;";
+    html2 += "document.getElementById('cfg-dirPatternTimeout').value=cfg.directionDetector?.patternTimeoutMs||10000;";
+    html2 += "}catch(e){console.error('Config load error:',e);}}";
 
     // Config saving
-    html += "async function saveConfig(e){";
-    html += "e.preventDefault();";
-    html += "const pwdField=document.getElementById('cfg-wifiPassword');";
-    html += "const cfg=JSON.parse(JSON.stringify(currentConfig));";
-    html += "cfg.device=cfg.device||{};";
-    html += "cfg.device.name=document.getElementById('cfg-deviceName').value;";
-    html += "cfg.device.defaultMode=parseInt(document.getElementById('cfg-defaultMode').value);";
-    html += "cfg.wifi=cfg.wifi||{};";
-    html += "cfg.wifi.ssid=document.getElementById('cfg-wifiSSID').value;";
-    html += "cfg.wifi.enabled=true;";
-    html += "if(pwdField.value.length>0){cfg.wifi.password=pwdField.value;}";
-    html += "cfg.motion=cfg.motion||{};";
-    html += "cfg.motion.warningDuration=parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000;";
-    html += "cfg.led=cfg.led||{};";
-    html += "cfg.led.brightnessFull=parseInt(document.getElementById('cfg-ledBrightnessFull').value);";
-    html += "cfg.led.brightnessDim=parseInt(document.getElementById('cfg-ledBrightnessDim').value);";
-    html += "cfg.logging=cfg.logging||{};";
-    html += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
-    html += "cfg.power=cfg.power||{};";
-    html += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
-    html += "cfg.directionDetector=cfg.directionDetector||{};";
-    html += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
-    html += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";
-    html += "cfg.directionDetector.patternTimeoutMs=parseInt(document.getElementById('cfg-dirPatternTimeout').value);";
-    html += "let jsonStr;";
-    html += "try{jsonStr=JSON.stringify(cfg);console.log('Saving config:',JSON.stringify(cfg,null,2));}";
-    html += "catch(e){console.error('JSON.stringify failed:',e);alert('Failed to serialize config: '+e.message);return;}";
-    html += "try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},";
-    html += "body:jsonStr});if(res.ok){";
-    html += "document.getElementById('save-indicator').classList.add('show');";
-    html += "setTimeout(()=>document.getElementById('save-indicator').classList.remove('show'),3000);";
-    html += "loadConfig();}else{";
-    html += "const errorText=await res.text();";
-    html += "console.error('Config save failed:',res.status,errorText);";
-    html += "alert('Failed to save configuration: '+errorText);}}catch(e){";
-    html += "console.error('Config save error:',e);alert('Error: '+e.message);}}";
+    html2 += "async function saveConfig(e){";
+    html2 += "e.preventDefault();";
+    html2 += "const pwdField=document.getElementById('cfg-wifiPassword');";
+    html2 += "const cfg=JSON.parse(JSON.stringify(currentConfig));";
+    html2 += "cfg.device=cfg.device||{};";
+    html2 += "cfg.device.name=document.getElementById('cfg-deviceName').value;";
+    html2 += "cfg.device.defaultMode=parseInt(document.getElementById('cfg-defaultMode').value);";
+    html2 += "cfg.wifi=cfg.wifi||{};";
+    html2 += "cfg.wifi.ssid=document.getElementById('cfg-wifiSSID').value;";
+    html2 += "cfg.wifi.enabled=true;";
+    html2 += "if(pwdField.value.length>0){cfg.wifi.password=pwdField.value;}";
+    html2 += "cfg.motion=cfg.motion||{};";
+    html2 += "cfg.motion.warningDuration=parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000;";
+    html2 += "cfg.led=cfg.led||{};";
+    html2 += "cfg.led.brightnessFull=parseInt(document.getElementById('cfg-ledBrightnessFull').value);";
+    html2 += "cfg.led.brightnessDim=parseInt(document.getElementById('cfg-ledBrightnessDim').value);";
+    html2 += "cfg.logging=cfg.logging||{};";
+    html2 += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
+    html2 += "cfg.power=cfg.power||{};";
+    html2 += "cfg.power.batteryMonitoringEnabled=parseInt(document.getElementById('cfg-batteryMonitoring').value)===1;";
+    html2 += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
+    html2 += "cfg.directionDetector=cfg.directionDetector||{};";
+    html2 += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
+    html2 += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";
+    html2 += "cfg.directionDetector.patternTimeoutMs=parseInt(document.getElementById('cfg-dirPatternTimeout').value);";
+    html2 += "let jsonStr;";
+    html2 += "try{jsonStr=JSON.stringify(cfg);console.log('Saving config:',JSON.stringify(cfg,null,2));}";
+    html2 += "catch(e){console.error('JSON.stringify failed:',e);alert('Failed to serialize config: '+e.message);return;}";
+    html2 += "try{const res=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},";
+    html2 += "body:jsonStr});if(res.ok){";
+    html2 += "document.getElementById('save-indicator').classList.add('show');";
+    html2 += "setTimeout(()=>document.getElementById('save-indicator').classList.remove('show'),3000);";
+    html2 += "loadConfig();}else{";
+    html2 += "const errorText=await res.text();";
+    html2 += "console.error('Config save failed:',res.status,errorText);";
+    html2 += "alert('Failed to save configuration: '+errorText);}}catch(e){";
+    html2 += "console.error('Config save error:',e);alert('Error: '+e.message);}}";
 
     // LittleFS Log Management
-    html += "let availableLogs=[];";
-    html += "let selectedLog=null;";
+    html2 += "let availableLogs=[];";
+    html2 += "let selectedLog=null;";
 
     // Load available logs on page load
-    html += "async function loadAvailableLogs(){";
-    html += "try{";
-    html += "const res=await fetch('/api/debug/logs');";
-    html += "const data=await res.json();";
-
-    // Update boot info
-    html += "document.getElementById('bootCycle').textContent=data.bootCycle||'-';";
-    html += "document.getElementById('firmware').textContent=data.firmware||'-';";
-    html += "document.getElementById('freeHeap').textContent=data.freeHeap?data.freeHeap.toLocaleString():'-';";
-    html += "document.getElementById('fsUsage').textContent=data.filesystemUsage||'-';";
-    html += "document.getElementById('logsSize').textContent=data.totalLogsSize?data.totalLogsSize.toLocaleString():'-';";
-
-    // Fetch and display current log level
-    html += "try{const cfgRes=await fetch('/api/debug/config');";
-    html += "if(cfgRes.ok){const cfgData=await cfgRes.json();";
-    html += "const levelEl=document.getElementById('currentLogLevel');";
-    html += "levelEl.textContent=cfgData.level||'-';";
-    html += "levelEl.style.color=(cfgData.level==='ERROR'||cfgData.level==='NONE')?'#dc2626':";
-    html += "(cfgData.level==='WARN')?'#ea580c':(cfgData.level==='INFO')?'#0891b2':";
-    html += "(cfgData.level==='DEBUG')?'#7c3aed':'#6366f1';}}";
-    html += "catch(e){console.error('Failed to fetch log level:',e);}";
+    html2 += "async function loadAvailableLogs(){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/debug/logs');";
+    html2 += "const data=await res.json();";
 
     // Populate log dropdown
-    html += "availableLogs=data.logs||[];";
-    html += "const select=document.getElementById('logSelect');";
-    html += "select.innerHTML='<option value=\"\">-- Select a log file --</option>';";
-    html += "availableLogs.forEach((log,index)=>{";
-    html += "const option=document.createElement('option');";
-    html += "option.value=index;";
-    html += "const sizeKB=(log.size/1024).toFixed(1);";
-    html += "option.textContent=log.name+' ('+sizeKB+' KB)';";
-    html += "select.appendChild(option);";
-    html += "});";
-    html += "}catch(err){console.error('Failed to load logs:',err);}}";
+
+    html2 += "availableLogs=data.logs||[];";
+    html2 += "const select=document.getElementById('logSelect');";
+    html2 += "select.innerHTML='<option value=\"\">-- Select a log file --</option>';";
+    html2 += "availableLogs.forEach((log,index)=>{";
+    html2 += "const option=document.createElement('option');";
+    html2 += "option.value=index;";
+    html2 += "const sizeKB=(log.size/1024).toFixed(1);";
+    html2 += "option.textContent=log.name+' ('+sizeKB+' KB)';";
+    html2 += "select.appendChild(option);";
+    html2 += "});";
+    html2 += "}catch(err){console.error('Failed to load logs:',err);}}";
 
     // Handle log selection
-    html += "function onLogSelect(){";
-    html += "const select=document.getElementById('logSelect');";
-    html += "const index=parseInt(select.value);";
-    html += "if(isNaN(index)){";
-    html += "document.getElementById('logActions').style.display='none';";
-    html += "document.getElementById('logInfo').style.display='none';";
-    html += "selectedLog=null;";
-    html += "return;}";
-    html += "selectedLog=availableLogs[index];";
-    html += "document.getElementById('selectedLogName').textContent=selectedLog.name;";
-    html += "document.getElementById('selectedLogSize').textContent=selectedLog.size.toLocaleString();";
-    html += "document.getElementById('selectedLogSizeKB').textContent=(selectedLog.size/1024).toFixed(1);";
-    html += "document.getElementById('selectedLogPath').textContent=selectedLog.path;";
-    html += "document.getElementById('logActions').style.display='block';";
-    html += "document.getElementById('logInfo').style.display='block';}";
+    html2 += "function onLogSelect(){";
+    html2 += "const select=document.getElementById('logSelect');";
+    html2 += "const index=parseInt(select.value);";
+    html2 += "if(isNaN(index)){";
+    html2 += "document.getElementById('logActions').style.display='none';";
+    html2 += "document.getElementById('logInfo').style.display='none';";
+    html2 += "selectedLog=null;";
+    html2 += "return;}";
+    html2 += "selectedLog=availableLogs[index];";
+    html2 += "document.getElementById('selectedLogName').textContent=selectedLog.name;";
+    html2 += "document.getElementById('selectedLogSize').textContent=selectedLog.size.toLocaleString();";
+    html2 += "document.getElementById('selectedLogSizeKB').textContent=(selectedLog.size/1024).toFixed(1);";
+    html2 += "document.getElementById('selectedLogPath').textContent=selectedLog.path;";
+    html2 += "document.getElementById('logActions').style.display='block';";
+    html2 += "document.getElementById('logInfo').style.display='block';}";
 
     // Download selected log
-    html += "function downloadLog(){";
-    html += "if(!selectedLog)return;";
-    html += "const url='/api/debug/logs/'+selectedLog.name;";
-    html += "const a=document.createElement('a');";
-    html += "a.href=url;";
-    html += "a.download='stepaware_'+selectedLog.name+'.log';";
-    html += "document.body.appendChild(a);";
-    html += "a.click();";
-    html += "document.body.removeChild(a);}";
+    html2 += "function downloadLog(){";
+    html2 += "if(!selectedLog)return;";
+    html2 += "const url='/api/debug/logs/'+selectedLog.name;";
+    html2 += "const a=document.createElement('a');";
+    html2 += "a.href=url;";
+    html2 += "a.download='stepaware_'+selectedLog.name+'.log';";
+    html2 += "document.body.appendChild(a);";
+    html2 += "a.click();";
+    html2 += "document.body.removeChild(a);}";
 
     // Erase selected log
-    html += "async function eraseLog(){";
-    html += "if(!selectedLog)return;";
-    html += "if(!confirm('Are you sure you want to erase '+selectedLog.name+'?'))return;";
-    html += "try{";
-    html += "const res=await fetch('/api/debug/logs/'+selectedLog.name,{method:'DELETE'});";
-    html += "if(res.ok){";
-    html += "alert('Log erased successfully');";
-    html += "loadAvailableLogs();";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to erase log: '+err);}}";
-    html += "catch(err){console.error('Error erasing log:',err);alert('Error erasing log');}}";
+    html2 += "async function eraseLog(){";
+    html2 += "if(!selectedLog)return;";
+    html2 += "if(!confirm('Are you sure you want to erase '+selectedLog.name+'?'))return;";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/debug/logs/'+selectedLog.name,{method:'DELETE'});";
+    html2 += "if(res.ok){";
+    html2 += "alert('Log erased successfully');";
+    html2 += "loadAvailableLogs();";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to erase log: '+err);}}";
+    html2 += "catch(err){console.error('Error erasing log:',err);alert('Error erasing log');}}";
 
     // Erase all logs
-    html += "async function eraseAllLogs(){";
-    html += "if(!confirm('Are you sure you want to erase ALL logs? This cannot be undone!'))return;";
-    html += "try{";
-    html += "const res=await fetch('/api/debug/logs/clear',{method:'POST'});";
-    html += "if(res.ok){";
-    html += "alert('All logs erased successfully');";
-    html += "loadAvailableLogs();";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to erase logs: '+err);}}";
-    html += "catch(err){console.error('Error erasing logs:',err);alert('Error erasing logs');}}";
+    html2 += "async function eraseAllLogs(){";
+    html2 += "if(!confirm('Are you sure you want to erase ALL logs? This cannot be undone!'))return;";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/debug/logs/clear',{method:'POST'});";
+    html2 += "if(res.ok){";
+    html2 += "alert('All logs erased successfully');";
+    html2 += "loadAvailableLogs();";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to erase logs: '+err);}}";
+    html2 += "catch(err){console.error('Error erasing logs:',err);alert('Error erasing logs');}}";
 
     // Add event listener to select
-    html += "document.addEventListener('DOMContentLoaded',()=>{";
-    html += "const select=document.getElementById('logSelect');";
-    html += "if(select)select.addEventListener('change',onLogSelect);";
-    html += "});";
+    html2 += "document.addEventListener('DOMContentLoaded',()=>{";
+    html2 += "const select=document.getElementById('logSelect');";
+    html2 += "if(select)select.addEventListener('change',onLogSelect);";
+    html2 += "});";
     // Hardware Tab - Sensor Management
-    html += "let sensorSlots=[null,null,null,null];";
-    html += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','distanceZone']},";
-    html += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
-    html += "ULTRASONIC:{name:'Ultrasonic (HC-SR04)',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']},";
-    html += "ULTRASONIC_GROVE:{name:'Ultrasonic (Grove)',pins:1,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
+    html2 += "let sensorSlots=[null,null,null,null];";
+    html2 += "const SENSOR_TYPES={PIR:{name:'PIR Motion',pins:1,config:['warmup','distanceZone']},";
+    html2 += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
+    html2 += "ULTRASONIC:{name:'Ultrasonic (HC-SR04)',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']},";
+    html2 += "ULTRASONIC_GROVE:{name:'Ultrasonic (Grove)',pins:1,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
 
     // Load sensors from configuration
-    html += "async function loadSensors(){";
-    html += "try{";
-    html += "const cfgRes=await fetch('/api/config');if(!cfgRes.ok)return;";
-    html += "const cfg=await cfgRes.json();";
-    html += "sensorSlots=[null,null,null,null];";
-    html += "if(cfg.sensors&&Array.isArray(cfg.sensors)){";
-    html += "cfg.sensors.forEach(s=>{if(s.slot>=0&&s.slot<4){sensorSlots[s.slot]=s;}});}";
-    html += "const statusRes=await fetch('/api/sensors');";
-    html += "if(statusRes.ok){";
-    html += "const status=await statusRes.json();";
-    html += "if(status.sensors&&Array.isArray(status.sensors)){";
-    html += "status.sensors.forEach(s=>{";
-    html += "if(s.slot>=0&&s.slot<4&&sensorSlots[s.slot]){";
-    html += "sensorSlots[s.slot].errorRate=s.errorRate;";
-    html += "sensorSlots[s.slot].errorRateAvailable=s.errorRateAvailable;}});}}";
-    html += "renderSensors();}catch(e){console.error('Failed to load sensors:',e);}}";
+    html2 += "async function loadSensors(){";
+    html2 += "try{";
+    html2 += "const cfgRes=await fetch('/api/config');if(!cfgRes.ok)return;";
+    html2 += "const cfg=await cfgRes.json();";
+    html2 += "sensorSlots=[null,null,null,null];";
+    html2 += "if(cfg.sensors&&Array.isArray(cfg.sensors)){";
+    html2 += "cfg.sensors.forEach(s=>{if(s.slot>=0&&s.slot<4){sensorSlots[s.slot]=s;}});}";
+    html2 += "const statusRes=await fetch('/api/sensors');";
+    html2 += "if(statusRes.ok){";
+    html2 += "const status=await statusRes.json();";
+    html2 += "if(status.sensors&&Array.isArray(status.sensors)){";
+    html2 += "status.sensors.forEach(s=>{";
+    html2 += "if(s.slot>=0&&s.slot<4&&sensorSlots[s.slot]){";
+    html2 += "sensorSlots[s.slot].errorRate=s.errorRate;";
+    html2 += "sensorSlots[s.slot].errorRateAvailable=s.errorRateAvailable;}});}}";
+    html2 += "renderSensors();}catch(e){console.error('Failed to load sensors:',e);}}";
 
     // Render all sensor cards
-    html += "function renderSensors(){";
-    html += "const container=document.getElementById('sensors-list');container.innerHTML='';";
-    html += "sensorSlots.forEach((sensor,idx)=>{";
-    html += "if(sensor!==null){container.appendChild(createSensorCard(sensor,idx));}});";
-    html += "if(sensorSlots.filter(s=>s!==null).length===0){";
-    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No sensors configured. Click \"Add Sensor\" to get started.</p>';}}";
+    html2 += "function renderSensors(){";
+    html2 += "const container=document.getElementById('sensors-list');container.innerHTML='';";
+    html2 += "sensorSlots.forEach((sensor,idx)=>{";
+    html2 += "if(sensor!==null){container.appendChild(createSensorCard(sensor,idx));}});";
+    html2 += "if(sensorSlots.filter(s=>s!==null).length===0){";
+    html2 += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No sensors configured. Click \"Add Sensor\" to get started.</p>';}}";
 
     // Create sensor card element
-    html += "function createSensorCard(sensor,slotIdx){";
-    html += "const card=document.createElement('div');";
-    html += "card.className='sensor-card'+(sensor.enabled?'':' disabled');";
-    html += "let html='';";
+    html2 += "function createSensorCard(sensor,slotIdx){";
+    html2 += "const card=document.createElement('div');";
+    html2 += "card.className='sensor-card'+(sensor.enabled?'':' disabled');";
+    html2 += "let html='';";
 
     // Header with badge, title, and buttons on one line
-    html += "html+='<div class=\"sensor-header\">';";
-    html += "html+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
-    html += "html+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
-    html += "(sensor.type===0?'PIR':sensor.type===1?'IR':sensor.type===4?'GROVE':'HC-SR04')+'</span>';";
-    html += "html+='<span class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</span></div>';";
-    html += "html+='<div class=\"sensor-actions\">';";
-    html += "html+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
-    html += "html+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
-    html += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
-    html += "html+='</div></div>';";
+    html2 += "html+='<div class=\"sensor-header\">';";
+    html2 += "html+='<div style=\"display:flex;align-items:center;gap:10px;\">';";
+    html2 += "html+='<span class=\"badge badge-'+(sensor.type===0?'success':sensor.type===1?'info':'primary')+'\">'+";
+    html2 += "(sensor.type===0?'PIR':sensor.type===1?'IR':sensor.type===4?'GROVE':'HC-SR04')+'</span>';";
+    html2 += "html+='<span class=\"sensor-title\">Slot '+slotIdx+': '+(sensor.name||'Unnamed Sensor')+'</span></div>';";
+    html2 += "html+='<div class=\"sensor-actions\">';";
+    html2 += "html+='<button class=\"btn btn-sm btn-'+(sensor.enabled?'warning':'success')+'\" onclick=\"toggleSensor('+slotIdx+')\">'+(sensor.enabled?'Disable':'Enable')+'</button>';";
+    html2 += "html+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editSensor('+slotIdx+')\">Edit</button>';";
+    html2 += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeSensor('+slotIdx+')\">Remove</button>';";
+    html2 += "html+='</div></div>';";
 
     // Compact horizontal layout for pin and config info
-    html += "html+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;\">';";
+    html2 += "html+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;\">';";
 
     // Wiring diagram column
-    html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
-    html += "html+='<div style=\"line-height:1.6;\">';";
+    html2 += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
+    html2 += "html+='<div style=\"line-height:1.6;\">';";
 
     // PIR/IR wiring
-    html += "if(sensor.type===0||sensor.type===1){";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
+    html2 += "if(sensor.type===0||sensor.type===1){";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor OUT → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
 
     // Ultrasonic HC-SR04 wiring (4-pin)
-    html += "else if(sensor.type===2){";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">5V</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
+    html2 += "else if(sensor.type===2){";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor VCC → <span style=\"color:#dc2626;font-weight:600;\">5V</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor TRIG → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Sensor ECHO → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.secondaryPin+'</span></div>';}";
 
     // Grove Ultrasonic wiring (3-pin)
-    html += "else if(sensor.type===4){";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove VCC (Red) → <span style=\"color:#dc2626;font-weight:600;\">3.3V/5V</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove GND (Black) → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove SIG (Yellow) → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
+    html2 += "else if(sensor.type===4){";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove VCC (Red) → <span style=\"color:#dc2626;font-weight:600;\">3.3V/5V</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove GND (Black) → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html2 += "html+='<div style=\"color:#64748b;font-size:0.85em;\">Grove SIG (Yellow) → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+sensor.primaryPin+'</span></div>';}";
 
-    html += "html+='</div></div>';";
+    html2 += "html+='</div></div>';";
 
     // Configuration column
-    html += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
-    html += "html+='<div style=\"line-height:1.6;\">';";
-    html += "if(sensor.type===0){";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
-    html += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'None');";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';}";
-    html += "else if(sensor.type===2||sensor.type===4){";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warn At:</span> <span>'+sensor.detectionThreshold+'mm</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Direction:</span> <span>'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
-    html += "if(sensor.enableDirectionDetection){";
-    html += "const dirMode=(sensor.directionTriggerMode===0?'Approaching':sensor.directionTriggerMode===1?'Receding':'Both');";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Trigger:</span> <span>'+dirMode+'</span></div>';";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.sampleWindowSize+' @ '+sensor.sampleRateMs+'ms</span></div>';";
-    html += "const dirSensStr=(sensor.directionSensitivity===0||sensor.directionSensitivity===undefined?'Auto':''+sensor.directionSensitivity+'mm');";
-    html += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Dir. Sensitivity:</span> <span>'+dirSensStr+'</span></div>';}";
-    html += "}";  // Close else if block for ultrasonic sensors
-    html += "html+='</div></div>';";
+    html2 += "html+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
+    html2 += "html+='<div style=\"line-height:1.6;\">';";
+    html2 += "if(sensor.type===0){";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
+    html2 += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'None');";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';}";
+    html2 += "else if(sensor.type===2||sensor.type===4){";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warn At:</span> <span>'+sensor.detectionThreshold+'mm</span></div>';";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Direction:</span> <span>'+(sensor.enableDirectionDetection?'Enabled':'Disabled')+'</span></div>';";
+    html2 += "if(sensor.enableDirectionDetection){";
+    html2 += "const dirMode=(sensor.directionTriggerMode===0?'Approaching':sensor.directionTriggerMode===1?'Receding':'Both');";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Trigger:</span> <span>'+dirMode+'</span></div>';";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Samples:</span> <span>'+sensor.sampleWindowSize+' @ '+sensor.sampleRateMs+'ms</span></div>';";
+    html2 += "const dirSensStr=(sensor.directionSensitivity===0||sensor.directionSensitivity===undefined?'Auto':''+sensor.directionSensitivity+'mm');";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Dir. Sensitivity:</span> <span>'+dirSensStr+'</span></div>';}";
+    html2 += "}";  // Close else if block for ultrasonic sensors
+    html2 += "html+='</div></div>';";
 
-    html += "html+='</div>';";  // Close grid
+    html2 += "html+='</div>';";  // Close grid
 
     // Hardware Info section (for sensors that support error rate monitoring)
-    html += "if(sensor.type===2||sensor.type===4){";  // Ultrasonic sensors only
-    html += "html+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
-    html += "html+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
-    html += "html+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
-    html += "html+='<span style=\"font-size:0.85em;color:#64748b;\">Error Rate:</span>';";
-    html += "const errorRate=sensor.errorRate!==undefined?sensor.errorRate:-1;";
-    html += "const errorRateAvailable=sensor.errorRateAvailable!==undefined?sensor.errorRateAvailable:false;";
-    html += "if(errorRate<0||!errorRateAvailable){";
-    html += "html+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}";
-    html += "else{";
-    html += "const colorClass=errorRate<5.0?'#10b981':errorRate<15.0?'#f59e0b':'#ef4444';";
-    html += "const statusText=errorRate<5.0?'Excellent':errorRate<15.0?'Fair':'Poor';";
-    html += "html+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
-    html += "html+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
-    html += "html+='</div>';";
-    html += "html+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on 100 sample test. Lower is better. Error rate will be high if distances measured are greater than the sensor\\'s capabilities, but this may not be a problem for functionality.</div>';";
-    html += "html+='</div>';}";
+    html2 += "if(sensor.type===2||sensor.type===4){";  // Ultrasonic sensors only
+    html2 += "html+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
+    html2 += "html+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
+    html2 += "html+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html2 += "html+='<span style=\"font-size:0.85em;color:#64748b;\">Error Rate:</span>';";
+    html2 += "const errorRate=sensor.errorRate!==undefined?sensor.errorRate:-1;";
+    html2 += "const errorRateAvailable=sensor.errorRateAvailable!==undefined?sensor.errorRateAvailable:false;";
+    html2 += "if(errorRate<0||!errorRateAvailable){";
+    html2 += "html+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}";
+    html2 += "else{";
+    html2 += "const colorClass=errorRate<5.0?'#10b981':errorRate<15.0?'#f59e0b':'#ef4444';";
+    html2 += "const statusText=errorRate<5.0?'Excellent':errorRate<15.0?'Fair':'Poor';";
+    html2 += "html+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
+    html2 += "html+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
+    html2 += "html+='</div>';";
+    html2 += "html+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on 100 sample test. Lower is better. Error rate will be high if distances measured are greater than the sensor\\'s capabilities, but this may not be a problem for functionality.</div>';";
+    html2 += "html+='</div>';}";
 
-    html += "card.innerHTML=html;";
-    html += "return card;}";
+    html2 += "card.innerHTML=html;";
+    html2 += "return card;}";
 
     // Add new sensor
-    html += "function addSensor(){";
-    html += "const freeSlot=sensorSlots.findIndex(s=>s===null);";
-    html += "if(freeSlot===-1){alert('Maximum 4 sensors allowed. Remove a sensor first.');return;}";
-    html += "const type=prompt('Select sensor type:\\n0 = PIR Motion\\n1 = IR Beam-Break\\n2 = Ultrasonic (HC-SR04 4-pin)\\n4 = Ultrasonic (Grove 3-pin)','0');";
-    html += "if(type===null)return;";
-    html += "const typeNum=parseInt(type);";
-    html += "if(typeNum<0||typeNum>4||typeNum===3){alert('Invalid sensor type');return;}";
-    html += "const name=prompt('Enter sensor name:','Sensor '+(freeSlot+1));";
-    html += "if(!name)return;";
+    html2 += "function addSensor(){";
+    html2 += "const freeSlot=sensorSlots.findIndex(s=>s===null);";
+    html2 += "if(freeSlot===-1){alert('Maximum 4 sensors allowed. Remove a sensor first.');return;}";
+    html2 += "const type=prompt('Select sensor type:\\n0 = PIR Motion\\n1 = IR Beam-Break\\n2 = Ultrasonic (HC-SR04 4-pin)\\n4 = Ultrasonic (Grove 3-pin)','0');";
+    html2 += "if(type===null)return;";
+    html2 += "const typeNum=parseInt(type);";
+    html2 += "if(typeNum<0||typeNum>4||typeNum===3){alert('Invalid sensor type');return;}";
+    html2 += "const name=prompt('Enter sensor name:','Sensor '+(freeSlot+1));";
+    html2 += "if(!name)return;";
     // Set default pin based on sensor type
-    html += "let defaultPin='5';";
-    html += "if(typeNum===2)defaultPin='8';";  // HC-SR04 trigger pin
-    html += "if(typeNum===4)defaultPin='8';";  // Grove signal pin
-    html += "const pin=parseInt(prompt('Enter primary pin (GPIO number):',defaultPin));";
-    html += "if(isNaN(pin)||pin<0||pin>48){alert('Invalid pin number');return;}";
+    html2 += "let defaultPin='5';";
+    html2 += "if(typeNum===2)defaultPin='8';";  // HC-SR04 trigger pin
+    html2 += "if(typeNum===4)defaultPin='8';";  // Grove signal pin
+    html2 += "const pin=parseInt(prompt('Enter primary pin (GPIO number):',defaultPin));";
+    html2 += "if(isNaN(pin)||pin<0||pin>48){alert('Invalid pin number');return;}";
     // Create sensor with type-specific defaults
-    html += "const sensor={type:typeNum,name:name,primaryPin:pin,enabled:true,isPrimary:freeSlot===0,";
-    html += "warmupMs:60000,debounceMs:50,detectionThreshold:1100,maxDetectionDistance:3000,enableDirectionDetection:true,";
-    html += "directionTriggerMode:0,directionSensitivity:0,sampleWindowSize:3,sampleRateMs:75};";
-    html += "if(typeNum===2){";
-    html += "const echoPin=parseInt(prompt('Enter echo pin for HC-SR04 (GPIO number):','9'));";
-    html += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
-    html += "sensor.secondaryPin=echoPin;}";
-    html += "if(typeNum===4){sensor.secondaryPin=0;}";
-    html += "if(typeNum===0){sensor.warmupMs=60000;sensor.debounceMs=0;sensor.enableDirectionDetection=false;sensor.distanceZone=0;}";  // PIR-specific overrides
-    html += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
+    html2 += "const sensor={type:typeNum,name:name,primaryPin:pin,enabled:true,isPrimary:freeSlot===0,";
+    html2 += "warmupMs:60000,debounceMs:50,detectionThreshold:1100,maxDetectionDistance:3000,enableDirectionDetection:true,";
+    html2 += "directionTriggerMode:0,directionSensitivity:0,sampleWindowSize:3,sampleRateMs:75};";
+    html2 += "if(typeNum===2){";
+    html2 += "const echoPin=parseInt(prompt('Enter echo pin for HC-SR04 (GPIO number):','9'));";
+    html2 += "if(isNaN(echoPin)||echoPin<0||echoPin>48){alert('Invalid echo pin');return;}";
+    html2 += "sensor.secondaryPin=echoPin;}";
+    html2 += "if(typeNum===4){sensor.secondaryPin=0;}";
+    html2 += "if(typeNum===0){sensor.warmupMs=60000;sensor.debounceMs=0;sensor.enableDirectionDetection=false;sensor.distanceZone=0;}";  // PIR-specific overrides
+    html2 += "sensorSlots[freeSlot]=sensor;renderSensors();saveSensors();}";
 
     // Remove sensor
-    html += "function removeSensor(slotIdx){";
-    html += "if(!confirm('Remove sensor from slot '+slotIdx+'?'))return;";
-    html += "sensorSlots[slotIdx]=null;renderSensors();saveSensors();}";
+    html2 += "function removeSensor(slotIdx){";
+    html2 += "if(!confirm('Remove sensor from slot '+slotIdx+'?'))return;";
+    html2 += "sensorSlots[slotIdx]=null;renderSensors();saveSensors();}";
 
     // Toggle sensor enabled/disabled
-    html += "function toggleSensor(slotIdx){";
-    html += "if(sensorSlots[slotIdx]){";
-    html += "sensorSlots[slotIdx].enabled=!sensorSlots[slotIdx].enabled;";
-    html += "renderSensors();saveSensors();}}";
+    html2 += "function toggleSensor(slotIdx){";
+    html2 += "if(sensorSlots[slotIdx]){";
+    html2 += "sensorSlots[slotIdx].enabled=!sensorSlots[slotIdx].enabled;";
+    html2 += "renderSensors();saveSensors();}}";
 
     // Edit sensor
-    html += "function editSensor(slotIdx){";
-    html += "const sensor=sensorSlots[slotIdx];if(!sensor)return;";
-    html += "const newName=prompt('Sensor name:',sensor.name);";
-    html += "if(newName!==null&&newName.length>0){sensor.name=newName;}";
-    html += "if(sensor.type===0){";
-    html += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
-    html += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
-    html += "const zoneStr=prompt('Distance Zone:\\n0=None (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
-    html += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}}";
-    html += "else if(sensor.type===2||sensor.type===4){";
-    html += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
-    html += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
-    html += "const warnDist=parseInt(prompt('Warning trigger distance (mm)\\nWarning activates when person is within:',sensor.detectionThreshold||1500));";
-    html += "if(!isNaN(warnDist)&&warnDist>=10)sensor.detectionThreshold=warnDist;";
-    html += "const dirStr=prompt('Enable direction detection? (yes/no):',(sensor.enableDirectionDetection?'yes':'no'));";
-    html += "if(dirStr!==null){sensor.enableDirectionDetection=(dirStr.toLowerCase()==='yes'||dirStr==='1');}";
-    html += "if(sensor.enableDirectionDetection){";
-    html += "const dirMode=prompt('Trigger on:\\n0=Approaching (walking towards)\\n1=Receding (walking away)\\n2=Both directions',sensor.directionTriggerMode||0);";
-    html += "if(dirMode!==null&&!isNaN(parseInt(dirMode))){sensor.directionTriggerMode=parseInt(dirMode);}";
-    html += "const samples=parseInt(prompt('Rapid sample count (2-20):',sensor.sampleWindowSize||5));";
-    html += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.sampleWindowSize=samples;";
-    html += "const interval=parseInt(prompt('Sample interval ms (50-1000):',sensor.sampleRateMs||200));";
-    html += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.sampleRateMs=interval;";
-    html += "const dirSens=parseInt(prompt('Direction sensitivity (mm):\\n0=Auto (adaptive threshold)\\nOr enter value (will be min: sample interval):',sensor.directionSensitivity||0));";
-    html += "if(!isNaN(dirSens)&&dirSens>=0)sensor.directionSensitivity=dirSens;}}";
-    html += "renderSensors();saveSensors();}";
+    html2 += "function editSensor(slotIdx){";
+    html2 += "const sensor=sensorSlots[slotIdx];if(!sensor)return;";
+    html2 += "const newName=prompt('Sensor name:',sensor.name);";
+    html2 += "if(newName!==null&&newName.length>0){sensor.name=newName;}";
+    html2 += "if(sensor.type===0){";
+    html2 += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
+    html2 += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
+    html2 += "const zoneStr=prompt('Distance Zone:\\n0=None (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
+    html2 += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}}";
+    html2 += "else if(sensor.type===2||sensor.type===4){";
+    html2 += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
+    html2 += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
+    html2 += "const warnDist=parseInt(prompt('Warning trigger distance (mm)\\nWarning activates when person is within:',sensor.detectionThreshold||1500));";
+    html2 += "if(!isNaN(warnDist)&&warnDist>=10)sensor.detectionThreshold=warnDist;";
+    html2 += "const dirStr=prompt('Enable direction detection? (yes/no):',(sensor.enableDirectionDetection?'yes':'no'));";
+    html2 += "if(dirStr!==null){sensor.enableDirectionDetection=(dirStr.toLowerCase()==='yes'||dirStr==='1');}";
+    html2 += "if(sensor.enableDirectionDetection){";
+    html2 += "const dirMode=prompt('Trigger on:\\n0=Approaching (walking towards)\\n1=Receding (walking away)\\n2=Both directions',sensor.directionTriggerMode||0);";
+    html2 += "if(dirMode!==null&&!isNaN(parseInt(dirMode))){sensor.directionTriggerMode=parseInt(dirMode);}";
+    html2 += "const samples=parseInt(prompt('Rapid sample count (2-20):',sensor.sampleWindowSize||5));";
+    html2 += "if(!isNaN(samples)&&samples>=2&&samples<=20)sensor.sampleWindowSize=samples;";
+    html2 += "const interval=parseInt(prompt('Sample interval ms (50-1000):',sensor.sampleRateMs||200));";
+    html2 += "if(!isNaN(interval)&&interval>=50&&interval<=1000)sensor.sampleRateMs=interval;";
+    html2 += "const dirSens=parseInt(prompt('Direction sensitivity (mm):\\n0=Auto (adaptive threshold)\\nOr enter value (will be min: sample interval):',sensor.directionSensitivity||0));";
+    html2 += "if(!isNaN(dirSens)&&dirSens>=0)sensor.directionSensitivity=dirSens;}}";
+    html2 += "renderSensors();saveSensors();}";
 
     // Save sensors to backend
-    html += "async function saveSensors(){";
-    html += "try{";
-    html += "const activeSensors=sensorSlots.map((s,idx)=>s?{...s,slot:idx}:null).filter(s=>s!==null);";
-    html += "const res=await fetch('/api/sensors',{method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeSensors)});";
-    html += "if(res.ok){";
-    html += "const data=await res.json();";
-    html += "console.log('Sensors saved:',data);";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "console.error('Save failed:',err);";
-    html += "alert('Failed to save sensor configuration: '+err);}}";
-    html += "catch(e){console.error('Save error:',e);alert('Error saving sensors: '+e.message);}}";
+    html2 += "async function saveSensors(){";
+    html2 += "try{";
+    html2 += "const activeSensors=sensorSlots.map((s,idx)=>s?{...s,slot:idx}:null).filter(s=>s!==null);";
+    html2 += "const res=await fetch('/api/sensors',{method:'POST',";
+    html2 += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeSensors)});";
+    html2 += "if(res.ok){";
+    html2 += "const data=await res.json();";
+    html2 += "console.log('Sensors saved:',data);";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "console.error('Save failed:',err);";
+    html2 += "alert('Failed to save sensor configuration: '+err);}}";
+    html2 += "catch(e){console.error('Save error:',e);alert('Error saving sensors: '+e.message);}}";
 
     // === DISPLAY MANAGEMENT ===
-    html += "let displaySlots=[null,null];";
+    html2 += "let displaySlots=[null,null];";
 
     // Load displays from backend
-    html += "async function loadDisplays(){";
-    html += "try{";
-    html += "const res=await fetch('/api/displays');";
-    html += "if(res.ok){";
-    html += "const data=await res.json();";
-    html += "if(data.displays&&Array.isArray(data.displays)){";
-    html += "data.displays.forEach(d=>{if(d.slot>=0&&d.slot<2){displaySlots[d.slot]=d;}});";
-    html += "renderDisplays();}}";
-    html += "}catch(e){console.error('Load displays error:',e);}}";
+    html2 += "async function loadDisplays(){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/displays');";
+    html2 += "if(res.ok){";
+    html2 += "const data=await res.json();";
+    html2 += "if(data.displays&&Array.isArray(data.displays)){";
+    html2 += "data.displays.forEach(d=>{if(d.slot>=0&&d.slot<2){displaySlots[d.slot]=d;}});";
+    html2 += "renderDisplays();}}";
+    html2 += "}catch(e){console.error('Load displays error:',e);}}";
 
     // Render displays list
-    html += "function renderDisplays(){";
-    html += "const container=document.getElementById('displays-list');";
-    html += "if(!container)return;";
-    html += "container.innerHTML='';";
-    html += "let anyDisplay=false;";
-    html += "for(let i=0;i<displaySlots.length;i++){";
-    html += "if(displaySlots[i]){anyDisplay=true;const card=createDisplayCard(displaySlots[i],i);container.appendChild(card);}}";
-    html += "if(!anyDisplay){";
-    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No displays configured. Click \"Add Display\" to get started.</p>';}}";
+    html2 += "function renderDisplays(){";
+    html2 += "const container=document.getElementById('displays-list');";
+    html2 += "if(!container)return;";
+    html2 += "container.innerHTML='';";
+    html2 += "let anyDisplay=false;";
+    html2 += "for(let i=0;i<displaySlots.length;i++){";
+    html2 += "if(displaySlots[i]){anyDisplay=true;const card=createDisplayCard(displaySlots[i],i);container.appendChild(card);}}";
+    html2 += "if(!anyDisplay){";
+    html2 += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:20px;\">No displays configured. Click \"Add Display\" to get started.</p>';}}";
 
     // Create display card
-    html += "function createDisplayCard(display,slotIdx){";
-    html += "const card=document.createElement('div');";
-    html += "card.className='sensor-card';";
-    html += "card.style.cssText='border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:12px;background:#fff;';";
-    html += "let content='';";
-    html += "content+='<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;\">';";
-    html += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
-    html += "const typeName=display.type===1?'8x8 Matrix':'LED';";
-    html += "const typeColor=display.type===1?'#3b82f6':'#10b981';";
-    html += "content+='<span style=\"background:'+typeColor+';color:white;padding:4px 8px;border-radius:4px;font-size:0.75em;font-weight:600;\">'+typeName+'</span>';";
-    html += "content+='<span style=\"font-weight:600;\">Slot '+slotIdx+': '+display.name+'</span>';";
-    html += "content+='</div>';";
-    html += "content+='<div style=\"display:flex;gap:8px;\">';";
-    html += "content+='<button class=\"btn btn-sm btn-'+(display.enabled?'warning':'success')+'\" onclick=\"toggleDisplay('+slotIdx+')\">'+(display.enabled?'Disable':'Enable')+'</button>';";
-    html += "content+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editDisplay('+slotIdx+')\">Edit</button>';";
-    html += "content+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeDisplay('+slotIdx+')\">Remove</button>';";
-    html += "content+='</div></div>';";
-    html += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;\">';";
-    html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
-    html += "content+='<div style=\"line-height:1.6;\">';";
-    html += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
-    html += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
-    html += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sdaPin+'</span></div>';";
-    html += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sclPin+'</span></div>';";
-    html += "content+='</div></div>';";
-    html += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
-    html += "content+='<div style=\"line-height:1.6;\">';";
-    html += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">I2C Address:</span> <span>0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
-    html += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Brightness:</span> <span>'+display.brightness+'/15</span></div>';";
-    html += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Rotation:</span> <span>'+(display.rotation*90)+'°</span></div>';";
-    html += "content+='</div></div></div>';";
+    html2 += "function createDisplayCard(display,slotIdx){";
+    html2 += "const card=document.createElement('div');";
+    html2 += "card.className='sensor-card';";
+    html2 += "card.style.cssText='border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:12px;background:#fff;';";
+    html2 += "let content='';";
+    html2 += "content+='<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;\">';";
+    html2 += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html2 += "const typeName=display.type===1?'8x8 Matrix':'LED';";
+    html2 += "const typeColor=display.type===1?'#3b82f6':'#10b981';";
+    html2 += "content+='<span style=\"background:'+typeColor+';color:white;padding:4px 8px;border-radius:4px;font-size:0.75em;font-weight:600;\">'+typeName+'</span>';";
+    html2 += "content+='<span style=\"font-weight:600;\">Slot '+slotIdx+': '+display.name+'</span>';";
+    html2 += "content+='</div>';";
+    html2 += "content+='<div style=\"display:flex;gap:8px;\">';";
+    html2 += "content+='<button class=\"btn btn-sm btn-'+(display.enabled?'warning':'success')+'\" onclick=\"toggleDisplay('+slotIdx+')\">'+(display.enabled?'Disable':'Enable')+'</button>';";
+    html2 += "content+='<button class=\"btn btn-sm btn-secondary\" onclick=\"editDisplay('+slotIdx+')\">Edit</button>';";
+    html2 += "content+='<button class=\"btn btn-sm btn-danger\" onclick=\"removeDisplay('+slotIdx+')\">Remove</button>';";
+    html2 += "content+='</div></div>';";
+    html2 += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;\">';";
+    html2 += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
+    html2 += "content+='<div style=\"line-height:1.6;\">';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sdaPin+'</span></div>';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sclPin+'</span></div>';";
+    html2 += "content+='</div></div>';";
+    html2 += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
+    html2 += "content+='<div style=\"line-height:1.6;\">';";
+    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">I2C Address:</span> <span>0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
+    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Brightness:</span> <span>'+display.brightness+'/15</span></div>';";
+    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Rotation:</span> <span>'+(display.rotation*90)+'°</span></div>';";
+    html2 += "content+='</div></div></div>';";
 
     // Hardware Info section for displays (LED Matrix I2C error rate)
-    html += "if(display.type===1){";  // 8x8 Matrix only
-    html += "content+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
-    html += "content+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
-    html += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
-    html += "content+='<span style=\"font-size:0.85em;color:#64748b;\">I2C Error Rate:</span>';";
-    html += "const errorRate=display.errorRate!==undefined?display.errorRate:-1;";
-    html += "const errorRateAvailable=display.errorRateAvailable!==undefined?display.errorRateAvailable:false;";
-    html += "const txCount=display.transactionCount!==undefined?display.transactionCount:0;";
-    html += "if(errorRate<0||!errorRateAvailable){";
-    html += "const remaining=Math.max(0,10-txCount);";
-    html += "if(remaining>0){";
-    html += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet ('+remaining+' operations remaining)</span>';}";
-    html += "else{";
-    html += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}}";
-    html += "else{";
-    html += "const colorClass=errorRate<1.0?'#10b981':errorRate<5.0?'#f59e0b':'#ef4444';";
-    html += "const statusText=errorRate<1.0?'Excellent':errorRate<5.0?'Fair':'Poor';";
-    html += "content+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
-    html += "content+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
-    html += "content+='</div>';";
-    html += "content+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on I2C transaction history. Lower is better.</div>';";
-    html += "content+='</div>';}";
+    html2 += "if(display.type===1){";  // 8x8 Matrix only
+    html2 += "content+='<div style=\"margin-top:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;\">';";
+    html2 += "content+='<div style=\"font-weight:600;margin-bottom:8px;font-size:0.9em;color:#1e293b;\">Hardware Info</div>';";
+    html2 += "content+='<div style=\"display:flex;align-items:center;gap:8px;\">';";
+    html2 += "content+='<span style=\"font-size:0.85em;color:#64748b;\">I2C Error Rate:</span>';";
+    html2 += "const errorRate=display.errorRate!==undefined?display.errorRate:-1;";
+    html2 += "const errorRateAvailable=display.errorRateAvailable!==undefined?display.errorRateAvailable:false;";
+    html2 += "const txCount=display.transactionCount!==undefined?display.transactionCount:0;";
+    html2 += "if(errorRate<0||!errorRateAvailable){";
+    html2 += "const remaining=Math.max(0,10-txCount);";
+    html2 += "if(remaining>0){";
+    html2 += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet ('+remaining+' operations remaining)</span>';}";
+    html2 += "else{";
+    html2 += "content+='<span style=\"font-size:0.85em;color:#94a3b8;font-style:italic;\">Not available yet</span>';}}";
+    html2 += "else{";
+    html2 += "const colorClass=errorRate<1.0?'#10b981':errorRate<5.0?'#f59e0b':'#ef4444';";
+    html2 += "const statusText=errorRate<1.0?'Excellent':errorRate<5.0?'Fair':'Poor';";
+    html2 += "content+='<span style=\"font-size:0.85em;font-weight:600;color:'+colorClass+';\">'+errorRate.toFixed(1)+'%</span>';";
+    html2 += "content+='<span style=\"font-size:0.8em;color:#94a3b8;\">('+statusText+')</span>';}";
+    html2 += "content+='</div>';";
+    html2 += "content+='<div style=\"font-size:0.75em;color:#64748b;margin-top:4px;\">Based on I2C transaction history. Lower is better.</div>';";
+    html2 += "content+='</div>';}";
 
-    html += "card.innerHTML=content;";
-    html += "return card;}";
+    html2 += "card.innerHTML=content;";
+    html2 += "return card;}";
 
     // Add display
-    html += "function addDisplay(){";
-    html += "let slot=-1;";
-    html += "for(let i=0;i<2;i++){if(!displaySlots[i]){slot=i;break;}}";
-    html += "if(slot===-1){alert('Maximum 2 displays reached');return;}";
-    html += "const name=prompt('Display name:','8x8 Matrix');";
-    html += "if(!name)return;";
-    html += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:15,rotation:0,useForStatus:true};";
-    html += "displaySlots[slot]=newDisplay;";
-    html += "renderDisplays();";
-    html += "saveDisplays();}";
+    html2 += "function addDisplay(){";
+    html2 += "let slot=-1;";
+    html2 += "for(let i=0;i<2;i++){if(!displaySlots[i]){slot=i;break;}}";
+    html2 += "if(slot===-1){alert('Maximum 2 displays reached');return;}";
+    html2 += "const name=prompt('Display name:','8x8 Matrix');";
+    html2 += "if(!name)return;";
+    html2 += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:15,rotation:0,useForStatus:true};";
+    html2 += "displaySlots[slot]=newDisplay;";
+    html2 += "renderDisplays();";
+    html2 += "saveDisplays();}";
 
     // Remove display
-    html += "function removeDisplay(slotIdx){";
-    html += "if(!confirm('Remove this display?'))return;";
-    html += "displaySlots[slotIdx]=null;";
-    html += "renderDisplays();";
-    html += "saveDisplays();}";
+    html2 += "function removeDisplay(slotIdx){";
+    html2 += "if(!confirm('Remove this display?'))return;";
+    html2 += "displaySlots[slotIdx]=null;";
+    html2 += "renderDisplays();";
+    html2 += "saveDisplays();}";
 
     // Toggle display
-    html += "function toggleDisplay(slotIdx){";
-    html += "if(displaySlots[slotIdx]){";
-    html += "displaySlots[slotIdx].enabled=!displaySlots[slotIdx].enabled;";
-    html += "renderDisplays();";
-    html += "saveDisplays();}}";
+    html2 += "function toggleDisplay(slotIdx){";
+    html2 += "if(displaySlots[slotIdx]){";
+    html2 += "displaySlots[slotIdx].enabled=!displaySlots[slotIdx].enabled;";
+    html2 += "renderDisplays();";
+    html2 += "saveDisplays();}}";
 
     // Edit display
-    html += "function editDisplay(slotIdx){";
-    html += "const display=displaySlots[slotIdx];";
-    html += "if(!display)return;";
-    html += "const name=prompt('Display name:',display.name);";
-    html += "if(name){display.name=name;}";
-    html += "const brightness=prompt('Brightness (0-15):',display.brightness);";
-    html += "if(brightness){display.brightness=parseInt(brightness)||15;}";
-    html += "const rotation=prompt('Rotation (0,1,2,3):',display.rotation);";
-    html += "if(rotation){display.rotation=parseInt(rotation)||0;}";
-    html += "renderDisplays();";
-    html += "saveDisplays();}";
+    html2 += "function editDisplay(slotIdx){";
+    html2 += "const display=displaySlots[slotIdx];";
+    html2 += "if(!display)return;";
+    html2 += "const name=prompt('Display name:',display.name);";
+    html2 += "if(name){display.name=name;}";
+    html2 += "const brightness=prompt('Brightness (0-15):',display.brightness);";
+    html2 += "if(brightness){display.brightness=parseInt(brightness)||15;}";
+    html2 += "const rotation=prompt('Rotation (0,1,2,3):',display.rotation);";
+    html2 += "if(rotation){display.rotation=parseInt(rotation)||0;}";
+    html2 += "renderDisplays();";
+    html2 += "saveDisplays();}";
 
     // Save displays to backend
-    html += "async function saveDisplays(){";
-    html += "try{";
-    html += "const activeDisplays=displaySlots.filter(d=>d!==null);";
-    html += "const res=await fetch('/api/displays',{method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeDisplays)});";
-    html += "if(res.ok){";
-    html += "const data=await res.json();";
-    html += "console.log('Displays saved:',data);";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "console.error('Save failed:',err);";
-    html += "alert('Failed to save display configuration: '+err);}}";
-    html += "catch(e){console.error('Save error:',e);alert('Error saving displays: '+e.message);}}";
+    html2 += "async function saveDisplays(){";
+    html2 += "try{";
+    html2 += "const activeDisplays=displaySlots.filter(d=>d!==null);";
+    html2 += "const res=await fetch('/api/displays',{method:'POST',";
+    html2 += "headers:{'Content-Type':'application/json'},body:JSON.stringify(activeDisplays)});";
+    html2 += "if(res.ok){";
+    html2 += "const data=await res.json();";
+    html2 += "console.log('Displays saved:',data);";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "console.error('Save failed:',err);";
+    html2 += "alert('Failed to save display configuration: '+err);}}";
+    html2 += "catch(e){console.error('Save error:',e);alert('Error saving displays: '+e.message);}}";
 
     // ========================================================================
     // Custom Animation Management (Issue #12 Phase 2)
     // ========================================================================
 
     // Load animations list
-    html += "async function loadAnimations(){";
-    html += "try{";
-    html += "const res=await fetch('/api/animations');";
-    html += "if(res.ok){";
-    html += "const data=await res.json();";
-    html += "renderAnimations(data.animations||[]);";
-    html += "updateAnimationSelect(data.animations||[]);";
-    html += "}else{console.error('Failed to load animations');}}";
-    html += "catch(e){console.error('Load animations error:',e);}}";
+    html2 += "async function loadAnimations(){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations');";
+    html2 += "if(res.ok){";
+    html2 += "const data=await res.json();";
+    html2 += "renderAnimations(data.animations||[]);";
+    html2 += "updateAnimationSelect(data.animations||[]);";
+    html2 += "}else{console.error('Failed to load animations');}}";
+    html2 += "catch(e){console.error('Load animations error:',e);}}";
 
     // Render animations list
-    html += "function renderAnimations(animations){";
-    html += "const container=document.getElementById('animations-list');";
-    html += "if(!container)return;";
-    html += "if(animations.length===0){";
-    html += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:12px;background:#f8fafc;border-radius:4px;\">No custom animations loaded. Upload an animation file to get started.</p>';";
-    html += "return;}";
-    html += "let html='<div style=\"display:grid;gap:8px;\">';";
-    html += "animations.forEach((anim,idx)=>{";
-    html += "html+='<div style=\"display:flex;justify-content:space-between;align-items:center;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;\">';";
-    html += "html+='<div style=\"flex:1;\">';";
-    html += "html+='<div style=\"font-weight:600;color:#1e293b;\">'+anim.name+'</div>';";
-    html += "html+='<div style=\"font-size:0.8em;color:#64748b;margin-top:2px;\">'+anim.frameCount+' frames';";
-    html += "if(anim.loop)html+=' • Looping';";
-    html += "html+='</div></div>';";
-    html += "html+='<div style=\"display:flex;gap:6px;\">';";
-    html += "html+='<button class=\"btn btn-sm btn-primary\" onclick=\"playCustomAnimation(\\''+anim.name+'\\')\" title=\"Play animation\" style=\"width:36px;padding:8px;\">▶</button>';";
-    html += "html+='<button class=\"btn btn-sm btn-success\" onclick=\"assignCustomAnimation(\\''+anim.name+'\\')\" title=\"Assign to function\" style=\"width:36px;padding:8px;\">✓</button>';";
-    html += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"deleteAnimation(\\''+anim.name+'\\')\" title=\"Remove from memory\" style=\"width:36px;padding:8px;\">×</button>';";
-    html += "html+='</div></div>';});";
-    html += "html+='</div>';";
-    html += "container.innerHTML=html;}";
+    html2 += "function renderAnimations(animations){";
+    html2 += "const container=document.getElementById('animations-list');";
+    html2 += "if(!container)return;";
+    html2 += "if(animations.length===0){";
+    html2 += "container.innerHTML='<p style=\"color:#94a3b8;text-align:center;padding:12px;background:#f8fafc;border-radius:4px;\">No custom animations loaded. Upload an animation file to get started.</p>';";
+    html2 += "return;}";
+    html2 += "let html='<div style=\"display:grid;gap:8px;\">';";
+    html2 += "animations.forEach((anim,idx)=>{";
+    html2 += "html+='<div style=\"display:flex;justify-content:space-between;align-items:center;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;\">';";
+    html2 += "html+='<div style=\"flex:1;\">';";
+    html2 += "html+='<div style=\"font-weight:600;color:#1e293b;\">'+anim.name+'</div>';";
+    html2 += "html+='<div style=\"font-size:0.8em;color:#64748b;margin-top:2px;\">'+anim.frameCount+' frames';";
+    html2 += "if(anim.loop)html+=' • Looping';";
+    html2 += "html+='</div></div>';";
+    html2 += "html+='<div style=\"display:flex;gap:6px;\">';";
+    html2 += "html+='<button class=\"btn btn-sm btn-primary\" onclick=\"playCustomAnimation(\\''+anim.name+'\\')\" title=\"Play animation\" style=\"width:36px;padding:8px;\">▶</button>';";
+    html2 += "html+='<button class=\"btn btn-sm btn-success\" onclick=\"assignCustomAnimation(\\''+anim.name+'\\')\" title=\"Assign to function\" style=\"width:36px;padding:8px;\">✓</button>';";
+    html2 += "html+='<button class=\"btn btn-sm btn-danger\" onclick=\"deleteAnimation(\\''+anim.name+'\\')\" title=\"Remove from memory\" style=\"width:36px;padding:8px;\">×</button>';";
+    html2 += "html+='</div></div>';});";
+    html2 += "html+='</div>';";
+    html2 += "container.innerHTML=html;}";
 
     // Update animation select dropdown
-    html += "function updateAnimationSelect(animations){";
-    html += "const select=document.getElementById('test-animation-select');";
-    html += "if(!select)return;";
-    html += "select.innerHTML='<option value=\"\">Select animation...</option>';";
-    html += "animations.forEach(anim=>{";
-    html += "const opt=document.createElement('option');";
-    html += "opt.value=anim.name;";
-    html += "opt.textContent=anim.name+' ('+anim.frameCount+' frames)';";
-    html += "select.appendChild(opt);});}";
+    html2 += "function updateAnimationSelect(animations){";
+    html2 += "const select=document.getElementById('test-animation-select');";
+    html2 += "if(!select)return;";
+    html2 += "select.innerHTML='<option value=\"\">Select animation...</option>';";
+    html2 += "animations.forEach(anim=>{";
+    html2 += "const opt=document.createElement('option');";
+    html2 += "opt.value=anim.name;";
+    html2 += "opt.textContent=anim.name+' ('+anim.frameCount+' frames)';";
+    html2 += "select.appendChild(opt);});}";
 
     // Upload animation file
-    html += "async function uploadAnimation(){";
-    html += "const fileInput=document.getElementById('animation-file-input');";
-    html += "if(!fileInput||!fileInput.files||fileInput.files.length===0){";
-    html += "alert('Please select a file first');return;}";
-    html += "const file=fileInput.files[0];";
-    html += "if(!file.name.endsWith('.txt')){";
-    html += "alert('Please select a .txt animation file');return;}";
-    html += "const formData=new FormData();";
-    html += "formData.append('file',file);";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/upload',{method:'POST',body:formData});";
-    html += "if(res.ok){";
-    html += "const data=await res.json();";
-    html += "alert('Animation uploaded successfully: '+data.name);";
-    html += "fileInput.value='';";
-    html += "loadAnimations();";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Upload failed: '+err);}}";
-    html += "catch(e){alert('Upload error: '+e.message);}}";
+    html2 += "async function uploadAnimation(){";
+    html2 += "const fileInput=document.getElementById('animation-file-input');";
+    html2 += "if(!fileInput||!fileInput.files||fileInput.files.length===0){";
+    html2 += "alert('Please select a file first');return;}";
+    html2 += "const file=fileInput.files[0];";
+    html2 += "if(!file.name.endsWith('.txt')){";
+    html2 += "alert('Please select a .txt animation file');return;}";
+    html2 += "const formData=new FormData();";
+    html2 += "formData.append('file',file);";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/upload',{method:'POST',body:formData});";
+    html2 += "if(res.ok){";
+    html2 += "const data=await res.json();";
+    html2 += "alert('Animation uploaded successfully: '+data.name);";
+    html2 += "fileInput.value='';";
+    html2 += "loadAnimations();";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Upload failed: '+err);}}";
+    html2 += "catch(e){alert('Upload error: '+e.message);}}";
 
     // Play built-in animation
-    html += "async function playBuiltInAnimation(animType,duration){";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/builtin',{";
-    html += "method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},";
-    html += "body:JSON.stringify({type:animType,duration:duration||0})});";
-    html += "if(res.ok){";
-    html += "console.log('Playing built-in animation: '+animType);";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to play animation: '+err);}}";
-    html += "catch(e){alert('Error playing animation: '+e.message);}}";
+    html2 += "async function playBuiltInAnimation(animType,duration){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/builtin',{";
+    html2 += "method:'POST',";
+    html2 += "headers:{'Content-Type':'application/json'},";
+    html2 += "body:JSON.stringify({type:animType,duration:duration||0})});";
+    html2 += "if(res.ok){";
+    html2 += "console.log('Playing built-in animation: '+animType);";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to play animation: '+err);}}";
+    html2 += "catch(e){alert('Error playing animation: '+e.message);}}";
 
     // Play animation from test controls
-    html += "function playTestAnimation(){";
-    html += "const select=document.getElementById('test-animation-select');";
-    html += "const duration=parseInt(document.getElementById('test-duration').value)||0;";
-    html += "if(!select||!select.value){alert('Select an animation first');return;}";
-    html += "playAnimation(select.value,duration);}";
+    html2 += "function playTestAnimation(){";
+    html2 += "const select=document.getElementById('test-animation-select');";
+    html2 += "const duration=parseInt(document.getElementById('test-duration').value)||0;";
+    html2 += "if(!select||!select.value){alert('Select an animation first');return;}";
+    html2 += "playAnimation(select.value,duration);}";
 
     // Play specific custom animation
-    html += "async function playAnimation(name,duration){";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/play',{";
-    html += "method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},";
-    html += "body:JSON.stringify({name:name,duration:duration||0})});";
-    html += "if(res.ok){";
-    html += "console.log('Playing animation: '+name);";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to play animation: '+err);}}";
-    html += "catch(e){alert('Error playing animation: '+e.message);}}";
+    html2 += "async function playAnimation(name,duration){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/play',{";
+    html2 += "method:'POST',";
+    html2 += "headers:{'Content-Type':'application/json'},";
+    html2 += "body:JSON.stringify({name:name,duration:duration||0})});";
+    html2 += "if(res.ok){";
+    html2 += "console.log('Playing animation: '+name);";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to play animation: '+err);}}";
+    html2 += "catch(e){alert('Error playing animation: '+e.message);}}";
 
     // Stop current animation
-    html += "async function stopAnimation(){";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/stop',{method:'POST'});";
-    html += "if(res.ok){console.log('Animation stopped');}";
-    html += "}catch(e){console.error('Error stopping animation:',e);}}";
+    html2 += "async function stopAnimation(){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/stop',{method:'POST'});";
+    html2 += "if(res.ok){console.log('Animation stopped');}";
+    html2 += "}catch(e){console.error('Error stopping animation:',e);}}";
 
     // Delete animation from memory
-    html += "async function deleteAnimation(name){";
-    html += "if(!confirm('Remove \"'+name+'\" from memory?\\n\\nThis will free memory but you can re-upload the file anytime.'))return;";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/'+encodeURIComponent(name),{method:'DELETE'});";
-    html += "if(res.ok){";
-    html += "alert('Animation removed from memory');";
-    html += "loadAnimations();";
-    html += "}else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to delete: '+err);}}";
-    html += "catch(e){alert('Delete error: '+e.message);}}";
+    html2 += "async function deleteAnimation(name){";
+    html2 += "if(!confirm('Remove \"'+name+'\" from memory?\\n\\nThis will free memory but you can re-upload the file anytime.'))return;";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/'+encodeURIComponent(name),{method:'DELETE'});";
+    html2 += "if(res.ok){";
+    html2 += "alert('Animation removed from memory');";
+    html2 += "loadAnimations();";
+    html2 += "}else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to delete: '+err);}}";
+    html2 += "catch(e){alert('Delete error: '+e.message);}}";
 
     // Show animation format help
-    html += "function showAnimationHelp(){";
-    html += "alert('Animation File Format:\\n\\n'+";
-    html += "'name=MyAnimation\\n'+";
-    html += "'loop=true\\n'+";
-    html += "'frame=11111111,10000001,...,100\\n\\n'+";
-    html += "'• Each frame: 8 binary bytes + delay (ms)\\n'+";
-    html += "'• Max 16 frames per animation\\n'+";
-    html += "'• Max 8 animations loaded at once\\n\\n'+";
-    html += "'See /data/animations/README.md for examples');}";
+    html2 += "function showAnimationHelp(){";
+    html2 += "alert('Animation File Format:\\n\\n'+";
+    html2 += "'name=MyAnimation\\n'+";
+    html2 += "'loop=true\\n'+";
+    html2 += "'frame=11111111,10000001,...,100\\n\\n'+";
+    html2 += "'• Each frame: 8 binary bytes + delay (ms)\\n'+";
+    html2 += "'• Max 16 frames per animation\\n'+";
+    html2 += "'• Max 8 animations loaded at once\\n\\n'+";
+    html2 += "'See /data/animations/README.md for examples');}";
 
     // Download built-in animation as template
-    html += "async function downloadTemplate(animType){";
-    html += "try{";
-    html += "console.log('Downloading template for:',animType);";
-    html += "const res=await fetch('/api/animations/template?type='+animType);";
-    html += "console.log('Fetch complete, status:',res.status);";
-    html += "if(res.ok){";
-    html += "const text=await res.text();";
-    html += "const blob=new Blob([text],{type:'text/plain'});";
-    html += "const url=URL.createObjectURL(blob);";
-    html += "const a=document.createElement('a');";
-    html += "a.href=url;";
-    html += "a.download=animType.toLowerCase()+'_template.txt';";
-    html += "document.body.appendChild(a);";
-    html += "a.click();";
-    html += "document.body.removeChild(a);";
-    html += "URL.revokeObjectURL(url);";
-    html += "console.log('Download triggered');}else{";
-    html += "const err=await res.text();";
-    html += "console.error('Download failed:',res.status,err);";
-    html += "alert('Failed to download template: '+res.status);}}";
-    html += "catch(e){";
-    html += "console.error('Download error:',e);";
-    html += "alert('Download error: '+e.message);}}";
+    html2 += "async function downloadTemplate(animType){";
+    html2 += "try{";
+    html2 += "console.log('Downloading template for:',animType);";
+    html2 += "const res=await fetch('/api/animations/template?type='+animType);";
+    html2 += "console.log('Fetch complete, status:',res.status);";
+    html2 += "if(res.ok){";
+    html2 += "const text=await res.text();";
+    html2 += "const blob=new Blob([text],{type:'text/plain'});";
+    html2 += "const url=URL.createObjectURL(blob);";
+    html2 += "const a=document.createElement('a');";
+    html2 += "a.href=url;";
+    html2 += "a.download=animType.toLowerCase()+'_template.txt';";
+    html2 += "document.body.appendChild(a);";
+    html2 += "a.click();";
+    html2 += "document.body.removeChild(a);";
+    html2 += "URL.revokeObjectURL(url);";
+    html2 += "console.log('Download triggered');}else{";
+    html2 += "const err=await res.text();";
+    html2 += "console.error('Download failed:',res.status,err);";
+    html2 += "alert('Failed to download template: '+res.status);}}";
+    html2 += "catch(e){";
+    html2 += "console.error('Download error:',e);";
+    html2 += "alert('Download error: '+e.message);}}";
 
     // Play selected built-in animation from dropdown
-    html += "function playSelectedBuiltIn(){";
-    html += "const select=document.getElementById('builtin-animation-select');";
-    html += "if(!select||!select.value)return;";
-    html += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
-    html += "playBuiltInAnimation(select.value,duration);}";
+    html2 += "function playSelectedBuiltIn(){";
+    html2 += "const select=document.getElementById('builtin-animation-select');";
+    html2 += "if(!select||!select.value)return;";
+    html2 += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
+    html2 += "playBuiltInAnimation(select.value,duration);}";
 
     // Download selected animation as template
-    html += "function downloadSelectedTemplate(){";
-    html += "const select=document.getElementById('builtin-animation-select');";
-    html += "if(!select||!select.value)return;";
-    html += "downloadTemplate(select.value);}";
+    html2 += "function downloadSelectedTemplate(){";
+    html2 += "const select=document.getElementById('builtin-animation-select');";
+    html2 += "if(!select||!select.value)return;";
+    html2 += "downloadTemplate(select.value);}";
 
     // Assign selected built-in animation to a function
-    html += "function assignSelectedBuiltIn(){";
-    html += "const select=document.getElementById('builtin-animation-select');";
-    html += "if(!select||!select.value)return;";
-    html += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
-    html += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
-    html += "let message='Assign \"'+select.selectedOptions[0].text+'\" to which function?\\n\\n';";
-    html += "for(let i=0;i<functions.length;i++){";
-    html += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
-    html += "const choice=prompt(message,'1');";
-    html += "if(!choice)return;";
-    html += "const idx=parseInt(choice)-1;";
-    html += "if(idx>=0&&idx<functions.length){";
-    html += "assignAnimation(functions[idx],'builtin',select.value);}}";
+    html2 += "function assignSelectedBuiltIn(){";
+    html2 += "const select=document.getElementById('builtin-animation-select');";
+    html2 += "if(!select||!select.value)return;";
+    html2 += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
+    html2 += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
+    html2 += "let message='Assign \"'+select.selectedOptions[0].text+'\" to which function?\\n\\n';";
+    html2 += "for(let i=0;i<functions.length;i++){";
+    html2 += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
+    html2 += "const choice=prompt(message,'1');";
+    html2 += "if(!choice)return;";
+    html2 += "const idx=parseInt(choice)-1;";
+    html2 += "if(idx>=0&&idx<functions.length){";
+    html2 += "assignAnimation(functions[idx],'builtin',select.value);}}";
 
     // Assign animation to a function
-    html += "async function assignAnimation(functionKey,type,animName){";
-    html += "try{";
-    html += "const res=await fetch('/api/animations/assign',{";
-    html += "method:'POST',";
-    html += "headers:{'Content-Type':'application/json'},";
-    html += "body:JSON.stringify({function:functionKey,type:type,animation:animName})});";
-    html += "if(res.ok){";
-    html += "updateActiveAnimations();";
-    html += "alert('Animation assigned successfully');}";
-    html += "else{";
-    html += "const err=await res.text();";
-    html += "alert('Failed to assign animation: '+err);}}";
-    html += "catch(e){alert('Assignment error: '+e.message);}}";
+    html2 += "async function assignAnimation(functionKey,type,animName){";
+    html2 += "try{";
+    html2 += "const res=await fetch('/api/animations/assign',{";
+    html2 += "method:'POST',";
+    html2 += "headers:{'Content-Type':'application/json'},";
+    html2 += "body:JSON.stringify({function:functionKey,type:type,animation:animName})});";
+    html2 += "if(res.ok){";
+    html2 += "updateActiveAnimations();";
+    html2 += "alert('Animation assigned successfully');}";
+    html2 += "else{";
+    html2 += "const err=await res.text();";
+    html2 += "alert('Failed to assign animation: '+err);}}";
+    html2 += "catch(e){alert('Assignment error: '+e.message);}}";
 
     // Update active animations display
-    html += "function updateActiveAnimations(){";
-    html += "fetch('/api/animations/assignments')";
-    html += ".then(res=>res.json())";
-    html += ".then(data=>{";
-    html += "const panel=document.getElementById('active-animations-panel');";
-    html += "if(panel){panel.style.display='block';}";
-    html += "if(data['motion-alert']){";
-    html += "const elem=document.getElementById('anim-motion-alert');";
-    html += "if(elem)elem.textContent=data['motion-alert'].type==='builtin'?'Built-in: '+data['motion-alert'].name:data['motion-alert'].name;}";
-    html += "if(data['battery-low']){";
-    html += "const elem=document.getElementById('anim-battery-low');";
-    html += "if(elem)elem.textContent=data['battery-low'].type==='builtin'?'Built-in: '+data['battery-low'].name:data['battery-low'].name;}";
-    html += "if(data['boot-status']){";
-    html += "const elem=document.getElementById('anim-boot-status');";
-    html += "if(elem)elem.textContent=data['boot-status'].type==='builtin'?'Built-in: '+data['boot-status'].name:data['boot-status'].name;}";
-    html += "if(data['wifi-connected']){";
-    html += "const elem=document.getElementById('anim-wifi-connected');";
-    html += "if(elem)elem.textContent=data['wifi-connected'].type==='builtin'?'Built-in: '+data['wifi-connected'].name:data['wifi-connected'].name;}";
-    html += "})";
-    html += ".catch(e=>console.error('Failed to load assignments:',e));}";
+    html2 += "function updateActiveAnimations(){";
+    html2 += "fetch('/api/animations/assignments')";
+    html2 += ".then(res=>res.json())";
+    html2 += ".then(data=>{";
+    html2 += "const panel=document.getElementById('active-animations-panel');";
+    html2 += "if(panel){panel.style.display='block';}";
+    html2 += "if(data['motion-alert']){";
+    html2 += "const elem=document.getElementById('anim-motion-alert');";
+    html2 += "if(elem)elem.textContent=data['motion-alert'].type==='builtin'?'Built-in: '+data['motion-alert'].name:data['motion-alert'].name;}";
+    html2 += "if(data['battery-low']){";
+    html2 += "const elem=document.getElementById('anim-battery-low');";
+    html2 += "if(elem)elem.textContent=data['battery-low'].type==='builtin'?'Built-in: '+data['battery-low'].name:data['battery-low'].name;}";
+    html2 += "if(data['boot-status']){";
+    html2 += "const elem=document.getElementById('anim-boot-status');";
+    html2 += "if(elem)elem.textContent=data['boot-status'].type==='builtin'?'Built-in: '+data['boot-status'].name:data['boot-status'].name;}";
+    html2 += "if(data['wifi-connected']){";
+    html2 += "const elem=document.getElementById('anim-wifi-connected');";
+    html2 += "if(elem)elem.textContent=data['wifi-connected'].type==='builtin'?'Built-in: '+data['wifi-connected'].name:data['wifi-connected'].name;}";
+    html2 += "})";
+    html2 += ".catch(e=>console.error('Failed to load assignments:',e));}";
 
     // Play custom animation with duration from input
-    html += "function playCustomAnimation(name){";
-    html += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
-    html += "playAnimation(name,duration);}";
+    html2 += "function playCustomAnimation(name){";
+    html2 += "const duration=parseInt(document.getElementById('test-duration').value)||5000;";
+    html2 += "playAnimation(name,duration);}";
 
     // Assign custom animation to a function
-    html += "function assignCustomAnimation(name){";
-    html += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
-    html += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
-    html += "let message='Assign \"'+name+'\" to which function?\\n\\n';";
-    html += "for(let i=0;i<functions.length;i++){";
-    html += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
-    html += "const choice=prompt(message,'1');";
-    html += "if(!choice)return;";
-    html += "const idx=parseInt(choice)-1;";
-    html += "if(idx>=0&&idx<functions.length){";
-    html += "assignAnimation(functions[idx],'custom',name);}}";
+    html2 += "function assignCustomAnimation(name){";
+    html2 += "const functions=['motion-alert','battery-low','boot-status','wifi-connected'];";
+    html2 += "const functionNames=['Motion Alert','Battery Low','Boot Status','WiFi Connected'];";
+    html2 += "let message='Assign \"'+name+'\" to which function?\\n\\n';";
+    html2 += "for(let i=0;i<functions.length;i++){";
+    html2 += "message+=(i+1)+'. '+functionNames[i]+'\\n';}";
+    html2 += "const choice=prompt(message,'1');";
+    html2 += "if(!choice)return;";
+    html2 += "const idx=parseInt(choice)-1;";
+    html2 += "if(idx>=0&&idx<functions.length){";
+    html2 += "assignAnimation(functions[idx],'custom',name);}}";
 
     // Firmware OTA Functions
-    html += "function validateFirmware(){";
-    html += "const file=document.getElementById('firmware-file').files[0];";
-    html += "const btn=document.getElementById('upload-btn');";
-    html += "if(!file){btn.disabled=true;return;}";
-    html += "if(file.size<100000){alert('File too small - not a valid firmware');btn.disabled=true;return;}";
-    html += "if(file.size>2000000){alert('File too large - exceeds 2MB limit');btn.disabled=true;return;}";
-    html += "btn.disabled=false;}";
+    html2 += "function validateFirmware(){";
+    html2 += "const file=document.getElementById('firmware-file').files[0];";
+    html2 += "const btn=document.getElementById('upload-btn');";
+    html2 += "if(!file){btn.disabled=true;return;}";
+    html2 += "if(file.size<100000){alert('File too small - not a valid firmware');btn.disabled=true;return;}";
+    html2 += "if(file.size>2000000){alert('File too large - exceeds 2MB limit');btn.disabled=true;return;}";
+    html2 += "btn.disabled=false;}";
 
-    html += "function uploadFirmware(){";
-    html += "const file=document.getElementById('firmware-file').files[0];";
-    html += "if(!file){alert('Please select a firmware file');return;}";
-    html += "if(!confirm('Upload firmware and reboot device?\\n\\nThis will restart the device.'))return;";
-    html += "const formData=new FormData();";
-    html += "formData.append('firmware',file);";
-    html += "const xhr=new XMLHttpRequest();";
-    html += "const progressDiv=document.getElementById('upload-progress');";
-    html += "const progressBar=document.getElementById('upload-bar');";
-    html += "const statusDiv=document.getElementById('upload-status');";
-    html += "const uploadBtn=document.getElementById('upload-btn');";
-    html += "progressDiv.style.display='block';";
-    html += "uploadBtn.disabled=true;";
-    html += "xhr.upload.addEventListener('progress',(e)=>{";
-    html += "if(e.lengthComputable){";
-    html += "const percent=Math.round((e.loaded/e.total)*100);";
-    html += "progressBar.value=percent;";
-    html += "statusDiv.textContent='Uploading... '+percent+'%';}});";
-    html += "xhr.addEventListener('load',()=>{";
-    html += "if(xhr.status===200){";
-    html += "statusDiv.textContent='Success! Device rebooting...';";
-    html += "statusDiv.style.color='#10b981';";
-    html += "setTimeout(()=>{";
-    html += "alert('Firmware updated. Device is rebooting.\\nReconnect in 30 seconds.');";
-    html += "window.location.reload();},3000);}";
-    html += "else{";
-    html += "statusDiv.textContent='Failed: '+xhr.responseText;";
-    html += "statusDiv.style.color='#ef4444';";
-    html += "uploadBtn.disabled=false;}});";
-    html += "xhr.addEventListener('error',()=>{";
-    html += "statusDiv.textContent='Upload error - check connection';";
-    html += "statusDiv.style.color='#ef4444';";
-    html += "uploadBtn.disabled=false;});";
-    html += "xhr.open('POST','/api/ota/upload');";
-    html += "xhr.send(formData);}";
+    html2 += "function uploadFirmware(){";
+    html2 += "const file=document.getElementById('firmware-file').files[0];";
+    html2 += "if(!file){alert('Please select a firmware file');return;}";
+    html2 += "if(!confirm('Upload firmware and reboot device?\\n\\nThis will restart the device.'))return;";
+    html2 += "const formData=new FormData();";
+    html2 += "formData.append('firmware',file);";
+    html2 += "const xhr=new XMLHttpRequest();";
+    html2 += "const progressDiv=document.getElementById('upload-progress');";
+    html2 += "const progressBar=document.getElementById('upload-bar');";
+    html2 += "const statusDiv=document.getElementById('upload-status');";
+    html2 += "const uploadBtn=document.getElementById('upload-btn');";
+    html2 += "progressDiv.style.display='block';";
+    html2 += "uploadBtn.disabled=true;";
+    html2 += "xhr.upload.addEventListener('progress',(e)=>{";
+    html2 += "if(e.lengthComputable){";
+    html2 += "const percent=Math.round((e.loaded/e.total)*100);";
+    html2 += "progressBar.value=percent;";
+    html2 += "statusDiv.textContent='Uploading... '+percent+'%';}});";
+    html2 += "xhr.addEventListener('load',()=>{";
+    html2 += "if(xhr.status===200){";
+    html2 += "statusDiv.textContent='Success! Device rebooting...';";
+    html2 += "statusDiv.style.color='#10b981';";
+    html2 += "setTimeout(()=>{";
+    html2 += "alert('Firmware updated. Device is rebooting.\\nReconnect in 30 seconds.');";
+    html2 += "window.location.reload();},3000);}";
+    html2 += "else{";
+    html2 += "statusDiv.textContent='Failed: '+xhr.responseText;";
+    html2 += "statusDiv.style.color='#ef4444';";
+    html2 += "uploadBtn.disabled=false;}});";
+    html2 += "xhr.addEventListener('error',()=>{";
+    html2 += "statusDiv.textContent='Upload error - check connection';";
+    html2 += "statusDiv.style.color='#ef4444';";
+    html2 += "uploadBtn.disabled=false;});";
+    html2 += "xhr.open('POST','/api/ota/upload');";
+    html2 += "xhr.send(formData);}";
 
-    html += "fetch('/api/ota/status')";
-    html += ".then(r=>r.json())";
-    html += ".then(data=>{";
-    html += "const versionElem=document.getElementById('current-version');";
-    html += "const partitionElem=document.getElementById('current-partition');";
-    html += "const maxSizeElem=document.getElementById('max-firmware-size');";
-    html += "if(versionElem)versionElem.textContent=data.currentVersion||'Unknown';";
-    html += "if(partitionElem)partitionElem.textContent='Partition: '+data.currentPartition;";
-    html += "if(maxSizeElem)maxSizeElem.textContent='Max size: '+(data.maxFirmwareSize/1024).toFixed(0)+' KB';})";
-    html += ".catch(e=>console.error('Failed to load OTA status:',e));";
+    html2 += "fetch('/api/ota/status')";
+    html2 += ".then(r=>r.json())";
+    html2 += ".then(data=>{";
+    html2 += "const versionElem=document.getElementById('current-version');";
+    html2 += "const partitionElem=document.getElementById('current-partition');";
+    html2 += "const maxSizeElem=document.getElementById('max-firmware-size');";
+    html2 += "if(versionElem)versionElem.textContent=data.currentVersion||'Unknown';";
+    html2 += "if(partitionElem)partitionElem.textContent='Partition: '+data.currentPartition;";
+    html2 += "if(maxSizeElem)maxSizeElem.textContent='Max size: '+(data.maxFirmwareSize/1024).toFixed(0)+' KB';})";
+    html2 += ".catch(e=>console.error('Failed to load OTA status:',e));";
 
-    // Log streaming variables
-    html += "let logSocket=null;";
-    html += "let autoScroll=true;";
-    html += "let activeFilters=new Set([0,1,2,3,4]);";
-    html += "let lastSequence=0;";
+    // Auto-refresh status
+    html2 += "fetchStatus();";
+    html2 += "setInterval(fetchStatus,2000);";
 
-    // Connect to log streaming WebSocket
-    html += "function connectLogStream(){";
-    html += "const protocol=window.location.protocol==='https:'?'wss:':'ws:';";
-    html += "const wsUrl=protocol+'//'+window.location.host+'/ws/logs';";
-    html += "logSocket=new WebSocket(wsUrl);";
-    html += "logSocket.onopen=function(){";
-    html += "document.getElementById('ws-status').textContent='\\u25CF Connected';";
-    html += "document.getElementById('ws-status').className='badge badge-success';};";
-    html += "logSocket.onmessage=function(event){";
-    html += "const entry=JSON.parse(event.data);appendLogEntry(entry);};";
-    html += "logSocket.onerror=function(){";
-    html += "document.getElementById('ws-status').textContent='\\u25CF Error';";
-    html += "document.getElementById('ws-status').className='badge badge-error';};";
-    html += "logSocket.onclose=function(){";
-    html += "document.getElementById('ws-status').textContent='\\u25CF Disconnected';";
-    html += "document.getElementById('ws-status').className='badge badge-warning';";
-    html += "setTimeout(connectLogStream,3000);};};";
+    // Load animation assignments and log list on page load
+    html2 += "updateActiveAnimations();";
+    html2 += "loadAvailableLogs();";
 
-    // Append log entry to viewer
-    html += "function appendLogEntry(entry){";
-    html += "if(lastSequence>0&&entry.seq>lastSequence+1){";
-    html += "const missed=entry.seq-lastSequence-1;";
-    html += "const warningDiv=document.createElement('div');";
-    html += "warningDiv.className='log-entry log-warn';";
-    html += "warningDiv.textContent='\\u26A0\\uFE0F Missed '+missed+' log entries (connection lag)';";
-    html += "document.getElementById('log-viewer').appendChild(warningDiv);}";
-    html += "lastSequence=entry.seq;";
-    html += "const viewer=document.getElementById('log-viewer');";
-    html += "const div=document.createElement('div');";
-    html += "div.className='log-entry log-'+entry.levelName.toLowerCase();";
-    html += "div.dataset.level=entry.level;";
-    html += "div.dataset.seq=entry.seq;";
-    html += "div.dataset.source=entry.source||'logger';";
-    html += "const ts=formatTimestamp(entry.ts);";
-    html += "div.textContent='['+ts+'] ['+entry.levelName+'] '+entry.msg;";
-    html += "if(!activeFilters.has(entry.level))div.classList.add('hidden');";
-    html += "viewer.appendChild(div);";
-    html += "while(viewer.children.length>1000)viewer.removeChild(viewer.firstChild);";
-    html += "if(autoScroll)viewer.scrollTop=viewer.scrollHeight;};";
+    html2 += "</script></body></html>";
 
-    // Format timestamp
-    html += "function formatTimestamp(ms){";
-    html += "const sec=Math.floor(ms/1000);";
-    html += "const min=Math.floor(sec/60);";
-    html += "const hr=Math.floor(min/60);";
-    html += "const msec=ms%1000;";
-    html += "return pad(hr%24)+':'+pad(min%60)+':'+pad(sec%60)+'.'+pad(msec,3);};";
+    LOG_DEBUG("buildDashboardHTML() complete: part1=%u part2=%u total=%u bytes, free heap: %u",
+              g_htmlPart1.length(), g_htmlPart2.length(),
+              g_htmlPart1.length() + g_htmlPart2.length(), ESP.getFreeHeap());
 
-    // Pad numbers with leading zeros
-    html += "function pad(n,len){";
-    html += "len=len||2;";
-    html += "return String(n).padStart(len,'0');};";
-
-    // Toggle level filter
-    html += "function toggleLevelFilter(btn){";
-    html += "const level=parseInt(btn.dataset.level);";
-    html += "if(activeFilters.has(level)){";
-    html += "activeFilters.delete(level);";
-    html += "btn.classList.remove('active');}else{";
-    html += "activeFilters.add(level);";
-    html += "btn.classList.add('active');}";
-    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
-    html += "const entryLevel=parseInt(entry.dataset.level);";
-    html += "if(activeFilters.has(entryLevel)){";
-    html += "entry.classList.remove('hidden');}else{";
-    html += "entry.classList.add('hidden');}});};";
-
-    // Filter logs by search text
-    html += "function filterLogs(){";
-    html += "const search=document.getElementById('log-search').value.toLowerCase();";
-    html += "document.querySelectorAll('.log-entry').forEach(function(entry){";
-    html += "const matches=entry.textContent.toLowerCase().includes(search);";
-    html += "const levelOk=activeFilters.has(parseInt(entry.dataset.level));";
-    html += "if(search===''){";
-    html += "if(levelOk)entry.style.display='block';";
-    html += "else entry.style.display='none';}else{";
-    html += "if(matches&&levelOk)entry.style.display='block';";
-    html += "else entry.style.display='none';}});};";
-
-    // Clear log viewer
-    html += "function clearLogViewer(){";
-    html += "document.getElementById('log-viewer').innerHTML='';";
-    html += "lastSequence=0;};";
-
-    // Auto-scroll checkbox handler
-    html += "document.getElementById('auto-scroll').addEventListener('change',function(e){";
-    html += "autoScroll=e.target.checked;});";
-
-    // Auto-refresh status and logs
-    html += "fetchStatus();";
-    html += "setInterval(fetchStatus,2000);";
-
-    // Load animation assignments on page load
-    html += "updateActiveAnimations();";
-
-    // Initialize WebSocket connection on page load
-    html += "window.addEventListener('load',function(){connectLogStream();});";
-
-    html += "</script></body></html>";
-
-    LOG_DEBUG("buildDashboardHTML() complete: %u bytes, free heap: %u", html.length(), ESP.getFreeHeap());
-
-    // Verify HTML is complete
-    if (html.endsWith("</html>")) {
+    // Verify part 2 is complete (it holds the closing </html>)
+    if (g_htmlPart2.endsWith("</html>")) {
         LOG_INFO("HTML is complete (ends with </html>)");
     } else {
-        LOG_ERROR("HTML TRUNCATED! Last 20 chars: %s", html.substring(html.length()-20).c_str());
+        LOG_ERROR("HTML TRUNCATED! Part2 last 20 chars: %s",
+                  g_htmlPart2.substring(g_htmlPart2.length()-20).c_str());
     }
-
-    return html;
 }
 
 // ============================================================================

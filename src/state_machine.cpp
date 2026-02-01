@@ -153,14 +153,14 @@ void StateMachine::handleEvent(SystemEvent event) {
             // Battery recovered
             break;
 
-        case EVENT_CHARGING_START:
-            DEBUG_LOG_STATE("StateMachine: Event CHARGING_START");
-            // Future: Switch to CHARGING mode
+        case EVENT_USB_POWER_CONNECTED:
+            DEBUG_LOG_STATE("StateMachine: Event USB_POWER_CONNECTED");
+            // Future: Switch to USB_POWER mode
             break;
 
-        case EVENT_CHARGING_STOP:
-            DEBUG_LOG_STATE("StateMachine: Event CHARGING_STOP");
-            // Exit charging mode
+        case EVENT_USB_POWER_DISCONNECTED:
+            DEBUG_LOG_STATE("StateMachine: Event USB_POWER_DISCONNECTED");
+            // Exit USB power mode
             break;
 
         case EVENT_LIGHT_DARK:
@@ -237,7 +237,7 @@ const char* StateMachine::getModeName(OperatingMode mode) {
         case NIGHTLIGHT_FLASH:   return "NIGHTLIGHT_FLASH";
         case NIGHTLIGHT_MOTION:  return "NIGHTLIGHT_MOTION";
         case LOW_BATTERY:        return "LOW_BATTERY";
-        case CHARGING:           return "CHARGING";
+        case USB_POWER:          return "USB_POWER";
         default:                 return "UNKNOWN";
     }
 }
@@ -324,7 +324,7 @@ void StateMachine::enterMode(OperatingMode mode) {
         case NIGHTLIGHT_FLASH:
         case NIGHTLIGHT_MOTION:
         case LOW_BATTERY:
-        case CHARGING:
+        case USB_POWER:
             // Future modes (Phases 5-6)
             DEBUG_LOG_STATE("StateMachine: Mode not yet implemented");
             break;

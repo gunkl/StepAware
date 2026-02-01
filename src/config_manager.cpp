@@ -566,6 +566,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 
     // Power
     JsonObject power = doc.createNestedObject("power");
+    power["batteryMonitoringEnabled"] = m_config.batteryMonitoringEnabled;
     power["savingEnabled"] = m_config.powerSavingEnabled;
     power["deepSleepAfterMs"] = m_config.deepSleepAfterMs;
 
@@ -722,8 +723,13 @@ bool ConfigManager::fromJSON(const char* json) {
 
     // Power
     if (doc.containsKey("power")) {
+        m_config.batteryMonitoringEnabled = doc["power"]["batteryMonitoringEnabled"] | false;
         m_config.powerSavingEnabled = doc["power"]["savingEnabled"] | false;
         m_config.deepSleepAfterMs = doc["power"]["deepSleepAfterMs"] | 3600000;  // 1 hour
+        // If battery monitoring is off, power saving must be disabled
+        if (!m_config.batteryMonitoringEnabled) {
+            m_config.powerSavingEnabled = false;
+        }
     }
 
     // Logging
@@ -932,6 +938,7 @@ void ConfigManager::print() {
     Serial.println();
 
     Serial.println("Power:");
+    Serial.printf("  Battery Monitoring: %s\n", m_config.batteryMonitoringEnabled ? "YES" : "NO");
     Serial.printf("  Saving Enabled: %s\n", m_config.powerSavingEnabled ? "YES" : "NO");
     Serial.printf("  Deep Sleep After: %u ms\n", m_config.deepSleepAfterMs);
     Serial.println();
@@ -994,6 +1001,7 @@ void ConfigManager::loadDefaults() {
     m_config.rememberLastMode = false;
 
     // Power
+    m_config.batteryMonitoringEnabled = false;
     m_config.powerSavingEnabled = false;
     m_config.deepSleepAfterMs = 3600000;  // 1 hour
 

@@ -42,7 +42,7 @@ public:
         STATE_DEEP_SLEEP,      ///< Deep sleep, wake on motion/button
         STATE_LOW_BATTERY,     ///< Battery < 20%, reduced features
         STATE_CRITICAL_BATTERY,///< Battery < 5%, shutdown imminent
-        STATE_CHARGING         ///< USB powered, charging
+        STATE_USB_POWER        ///< USB power connected
     };
 
     /**
@@ -51,10 +51,9 @@ public:
     struct BatteryStatus {
         float voltage;          ///< Battery voltage (V)
         uint8_t percentage;     ///< Charge percentage (0-100%)
-        bool charging;          ///< Charging state
+        bool usbPower;          ///< USB power connected
         bool low;               ///< Low battery flag (<20%)
         bool critical;          ///< Critical battery flag (<5%)
-        uint32_t timeToEmpty;   ///< Estimated time to empty (seconds)
     };
 
     /**
@@ -89,7 +88,7 @@ public:
      */
     typedef void (*LowBatteryCallback)();
     typedef void (*CriticalBatteryCallback)();
-    typedef void (*ChargingCallback)();
+    typedef void (*UsbPowerCallback)();
     typedef void (*WakeCallback)();
 
     /**
@@ -153,11 +152,11 @@ public:
     uint8_t getBatteryPercentage();
 
     /**
-     * @brief Check if charging
+     * @brief Check if USB power is connected
      *
-     * @return True if USB power connected
+     * @return True if USB power connected (VBUS detected on GPIO6)
      */
-    bool isCharging();
+    bool isUsbPower();
 
     /**
      * @brief Check if battery is low
@@ -172,6 +171,23 @@ public:
      * @return True if battery below critical threshold
      */
     bool isBatteryCritical() const { return m_batteryStatus.critical; }
+
+    /**
+     * @brief Enable or disable battery monitoring at runtime
+     *
+     * When disabled, battery voltage reads return a fixed nominal value
+     * and battery-based power management is inactive.
+     *
+     * @param enabled True to enable battery monitoring
+     */
+    void setBatteryMonitoringEnabled(bool enabled);
+
+    /**
+     * @brief Check if battery monitoring is enabled
+     *
+     * @return True if battery monitoring is active (requires external voltage divider)
+     */
+    bool isBatteryMonitoringEnabled() const { return m_batteryMonitoringEnabled; }
 
     /**
      * @brief Enter light sleep mode
@@ -259,11 +275,11 @@ public:
     void onCriticalBattery(CriticalBatteryCallback callback) { m_onCriticalBattery = callback; }
 
     /**
-     * @brief Register charging callback
+     * @brief Register USB power callback
      *
-     * @param callback Function to call when charging starts
+     * @param callback Function to call when USB power is connected
      */
-    void onCharging(ChargingCallback callback) { m_onCharging = callback; }
+    void onUsbPower(UsbPowerCallback callback) { m_onUsbPower = callback; }
 
     /**
      * @brief Register wake callback
@@ -286,6 +302,7 @@ private:
     BatteryStatus m_batteryStatus;      ///< Battery status
     PowerStats m_stats;                 ///< Power statistics
     bool m_initialized;                 ///< Initialization flag
+    bool m_batteryMonitoringEnabled;    ///< Battery monitoring enabled (runtime)
 
     uint32_t m_lastActivity;            ///< Last activity timestamp
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
@@ -301,7 +318,7 @@ private:
     // Callbacks
     LowBatteryCallback m_onLowBattery;
     CriticalBatteryCallback m_onCriticalBattery;
-    ChargingCallback m_onCharging;
+    UsbPowerCallback m_onUsbPower;
     WakeCallback m_onWake;
 
     /**
@@ -344,6 +361,19 @@ private:
      * @return Averaged voltage
      */
     float getFilteredVoltage();
+
+    /**
+     * @brief Detect wake source and route to the appropriate power state.
+     *
+     * On ESP32-C3 both PIR and button report as ESP_SLEEP_WAKEUP_GPIO.
+     * The method reads the button GPIO to distinguish the two: button held
+     * LOW means user interaction (route to ACTIVE); otherwise route to
+     * MOTION_ALERT (WiFi off, battery-saving motion response).
+     *
+     * Called from begin() after a deep-sleep RTC restore, and from wakeUp()
+     * after light sleep returns.
+     */
+    void detectAndRouteWakeSource();
 
     /**
      * @brief Check if should enter sleep

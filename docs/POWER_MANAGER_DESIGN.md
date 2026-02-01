@@ -11,7 +11,7 @@ The Power Manager handles battery monitoring, power optimization, and deep sleep
 3. **Battery Monitoring**: Accurate charge level tracking and warnings
 4. **Graceful Degradation**: Reduce functionality when battery low while maintaining core features
 5. **Wake-on-Motion**: Deep sleep with PIR wake capability, optimized for battery savings
-6. **Charge Detection**: Detect and handle charging state
+6. **USB Power Detection**: Detect USB power connection state
 7. **Wake Source Intelligence**: Route PIR wakes without WiFi activation to save power
 8. **Boot Protection**: Prevent boot on critical battery to avoid over-discharge damage
 
@@ -51,40 +51,38 @@ The Power Manager handles battery monitoring, power optimization, and deep sleep
 7. Wake only on USB power detected
 
 BOOT PROTECTION:
-1. Device powered on with critical battery (<3.2V) and not charging
+1. Device powered on with critical battery (<3.2V) and no USB power
 2. Power manager detects critical battery during begin()
 3. Flash hazard LED 3 times rapidly (shutdown warning)
 4. Enter deep sleep immediately (prevents boot damage from over-discharge)
 5. Device will not boot until battery is charged
 ```
 
-### Use Case 4: Charging Detected
+### Use Case 4: USB Power Connected
 ```
 1. USB power connected (VBUS detected)
-2. Power manager enters CHARGING mode
-3. Flash status LED (charging indicator)
+2. Power manager enters USB_POWER mode
+3. Flash status LED (USB power indicator)
 4. Enable WiFi for web interface access
-5. Monitor charge progress
-6. When full (4.2V) → Flash green LED 3 times
-7. Resume normal operation
+5. Resume normal operation
 ```
 
 ### Use Case 5: Deep Sleep Wake-up (Wake Source Routing)
 ```
 PIR WAKE (Battery Optimized):
-1. Device in deep sleep (motion wake enabled)
-2. PIR sensor triggers EXT0 interrupt
-3. ESP32 wakes from deep sleep
-4. Power manager detects PIR wake source (ESP_SLEEP_WAKEUP_EXT0)
+1. Device in deep sleep (GPIO wakeup enabled on PIR pin, HIGH level)
+2. PIR sensor drives GPIO HIGH (motion detected)
+3. ESP32-C3 wakes from deep sleep (ESP_SLEEP_WAKEUP_GPIO)
+4. Power manager reads button GPIO: HIGH (not pressed) → PIR triggered wake
 5. Enter MOTION_ALERT state (WiFi stays OFF, saves ~200mA)
 6. Flash hazard warning for motion
 7. Return to deep sleep after idle timeout
 
 BUTTON WAKE (Full Functionality):
-1. Device in deep sleep
-2. User presses button (EXT1 interrupt)
-3. ESP32 wakes from deep sleep
-4. Power manager detects button wake source (ESP_SLEEP_WAKEUP_EXT1)
+1. Device in deep sleep (GPIO wakeup enabled on button pin, LOW level)
+2. User presses button, pulling GPIO LOW (active-low with pull-up)
+3. ESP32-C3 wakes from deep sleep (ESP_SLEEP_WAKEUP_GPIO)
+4. Power manager reads button GPIO: LOW (pressed) → button triggered wake
 5. Enter ACTIVE state (WiFi enabled for web interface)
 6. Full functionality available
 7. Return to light sleep → deep sleep after idle timeout
@@ -276,22 +274,23 @@ Light sleep preserves RAM and allows fast wake-up (< 1ms):
 ```cpp
 void enterLightSleep(uint32_t duration_ms) {
     // Configure wake sources
-    esp_sleep_enable_timer_wakeup(duration_ms * 1000); // Convert to µs
-    esp_sleep_enable_ext0_wakeup(PIR_PIN, HIGH);       // Motion wake
-    esp_sleep_enable_ext1_wakeup(BUTTON_PIN_MASK, ESP_EXT1_WAKEUP_ANY_HIGH); // Button wake
+    if (duration_ms > 0) {
+        esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL); // Convert to µs
+    }
 
-    // Disable WiFi
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // ESP32-C3 light sleep: gpio_wakeup_enable() allows per-pin polarity
+    esp_sleep_enable_gpio_wakeup();
+    gpio_wakeup_enable((gpio_num_t)PIR_SENSOR_PIN, GPIO_INTR_HIGH_LEVEL);  // Motion wake
+    gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);       // Button wake
 
-    // Reduce CPU frequency
-    setCpuFrequencyMhz(80); // From 240MHz
+    // Reduce CPU frequency (ESP32-C3 max is 160MHz)
+    setCPUFrequency(80);
 
     // Enter light sleep
     esp_light_sleep_start();
 
     // Restore CPU frequency
-    setCpuFrequencyMhz(240);
+    setCPUFrequency(160);
 }
 ```
 
@@ -306,69 +305,64 @@ void enterDeepSleep(uint32_t duration_ms = 0) {
 
     // Configure wake sources
     if (duration_ms > 0) {
-        esp_sleep_enable_timer_wakeup(duration_ms * 1000);
+        esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL);
     }
-    esp_sleep_enable_ext0_wakeup(PIR_PIN, HIGH);       // Motion wake
-    esp_sleep_enable_ext1_wakeup(BUTTON_PIN_MASK, ESP_EXT1_WAKEUP_ANY_HIGH); // Button wake
 
-    // Disable all peripherals
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    btStop();
+    // ESP32-C3 deep sleep: esp_deep_sleep_enable_gpio_wakeup() enforces a
+    // single polarity per call but accumulates across calls.  PIR (HIGH) and
+    // button (LOW) must be configured separately.
+    gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_SENSOR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
 
-    // Enter deep sleep (no return from this function)
+    gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en((gpio_num_t)BUTTON_PIN);
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+
+    // Enter deep sleep (no return — system reboots on wake)
     esp_deep_sleep_start();
 }
 ```
 
 ### Wake Source Detection and Routing
 
-The power manager intelligently routes wake events to optimize battery life:
+The power manager intelligently routes wake events to optimize battery life.
+On ESP32-C3 both PIR and button report as `ESP_SLEEP_WAKEUP_GPIO` — the chip
+does not distinguish which pin triggered the wake.  The button GPIO level is
+read to disambiguate: if the user is holding the button (LOW), it is a button
+wake; otherwise it must be a PIR motion wake.
+
+`detectAndRouteWakeSource()` is called from two places:
+- `begin()` after restoring state from RTC memory (deep sleep reboot path)
+- `wakeUp()` after returning from light sleep
 
 ```cpp
-void PowerManager::wakeUp() {
-    LOG_INFO("Power: Wake up");
-
-    m_stats.wakeCount++;
-    m_lastActivity = millis();
-
+void PowerManager::detectAndRouteWakeSource() {
     #ifndef MOCK_MODE
-    // Detect wake source using ESP32 API
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
     switch (wakeup_reason) {
-        case ESP_SLEEP_WAKEUP_EXT0:  // PIR sensor wake (GPIO)
-            LOG_INFO("Power: Wake source = PIR motion");
-            // PIR wake → Motion alert state (WiFi OFF to save ~200mA)
-            // User only needs motion warning, not web interface
-            setState(STATE_MOTION_ALERT);
+        case ESP_SLEEP_WAKEUP_GPIO:
+            // Read button to distinguish PIR from button wake
+            if (gpio_get_level((gpio_num_t)BUTTON_PIN) == 0) {
+                // Button is held LOW → user interaction
+                setState(STATE_ACTIVE);   // WiFi ON, full functionality
+            } else {
+                // Button is HIGH (idle) → PIR triggered the wake
+                setState(STATE_MOTION_ALERT);  // WiFi OFF, saves ~200mA
+            }
             break;
 
-        case ESP_SLEEP_WAKEUP_EXT1:  // Button wake (GPIO)
-            LOG_INFO("Power: Wake source = Button press");
-            // Button wake → Full active state (WiFi ON)
-            // User interaction implies need for web interface
+        case ESP_SLEEP_WAKEUP_TIMER:
             setState(STATE_ACTIVE);
             break;
 
-        case ESP_SLEEP_WAKEUP_TIMER:  // Timer wake
-            LOG_INFO("Power: Wake source = Timer");
-            setState(STATE_ACTIVE);
-            break;
-
-        default:  // Unknown wake or normal boot
-            LOG_INFO("Power: Wake source = Normal boot");
+        default:  // Normal boot or unknown
             setState(STATE_ACTIVE);
             break;
     }
     #else
-    // Mock mode: default to active
     setState(STATE_ACTIVE);
     #endif
-
-    if (m_onWake) {
-        m_onWake();
-    }
 }
 ```
 
@@ -475,8 +469,8 @@ bool PowerManager::begin(const Config* config) {
     updateBatteryStatus();
 
     // Critical battery boot protection
-    // If battery is critical and not charging, show warning and shutdown
-    if (m_batteryStatus.critical && !m_batteryStatus.charging) {
+    // If battery is critical and no USB power, show warning and shutdown
+    if (m_batteryStatus.critical && !m_batteryStatus.usbPower) {
         LOG_ERROR("Power: Critical battery detected on boot (%.2fV), shutting down",
                   m_batteryStatus.voltage);
 
@@ -504,33 +498,30 @@ bool PowerManager::begin(const Config* config) {
 - Prevents boot loops on critically low battery
 - Avoids over-discharge damage to LiPo cells (critical below 3.0V)
 - Visual feedback (3 LED blinks) indicates shutdown reason
-- Device remains in deep sleep until USB charging detected
+- Device remains in deep sleep until USB power detected
 
-## Charging Detection
+## USB Power Detection
 
 ```cpp
 // VBUS detection (GPIO pin connected to USB VBUS via voltage divider)
 #define VBUS_DETECT_PIN 34
 
-bool isCharging() {
+bool isUsbPower() {
     return digitalRead(VBUS_DETECT_PIN) == HIGH;
 }
 
-// Monitor charging state
-void updateChargingState() {
-    bool charging = isCharging();
+// Monitor USB power state
+void updateUsbPowerState() {
+    bool usbPower = isUsbPower();
 
-    if (charging && m_powerState != STATE_CHARGING) {
-        LOG_INFO("Power: Charging started");
-        setState(STATE_CHARGING);
+    if (usbPower && m_powerState != STATE_USB_POWER) {
+        LOG_INFO("Power: USB power connected");
+        setState(STATE_USB_POWER);
 
         // Enable WiFi for web interface
         g_wifi.connect();
-
-        // Start charge animation
-        startChargeAnimation();
-    } else if (!charging && m_powerState == STATE_CHARGING) {
-        LOG_INFO("Power: Charging stopped");
+    } else if (!usbPower && m_powerState == STATE_USB_POWER) {
+        LOG_INFO("Power: USB power disconnected");
 
         // Return to normal operation
         setState(STATE_ACTIVE);
@@ -585,7 +576,7 @@ public:
         STATE_DEEP_SLEEP,      ///< Deep sleep, wake on motion/button
         STATE_LOW_BATTERY,     ///< Battery < 20%, reduced features
         STATE_CRITICAL_BATTERY,///< Battery < 5%, shutdown imminent
-        STATE_CHARGING         ///< USB powered, charging
+        STATE_USB_POWER        ///< USB power connected
     };
 
     /**
@@ -594,7 +585,7 @@ public:
     struct BatteryStatus {
         float voltage;          ///< Battery voltage (V)
         uint8_t percentage;     ///< Charge percentage (0-100%)
-        bool charging;          ///< Charging state
+        bool usbPower;          ///< USB power connected
         bool low;               ///< Low battery flag (<20%)
         bool critical;          ///< Critical battery flag (<5%)
         uint32_t timeToEmpty;   ///< Estimated time to empty (seconds)
@@ -639,7 +630,7 @@ public:
     const BatteryStatus& getBatteryStatus() const;
     float getBatteryVoltage();
     uint8_t getBatteryPercentage();
-    bool isCharging();
+    bool isUsbPower();
     bool isBatteryLow();
 
     // Power optimization
@@ -654,7 +645,7 @@ public:
     // Callbacks
     void onLowBattery(void (*callback)());
     void onCriticalBattery(void (*callback)());
-    void onCharging(void (*callback)());
+    void onUsbPower(void (*callback)());
 
 private:
     void updateBatteryStatus();
@@ -742,7 +733,7 @@ bool recoverPowerManager(WatchdogManager::RecoveryAction action) {
 2. **Automatic Power Management**: No user intervention required
 3. **Battery Protection**: Prevents over-discharge with boot-time protection
 4. **Quick Wake-up**: Responsive to motion detection
-5. **Charging Support**: Smart charging state handling
+5. **USB Power Detection**: USB power connection state handling
 6. **Power Visibility**: Clear battery status reporting
 7. **Intelligent Wake Routing**: PIR wakes without WiFi save ~200mA per event
 8. **Configurable Sleep Timing**: User-adjustable timeouts (1-10 minutes)

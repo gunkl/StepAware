@@ -51,7 +51,7 @@ enum PowerState {
     POWER_DEEP_SLEEP = 2,
     POWER_LOW_BATTERY = 3,
     POWER_CRITICAL_BATTERY = 4,
-    POWER_CHARGING = 5
+    POWER_USB_POWER = 5
 };
 
 // State Machine Modes

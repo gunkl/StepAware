@@ -73,7 +73,7 @@ Host: <device-ip>
     "stateName": "ACTIVE",
     "batteryVoltage": 3.85,
     "batteryPercent": 75,
-    "charging": false,
+    "usbPower": false,
     "low": false,
     "critical": false,
     "activeTime": 120000,
@@ -121,11 +121,11 @@ Host: <device-ip>
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `state` | number | Power state (0=ACTIVE, 1=LIGHT_SLEEP, 2=DEEP_SLEEP, 3=LOW_BATTERY, 4=CRITICAL_BATTERY, 5=CHARGING) |
+| `state` | number | Power state (0=ACTIVE, 1=LIGHT_SLEEP, 2=DEEP_SLEEP, 3=LOW_BATTERY, 4=CRITICAL_BATTERY, 5=USB_POWER) |
 | `stateName` | string | Human-readable state name |
 | `batteryVoltage` | number | Battery voltage in volts (3.0-4.2V range) |
 | `batteryPercent` | number | Battery percentage (0-100) |
-| `charging` | boolean | Whether battery is charging |
+| `usbPower` | boolean | Whether USB power is connected |
 | `low` | boolean | Low battery flag (below configured threshold) |
 | `critical` | boolean | Critical battery flag (below critical threshold) |
 | `activeTime` | number | Total active time in milliseconds |

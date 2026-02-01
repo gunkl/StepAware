@@ -42,6 +42,8 @@
 |-----------|--------------|----------|-----------|---------|
 | **Photoresistor** | GL5528 LDR | 1 | $0.50 | Ambient light sensing |
 | **LDR Resistor** | 10kΩ, 1/4W | 1 | $0.10 | Voltage divider for photoresistor |
+| **Battery Divider Resistors** | 100kΩ, 1/4W | 2 | $0.20 | Voltage divider for battery monitoring (see Step 7) |
+| **VBUS Divider Resistors** | 10kΩ, 1/4W | 2 | $0.20 | Voltage divider for USB power detection (see Step 7) |
 | **Enclosure** | ABS plastic case | 1 | $5-10 | Protective housing |
 | **Perf Board** | Single-sided | 1 | $2 | For permanent assembly |
 
@@ -205,9 +207,59 @@ If you want ambient light sensing for night-only operation:
    - Red wire = Positive (+)
    - Black wire = Negative (-)
 3. **Connect battery to JST connector** on ESP32-C3-DevKit-Lipo board
-4. Battery monitoring is automatic via GPIO5 (usually connected internally)
 
 **⚠️ Warning:** Ensure correct polarity! Reversed polarity can damage the board.
+
+#### Step 7a: Battery Voltage Monitor (Optional)
+
+> **⚠️ This circuit is required if you enable Battery Monitoring in the web UI config tab.**
+> Battery monitoring is **disabled by default** because it requires this external voltage divider.
+> Without the divider wired, the ADC reads garbage and the firmware will log a warning on every boot.
+
+The ESP32-C3 ADC range is 0–3.3 V, but a LiPo battery swings 3.0–4.2 V.  A 2:1 voltage divider
+brings the battery voltage into range (ADC sees 1.5–2.1 V).
+
+**Components:** two matched 100kΩ resistors (R1, R2)
+
+**Circuit:**
+```
+Battery+  ──── R1 (100kΩ) ──── GPIO5 ──── R2 (100kΩ) ──── GND
+```
+
+**Wiring steps:**
+1. Connect one end of R1 to the battery positive terminal (or the JST positive wire)
+2. Connect the other end of R1 to GPIO5 on the ESP32
+3. Connect one end of R2 to that same GPIO5 node
+4. Connect the other end of R2 to GND
+
+**Notes:**
+- R1 and R2 must be the same value.  100kΩ is recommended — it draws only ~40 µA at 4.2 V.
+- Do **not** connect anything else to GPIO5.  It interferes with USB flashing on the ESP32-C3.
+- No pull-up or pull-down resistors are needed — the divider itself holds the pin at a defined voltage.
+
+#### Step 7b: USB Power Detection (Optional)
+
+> **⚠️ This circuit is required if you want accurate USB power detection.**
+> Without it, the firmware adds a software pull-down on GPIO6, but a hardware divider is more reliable.
+
+USB VBUS is 5 V; GPIO6 is a 3.3 V input.  A voltage divider brings VBUS into the safe input range.
+
+**Components:** two 10kΩ resistors (R3, R4)
+
+**Circuit:**
+```
+USB VBUS (5V) ──── R3 (10kΩ) ──── GPIO6 ──── R4 (10kΩ) ──── GND
+```
+
+**Wiring steps:**
+1. Connect one end of R3 to the USB VBUS line (the positive pin on the USB-C connector, or tap from an existing VBUS trace)
+2. Connect the other end of R3 to GPIO6
+3. Connect one end of R4 to that same GPIO6 node
+4. Connect the other end of R4 to GND
+
+**Notes:**
+- When USB is connected GPIO6 reads ~2.5 V (HIGH).  When disconnected R4 pulls it to 0 V (LOW).
+- The firmware also enables a software pull-down on GPIO6 as a fallback, but the hardware resistor is more reliable and eliminates any floating-pin ambiguity.
 
 ### Step 8: Final Inspection
 
@@ -235,8 +287,8 @@ Before powering on, verify:
 | GPIO2 | Output | Status LED (built-in) |
 | GPIO3 | Output (PWM) | Hazard LED → 220Ω → GND |
 | GPIO4 | Input (ADC) | Photoresistor voltage divider (optional) |
-| GPIO5 | Input (ADC) | Battery voltage monitor (internal) - **⚠️ NEVER use for external sensors!** |
-| GPIO6 | Input | VBUS detect (USB power detection) |
+| GPIO5 | Input (ADC) | Battery voltage monitor (requires external 100kΩ/100kΩ divider — see Step 7a) **⚠️ NEVER use for other sensors!** |
+| GPIO6 | Input | VBUS detect (requires external 10kΩ/10kΩ divider — see Step 7b) |
 | 3.3V | Power | PIR sensor VCC, power rails |
 | GND | Ground | All component grounds |
 
@@ -249,8 +301,8 @@ Before powering on, verify:
 | GPIO2 | Output | Status LED (built-in) |
 | GPIO3 | Output (PWM) | Hazard LED → 220Ω → GND |
 | GPIO4 | Input | PIR Far Sensor OUT (deep sleep wakeup ✅) |
-| GPIO5 | Input (ADC) | Battery voltage monitor (internal) - **⚠️ NEVER use for external sensors!** |
-| GPIO6 | Input | VBUS detect (USB power detection) |
+| GPIO5 | Input (ADC) | Battery voltage monitor (requires external 100kΩ/100kΩ divider — see Step 7a) **⚠️ NEVER use for other sensors!** |
+| GPIO6 | Input | VBUS detect (requires external 10kΩ/10kΩ divider — see Step 7b) |
 | 3.3V | Power | PIR sensors VCC, power rails |
 | GND | Ground | All component grounds |
 
@@ -271,8 +323,10 @@ Before powering on, verify:
                     │                GPIO2├── Status LED (built-in)
                     │                GPIO3├──[220Ω]──[LED]── GND
                     │                GPIO4├── Light Sensor (optional)
-                    │                GPIO5├── Battery ADC (internal)
-                    │                GPIO6├── VBUS Detect
+                    │                GPIO5├──[100kΩ R2]── GND          ┐ optional
+  Batt+ ──[100kΩ R1]──┘                                               │ voltage
+                    │                GPIO6├──[10kΩ  R4]── GND          │ dividers
+  VBUS  ──[10kΩ  R3]──┘                                               ┘
                     │                     │
                     └─────────────────────┘
                             │
@@ -290,8 +344,10 @@ Before powering on, verify:
                     │                GPIO2├── Status LED (built-in)
                     │                GPIO3├──[220Ω]──[LED]── GND
                     │                GPIO4├──── PIR FAR OUT (wakeup)
-                    │                GPIO5├── Battery ADC (internal)
-                    │                GPIO6├── VBUS Detect
+                    │                GPIO5├──[100kΩ R2]── GND          ┐ optional
+  Batt+ ──[100kΩ R1]──┘                                               │ voltage
+                    │                GPIO6├──[10kΩ  R4]── GND          │ dividers
+  VBUS  ──[10kΩ  R3]──┘                                               ┘
                     │                     │
                     └─────────────────────┘
                             │
@@ -376,10 +432,12 @@ Detection Pattern:
 2. Serial console should show mode change
 3. LED pattern should change based on mode
 
-#### Test 5: Battery Monitoring
-1. Check serial output for battery voltage reading
-2. Should read 3.0V - 4.2V range
-3. Disconnect USB and verify device runs on battery
+#### Test 5: Battery Monitoring (requires Step 7a circuit)
+1. Wire the 100kΩ/100kΩ voltage divider on GPIO5 as described in Step 7a
+2. Open the web UI config tab and enable Battery Monitoring, then Save
+3. Check serial output for `ADC2 raw=` — value should be in the 2000–2600 range
+4. Serial should show `Battery: X.XXV  XX%` with a voltage in the 3.0–4.2 V range
+5. Disconnect USB and verify device runs on battery
 
 #### Test 6: Light Sensor (if installed)
 1. Cover photoresistor with hand → Serial shows low light level
@@ -453,6 +511,22 @@ Expected output on first boot:
 4. Test LED with multimeter diode mode
 5. Verify 220Ω resistor is present
 6. Try a different LED
+
+### Battery Shows 0% / ADC Failure Warning
+
+**Symptoms:** Serial shows `Battery: 0.00V  0%` or `WARNING - battery voltage ... suspiciously low (likely ADC failure)`
+
+**Possible Causes:**
+- Battery Monitoring is enabled in the web UI but the voltage divider on GPIO5 is not wired
+- Voltage divider resistors are wrong value or one is missing
+- GPIO5 wire is loose or not connected to the divider midpoint
+
+**Solutions:**
+1. If the voltage divider is not wired, disable Battery Monitoring in the web UI config tab to silence the warning
+2. Check the GPIO5 voltage divider wiring against Step 7a
+3. With a multimeter, measure the voltage at the GPIO5 pin while battery is connected — should be half the battery voltage (1.5–2.1 V)
+4. Check serial for `ADC2 raw=` and `timeout_remaining=` — if `timeout_remaining=0` the ADC conversion is not completing (hardware/firmware issue, not wiring)
+5. Verify both 100kΩ resistors are the correct value
 
 ### Battery Not Charging
 

@@ -41,7 +41,7 @@
 
 // Core Functionality Pins
 #define PIN_HAZARD_LED      3    // Main hazard warning LED with PWM (GPIO3)
-#define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC1_CH1)
+#define PIN_BATTERY_ADC     5    // Battery voltage monitor (GPIO5, ADC2_CH0)
                                  // WARNING: Do NOT use GPIO5 for external sensors!
                                  // It can interfere with programming/flashing the device.
 
@@ -98,7 +98,7 @@
 // ============================================================================
 
 // Version Information
-#define FIRMWARE_VERSION    "0.4.0"
+#define FIRMWARE_VERSION    "0.4.1"
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__
@@ -114,6 +114,7 @@
 // Motion Detection
 #define MOTION_WARNING_DURATION_MS    15000   // 15 seconds LED warning
 #define PIR_WARMUP_TIME_MS            60000   // 1 minute PIR sensor warm-up
+#define POWER_BOOT_GRACE_PERIOD_MS    60000   // 1 minute: ADC settling + USB detection grace
 #define PIR_OUTPUT_DELAY_MS           2300    // AM312 output timing delay
 
 // Direction Detection (Dual-PIR)
