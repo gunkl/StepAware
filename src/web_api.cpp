@@ -2782,9 +2782,9 @@ void WebAPI::buildDashboardHTML() {
 
     // --- Part 2: JavaScript ---
     g_htmlPart2.clear();
-    g_htmlPart2.reserve(40960);  // 40KB — fits the JS portion (last measured: ~38.4KB)
+    g_htmlPart2.reserve(45056);  // 44KB — fits the JS portion (last measured: ~41KB)
     String& html2 = g_htmlPart2;
-    LOG_DEBUG("Reserved 40KB for HTML part 2");
+    LOG_DEBUG("Reserved 44KB for HTML part 2");
 
     html2 += "<script>";
 
