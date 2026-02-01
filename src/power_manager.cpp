@@ -95,6 +95,10 @@ void PowerManager::setBatteryMonitoringEnabled(bool enabled) {
     m_batteryMonitoringEnabled = enabled;
 }
 
+void PowerManager::setAutoSleepEnabled(bool enabled) {
+    m_config.enableAutoSleep = enabled;
+}
+
 bool PowerManager::begin(const Config* config) {
     if (m_initialized) {
         DEBUG_LOG_SYSTEM("Power: Already initialized");

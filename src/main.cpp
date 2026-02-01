@@ -1200,8 +1200,9 @@ void loop() {
     // Get current configuration
     const ConfigManager::Config& cfg = configManager.getConfig();
 
-    // Propagate battery monitoring setting to power manager
+    // Propagate power settings to power manager
     g_power.setBatteryMonitoringEnabled(cfg.batteryMonitoringEnabled);
+    g_power.setAutoSleepEnabled(cfg.powerSavingEnabled);
 
     // Update power manager (battery monitoring)
     g_power.update();
