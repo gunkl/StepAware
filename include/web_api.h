@@ -238,6 +238,11 @@ private:
     void handlePostSensorRecalibrate(AsyncWebServerRequest* request);
 
     /**
+     * @brief GET /api/sensors/recalibrate - Poll PIR warmup status (no side effects)
+     */
+    void handleGetSensorRecalibrate(AsyncWebServerRequest* request);
+
+    /**
      * @brief POST /api/reset - Factory reset
      */
     void handlePostReset(AsyncWebServerRequest* request);
