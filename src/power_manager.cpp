@@ -26,6 +26,7 @@ RTC_DATA_ATTR struct {
     uint32_t wakeCount;
     uint32_t deepSleepCount;
     float lastBatteryVoltage;
+    time_t sleepEntryRTC;
 } rtcMemory;
 #else
 static struct {
@@ -34,6 +35,7 @@ static struct {
     uint32_t wakeCount;
     uint32_t deepSleepCount;
     float lastBatteryVoltage;
+    time_t sleepEntryRTC;
 } rtcMemory;
 #endif
 
@@ -152,11 +154,15 @@ bool PowerManager::begin(const Config* config) {
 
     // Try to restore state from RTC memory
     if (restoreStateFromRTC()) {
-        DEBUG_LOG_SYSTEM("Power: Restored state from RTC memory (wake count: %u)", m_stats.wakeCount);
         // Deep sleep reboots the CPU — wakeCount was already incremented by
         // restoreStateFromRTC(), so go straight to source detection without
         // calling wakeUp() (which would double-increment).
-        detectAndRouteWakeSource();
+        m_state = STATE_DEEP_SLEEP;   // Correct previous state for wake log
+        uint32_t deepSleepDurationMs = 0;
+#ifndef MOCK_MODE
+        deepSleepDurationMs = (uint32_t)(rtc_time_get() - rtcMemory.sleepEntryRTC) * 1000;
+#endif
+        detectAndRouteWakeSource(deepSleepDurationMs);
     } else {
         DEBUG_LOG_SYSTEM("Power: Fresh boot, initializing RTC memory");
         rtcMemory.magic = RTC_MAGIC;
@@ -198,7 +204,7 @@ bool PowerManager::begin(const Config* config) {
         #endif
 
         // Enter deep sleep immediately (device will not wake until charged)
-        enterDeepSleep();
+        enterDeepSleep(0, "critical battery boot");
         // Never returns
     }
 
@@ -295,7 +301,6 @@ float PowerManager::readBatteryVoltageRaw() {
     while (APB_SARADC.onetime_sample.onetime_start && --timeout) {}
 
     uint16_t raw = adc_ll_adc2_read();
-    DEBUG_LOG_SYSTEM("Power: ADC2 raw=%u timeout_remaining=%u", raw, timeout);
 #else
     uint16_t raw = analogRead(PIN_BATTERY_ADC);
 #endif
@@ -306,6 +311,21 @@ float PowerManager::readBatteryVoltageRaw() {
 
     // Apply calibration offset
     voltage += m_config.voltageCalibrationOffset;
+
+    // VERBOSE ADC log, throttled: only on significant change or every 100 s
+    {
+        static float lastLoggedVoltage = -1.0f;
+        static uint32_t lastVoltageLogTime = 0;
+        uint32_t now = millis();
+        if (lastLoggedVoltage < 0.0f ||
+            fabsf(voltage - lastLoggedVoltage) >= 0.05f ||
+            (now - lastVoltageLogTime) >= 100000) {
+            g_debugLogger.log(DebugLogger::LEVEL_VERBOSE, DebugLogger::CAT_SYSTEM,
+                "Power: ADC2 raw=%u voltage=%.3fV", raw, voltage);
+            lastLoggedVoltage = voltage;
+            lastVoltageLogTime = now;
+        }
+    }
 
     return voltage;
 #else
@@ -390,11 +410,12 @@ void PowerManager::handlePowerState() {
             } else if (m_batteryStatus.usbPower) {
                 setState(STATE_USB_POWER);
             } else if (m_config.enableAutoSleep && shouldEnterSleep()) {
-                // Check if we should skip light sleep (go straight to deep sleep)
+                char reason[64];
+                snprintf(reason, sizeof(reason), "idle timeout %ums", millis() - m_lastActivity);
                 if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs == 0) {
-                    enterDeepSleep();
+                    enterDeepSleep(0, reason);
                 } else {
-                    enterLightSleep();
+                    enterLightSleep(0, reason);
                 }
             }
             break;
@@ -404,7 +425,9 @@ void PowerManager::handlePowerState() {
             if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs > 0) {
                 uint32_t timeInLightSleep = millis() - m_stateEnterTime;
                 if (timeInLightSleep >= m_config.lightSleepToDeepSleepMs) {
-                    enterDeepSleep();
+                    char reason[64];
+                    snprintf(reason, sizeof(reason), "light sleep timeout %ums", timeInLightSleep);
+                    enterDeepSleep(0, reason);
                 }
             }
             break;
@@ -429,10 +452,7 @@ void PowerManager::handlePowerState() {
             if (m_batteryStatus.usbPower) {
                 setState(STATE_USB_POWER);
             } else {
-                // Prepare for shutdown
-                DEBUG_LOG_SYSTEM("Power: Critical battery, entering deep sleep");
-                saveStateToRTC();
-                enterDeepSleep(0); // Indefinite sleep until charged
+                enterDeepSleep(0, "critical battery"); // Indefinite sleep until charged
             }
             break;
 
@@ -451,9 +471,15 @@ void PowerManager::handlePowerState() {
     }
 }
 
-void PowerManager::setState(PowerState newState) {
+void PowerManager::setState(PowerState newState, const char* reason) {
     if (m_state != newState) {
-        DEBUG_LOG_SYSTEM("Power: State %s -> %s", getStateName(m_state), getStateName(newState));
+        if (reason) {
+            DEBUG_LOG_SYSTEM("Power: %s -> %s (%s)",
+                getStateName(m_state), getStateName(newState), reason);
+        } else {
+            DEBUG_LOG_SYSTEM("Power: %s -> %s",
+                getStateName(m_state), getStateName(newState));
+        }
         m_state = newState;
         m_stateEnterTime = millis();
     }
@@ -470,11 +496,9 @@ bool PowerManager::shouldEnterSleep() {
     return false;
 }
 
-void PowerManager::enterLightSleep(uint32_t duration_ms) {
-    DEBUG_LOG_SYSTEM("Power: Entering light sleep (%ums)", duration_ms);
-
+void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     saveStateToRTC();
-    setState(STATE_LIGHT_SLEEP);
+    setState(STATE_LIGHT_SLEEP, reason);
 
 #ifndef MOCK_MODE
     // Configure wake sources
@@ -502,15 +526,14 @@ void PowerManager::enterLightSleep(uint32_t duration_ms) {
     setCPUFrequency(160);
 #endif
 
-    // Wake up
-    wakeUp();
+    // millis() on ESP32 is compensated for light sleep time
+    uint32_t sleepDuration = millis() - m_stateEnterTime;
+    wakeUp(sleepDuration);
 }
 
-void PowerManager::enterDeepSleep(uint32_t duration_ms) {
-    DEBUG_LOG_SYSTEM("Power: Entering deep sleep (%ums)", duration_ms);
-
+void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
     saveStateToRTC();
-    setState(STATE_DEEP_SLEEP);
+    setState(STATE_DEEP_SLEEP, reason);
 
 #ifndef MOCK_MODE
     // Configure wake sources
@@ -540,20 +563,22 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms) {
 #endif
 }
 
-void PowerManager::wakeUp() {
-    DEBUG_LOG_SYSTEM("Power: Wake up");
-
+void PowerManager::wakeUp(uint32_t sleepDurationMs) {
     m_stats.wakeCount++;
     m_lastActivity = millis();
 
-    detectAndRouteWakeSource();
+    detectAndRouteWakeSource(sleepDurationMs);
 
     if (m_onWake) {
         m_onWake();
     }
 }
 
-void PowerManager::detectAndRouteWakeSource() {
+void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
+    const char* prevStateName = getStateName(m_state);
+    const char* wakeSource = "Unknown";
+    PowerState newState = STATE_ACTIVE;
+
     #ifndef MOCK_MODE
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
@@ -564,32 +589,47 @@ void PowerManager::detectAndRouteWakeSource() {
             // LOW the user is holding it; otherwise the wake must have come from
             // the PIR sensor.
             if (gpio_get_level((gpio_num_t)BUTTON_PIN) == 0) {
-                DEBUG_LOG_SYSTEM("Power: Wake source = Button press");
-                setState(STATE_ACTIVE);
+                wakeSource = "Button";
+                newState = STATE_ACTIVE;
             } else {
-                DEBUG_LOG_SYSTEM("Power: Wake source = PIR motion");
-                setState(STATE_MOTION_ALERT);
+                wakeSource = "PIR motion";
+                newState = STATE_MOTION_ALERT;
             }
             break;
 
         case ESP_SLEEP_WAKEUP_TIMER:
-            DEBUG_LOG_SYSTEM("Power: Wake source = Timer");
-            setState(STATE_ACTIVE);
+            wakeSource = "Timer";
+            newState = STATE_ACTIVE;
             break;
 
-        case ESP_SLEEP_WAKEUP_UNDEFINED:  // Normal boot (not from sleep)
-            DEBUG_LOG_SYSTEM("Power: Wake source = Normal boot");
-            setState(STATE_ACTIVE);
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            wakeSource = "Normal boot";
+            newState = STATE_ACTIVE;
             break;
 
         default:
-            DEBUG_LOG_SYSTEM("Power: Wake source = Unknown (%d)", (int)wakeup_reason);
-            setState(STATE_ACTIVE);
+            wakeSource = "Unknown";
+            newState = STATE_ACTIVE;
             break;
     }
-    #else
-    setState(STATE_ACTIVE);
     #endif
+
+    // Format sleep duration
+    char durationBuf[32];
+    if (sleepDurationMs >= 60000) {
+        snprintf(durationBuf, sizeof(durationBuf), "%um %us",
+            sleepDurationMs / 60000, (sleepDurationMs % 60000) / 1000);
+    } else if (sleepDurationMs >= 1000) {
+        snprintf(durationBuf, sizeof(durationBuf), "%us", sleepDurationMs / 1000);
+    } else {
+        snprintf(durationBuf, sizeof(durationBuf), "%ums", sleepDurationMs);
+    }
+
+    // Single combined wake log — set state directly to avoid a second log from setState
+    m_state = newState;
+    m_stateEnterTime = millis();
+    DEBUG_LOG_SYSTEM("Power: %s -> %s (wake: %s, slept %s)",
+        prevStateName, getStateName(newState), wakeSource, durationBuf);
 }
 
 void PowerManager::recordActivity() {
@@ -625,6 +665,11 @@ void PowerManager::saveStateToRTC() {
     rtcMemory.lastState = m_state;
     rtcMemory.lastBatteryVoltage = m_batteryStatus.voltage;
     rtcMemory.deepSleepCount++;
+#ifndef MOCK_MODE
+    rtcMemory.sleepEntryRTC = (time_t)rtc_time_get();
+#else
+    rtcMemory.sleepEntryRTC = 0;
+#endif
 }
 
 bool PowerManager::restoreStateFromRTC() {
@@ -635,8 +680,6 @@ bool PowerManager::restoreStateFromRTC() {
     m_stats.wakeCount = rtcMemory.wakeCount + 1;
     m_stats.deepSleepCount = rtcMemory.deepSleepCount;
     rtcMemory.wakeCount = m_stats.wakeCount;
-
-    DEBUG_LOG_SYSTEM("Power: Restored from deep sleep (wake #%u)", m_stats.wakeCount);
 
     return true;
 }

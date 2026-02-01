@@ -129,6 +129,11 @@ public:
         bool serialLoggingEnabled;         // Enable serial logging
         bool fileLoggingEnabled;           // Enable file logging
 
+        // NTP Time Sync
+        bool ntpEnabled;                   // NTP sync enabled
+        char ntpServer[64];                // NTP server hostname or IP (default: "pool.ntp.org")
+        int8_t timezoneOffsetHours;        // UTC offset in whole hours (default: -8)
+
         // Multi-Sensor Configuration (Phase 2)
         SensorSlotConfig sensors[4];       // Up to 4 sensor slots
         uint8_t fusionMode;                // Sensor fusion mode

@@ -196,7 +196,7 @@ public:
      *
      * @param duration_ms Sleep duration (0 = indefinite)
      */
-    void enterLightSleep(uint32_t duration_ms = 0);
+    void enterLightSleep(uint32_t duration_ms = 0, const char* reason = nullptr);
 
     /**
      * @brief Enter deep sleep mode
@@ -206,14 +206,14 @@ public:
      *
      * @param duration_ms Sleep duration (0 = indefinite)
      */
-    void enterDeepSleep(uint32_t duration_ms = 0);
+    void enterDeepSleep(uint32_t duration_ms = 0, const char* reason = nullptr);
 
     /**
      * @brief Wake from sleep
      *
      * Called automatically after sleep wake-up.
      */
-    void wakeUp();
+    void wakeUp(uint32_t sleepDurationMs = 0);
 
     /**
      * @brief Record activity (resets idle timer)
@@ -331,7 +331,7 @@ private:
      *
      * @param newState State to transition to
      */
-    void setState(PowerState newState);
+    void setState(PowerState newState, const char* reason = nullptr);
 
     /**
      * @brief Read raw battery voltage
@@ -373,7 +373,7 @@ private:
      * Called from begin() after a deep-sleep RTC restore, and from wakeUp()
      * after light sleep returns.
      */
-    void detectAndRouteWakeSource();
+    void detectAndRouteWakeSource(uint32_t sleepDurationMs = 0);
 
     /**
      * @brief Check if should enter sleep

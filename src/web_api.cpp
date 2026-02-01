@@ -1846,6 +1846,7 @@ void WebAPI::handleGetLogs(AsyncWebServerRequest* request) {
         if (g_logger.getEntry(i, entry)) {
             JsonObject logObj = logs.createNestedObject();
             logObj["timestamp"] = entry.timestamp;
+            logObj["wallTimestamp"] = entry.wallTimestamp;
             logObj["level"] = entry.level;
             logObj["levelName"] = Logger::getLevelName((Logger::LogLevel)entry.level);
             logObj["message"] = entry.message;
@@ -1930,6 +1931,12 @@ void WebAPI::handleOTAUpload(AsyncWebServerRequest* request, const String& filen
             sendError(request, 503, "OTA Manager not available");
         }
         return;
+    }
+
+    // Keep the power manager's idle timer alive so the device does not
+    // enter light/deep sleep while the upload is in progress.
+    if (m_power) {
+        m_power->recordActivity();
     }
 
     // First chunk - start upload
@@ -2325,8 +2332,15 @@ void WebAPI::handleLiveLogs(AsyncWebServerRequest* request) {
     html += "div.className='log-entry log-'+data.levelName.toLowerCase().trim();";
     html += "div.dataset.level=data.level;";
     html += "div.dataset.source=data.source||'logger';";
-    html += "const ms=data.ts;const s=Math.floor(ms/1000);const m=Math.floor(s/60);const h=Math.floor(m/60);";
-    html += "const ts=String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+':'+String(s%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0');";
+    html += "var ts;";
+    html += "if(data.wallTs&&data.wallTs>0){";
+    html += "var d=new Date(data.wallTs*1000);";
+    html += "ts=String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+";
+    html += "String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');";
+    html += "}else{";
+    html += "var ms=data.ts;var s=Math.floor(ms/1000);var m=Math.floor(s/60);var h=Math.floor(m/60);";
+    html += "ts=String(h).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+':'+String(s%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0');";
+    html += "}";
     html += "div.textContent='['+ts+'] ['+data.levelName+'] '+data.msg;";
 
     // Apply filters to new entry
@@ -2652,6 +2666,23 @@ void WebAPI::buildDashboardHTML() {
     html += "<option value=\"1\">ALWAYS ON</option><option value=\"2\">MOTION DETECT</option></select></div>";
     html += "</div>";
 
+    html += "<h3>NTP Sync</h3>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">NTP Sync</label>";
+    html += "<select id=\"cfg-ntpEnabled\" class=\"form-select\">";
+    html += "<option value=\"0\">Disabled</option>";
+    html += "<option value=\"1\">Enabled</option>";
+    html += "</select></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">NTP Server</label>";
+    html += "<input type=\"text\" id=\"cfg-ntpServer\" class=\"form-input\" maxlength=\"63\" placeholder=\"pool.ntp.org\"></div>";
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Timezone (UTC offset, hours)</label>";
+    html += "<input type=\"number\" id=\"cfg-ntpTimezone\" class=\"form-input\" min=\"-12\" max=\"14\" step=\"1\">";
+    html += "<div class=\"form-help\">Enter offset from UTC/GMT (e.g., -8 for PST, -5 for EST, 0 for UTC). "
+            "Time will be synced at boot and once per day.</div></div>";
+    html += "</div>";
+
     html += "<h3>WiFi Settings</h3>";
     html += "<div class=\"form-row\">";
     html += "<div class=\"form-group\"><label class=\"form-label\">SSID</label>";
@@ -2919,6 +2950,17 @@ void WebAPI::buildDashboardHTML() {
     html2 += "document.getElementById('cfg-dirSimultaneousThreshold').value=cfg.directionDetector?.simultaneousThresholdMs||150;";
     html2 += "document.getElementById('cfg-dirConfirmationWindow').value=cfg.directionDetector?.confirmationWindowMs||5000;";
     html2 += "document.getElementById('cfg-dirPatternTimeout').value=cfg.directionDetector?.patternTimeoutMs||10000;";
+    // NTP config fields
+    html2 += "document.getElementById('cfg-ntpEnabled').value=cfg.ntp?.enabled?1:0;";
+    html2 += "document.getElementById('cfg-ntpServer').value=cfg.ntp?.server||'pool.ntp.org';";
+    html2 += "document.getElementById('cfg-ntpTimezone').value=cfg.ntp?.timezoneOffset!==undefined?cfg.ntp.timezoneOffset:-8;";
+    // NTP grey-out: disable server/timezone fields when NTP is off
+    html2 += "var ntpSel=document.getElementById('cfg-ntpEnabled');";
+    html2 += "var ntpServerEl=document.getElementById('cfg-ntpServer');";
+    html2 += "var ntpTzEl=document.getElementById('cfg-ntpTimezone');";
+    html2 += "function updateNTPFields(){var en=ntpSel.value!=='0';ntpServerEl.disabled=!en;ntpTzEl.disabled=!en;}";
+    html2 += "ntpSel.addEventListener('change',updateNTPFields);";
+    html2 += "updateNTPFields();";
     html2 += "}catch(e){console.error('Config load error:',e);}}";
 
     // Config saving
@@ -2947,6 +2989,10 @@ void WebAPI::buildDashboardHTML() {
     html2 += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
     html2 += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";
     html2 += "cfg.directionDetector.patternTimeoutMs=parseInt(document.getElementById('cfg-dirPatternTimeout').value);";
+    html2 += "cfg.ntp=cfg.ntp||{};";
+    html2 += "cfg.ntp.enabled=parseInt(document.getElementById('cfg-ntpEnabled').value)===1;";
+    html2 += "cfg.ntp.server=document.getElementById('cfg-ntpServer').value;";
+    html2 += "cfg.ntp.timezoneOffset=parseInt(document.getElementById('cfg-ntpTimezone').value);";
     html2 += "let jsonStr;";
     html2 += "try{jsonStr=JSON.stringify(cfg);console.log('Saving config:',JSON.stringify(cfg,null,2));}";
     html2 += "catch(e){console.error('JSON.stringify failed:',e);alert('Failed to serialize config: '+e.message);return;}";
@@ -3911,6 +3957,7 @@ String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry, const char* sou
     StaticJsonDocument<256> doc;
     doc["seq"] = entry.sequenceNumber;
     doc["ts"] = entry.timestamp;
+    doc["wallTs"] = entry.wallTimestamp;
     doc["level"] = entry.level;
     doc["levelName"] = Logger::getLevelName((Logger::LogLevel)entry.level);
     doc["msg"] = entry.message;
