@@ -31,6 +31,7 @@
 #include "debug_logger.h"
 #include "power_manager.h"
 #include "ntp_manager.h"
+#include "recal_scheduler.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -64,6 +65,9 @@ bool webServerStarted = false;
 
 // NTP Time Sync
 NTPManager ntpManager;
+
+// PIR Recalibration Scheduler
+RecalScheduler* recalScheduler = nullptr;
 
 // Diagnostic Mode
 bool diagnosticMode = false;
@@ -913,6 +917,23 @@ void setup() {
     Serial.println("[Setup] Sensor configuration:");
     sensorManager.printStatus();
 
+    // Assign PIR power pin and create recalibration scheduler.
+    // Both PIR sensors share one power wire on GPIO20; bind to the near
+    // sensor (slot 0 by convention). One recalibrate() call handles both.
+    {
+        HAL_MotionSensor* nearSensor = sensorManager.getSensor(0);
+        if (nearSensor && nearSensor->getSensorType() == SENSOR_TYPE_PIR) {
+            HAL_PIR* pirNear = static_cast<HAL_PIR*>(nearSensor);
+            pirNear->setPowerPin(PIN_PIR_POWER);
+            recalScheduler = new RecalScheduler(pirNear);
+            recalScheduler->begin();
+            Serial.printf("[Setup] ✓ PIR recalibration scheduler initialized (GPIO%d)\n",
+                         PIN_PIR_POWER);
+        } else {
+            Serial.println("[Setup] Near PIR not in slot 0 — recal scheduler not created");
+        }
+    }
+
     // Initialize direction detector if enabled (Dual-PIR)
     const ConfigManager::DirectionDetectorConfig& dirCfg = cfg.directionDetector;
     if (dirCfg.enabled) {
@@ -1163,6 +1184,18 @@ void loop() {
 
     // Update NTP manager (handles sync completion, hourly checks, daily resync)
     ntpManager.update();
+
+    // Update recalibration scheduler (smart nightly PIR recal)
+    if (recalScheduler) {
+        uint32_t lastMotion = 0;
+        for (uint8_t i = 0; i < 4; i++) {
+            HAL_MotionSensor* s = sensorManager.getSensor(i);
+            if (s && s->getLastEventTime() > lastMotion) {
+                lastMotion = s->getLastEventTime();
+            }
+        }
+        recalScheduler->update(ntpManager.isTimeSynced(), lastMotion);
+    }
 
     // Get current configuration
     const ConfigManager::Config& cfg = configManager.getConfig();

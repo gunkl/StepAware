@@ -558,6 +558,15 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
     gpio_pullup_en((gpio_num_t)BUTTON_PIN);
     esp_deep_sleep_enable_gpio_wakeup(1ULL << BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
 
+    // Hold PIR power GPIO HIGH so sensors stay powered during deep sleep.
+    // GPIO outputs tri-state without hold; if PIR loses VCC it cannot wake us.
+    // Also aborts any in-progress recalibration (harmless — scheduler won't
+    // re-trigger until next night's cooldown window).
+    if (PIN_PIR_POWER != PIN_PIR_POWER_NONE) {
+        digitalWrite(PIN_PIR_POWER, HIGH);
+        gpio_hold_en((gpio_num_t)PIN_PIR_POWER);
+    }
+
     // Enter deep sleep (no return - system reboots on wake)
     esp_deep_sleep_start();
 #endif
