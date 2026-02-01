@@ -29,6 +29,14 @@ static String g_htmlPart2;  // <script>...</script></body></html>
 static unsigned long g_lastHTMLBuildTime = 0;
 static bool g_htmlResponseInProgress = false;
 
+// Reentrancy guard: set while inside handleLogWebSocketEvent to prevent
+// broadcastLogEntry from calling textAll() on the same WebSocket that is
+// currently dispatching an event.  Without this, any log statement inside
+// the event handler (e.g. DEBUG_LOG_API) triggers DebugLogger::log() →
+// broadcastLogEntry() → textAll(), which re-enters the WebSocket internals
+// and crashes the device.
+static bool s_inWebSocketEvent = false;
+
 // Helper functions for request buffer management
 static char* allocateRequestBuffer(AsyncWebServerRequest* request, size_t size) {
     char* buffer = (char*)malloc(size + 1);
@@ -4085,11 +4093,13 @@ void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
                                       AsyncWebSocketClient* client,
                                       AwsEventType type, void* arg,
                                       uint8_t* data, size_t len) {
+    s_inWebSocketEvent = true;
     switch(type) {
         case WS_EVT_CONNECT:
             // Enforce connection limit
             if (server->count() > m_maxWebSocketClients) {
                 client->close();
+                s_inWebSocketEvent = false;
                 DEBUG_LOG_API("WebSocket client rejected (max %u)", m_maxWebSocketClients);
                 return;
             }
@@ -4139,6 +4149,7 @@ void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
             DEBUG_LOG_API("WebSocket client #%u error", client->id());
             break;
     }
+    s_inWebSocketEvent = false;
 }
 
 String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry, const char* source) {
@@ -4157,6 +4168,14 @@ String WebAPI::formatLogEntryJSON(const Logger::LogEntry& entry, const char* sou
 }
 
 void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry, const char* source) {
+    // Reentrancy guard: both Logger and DebugLogger call broadcastLogEntry
+    // synchronously whenever a log entry is created.  If we are already inside
+    // handleLogWebSocketEvent (e.g. a DEBUG_LOG_API call in the connect handler),
+    // calling textAll() here would re-enter the WebSocket internals and crash.
+    if (s_inWebSocketEvent) {
+        return;
+    }
+
     if (!m_logWebSocket) {
         Serial.println("[WS] broadcastLogEntry: m_logWebSocket is NULL");
         return;
