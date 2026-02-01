@@ -3,6 +3,7 @@
 #include "power_manager.h"
 #include "watchdog_manager.h"
 #include "hal_ledmatrix_8x8.h"
+#include "hal_pir.h"
 #include "hal_ultrasonic.h"
 #include "hal_ultrasonic_grove.h"
 #include "sensor_manager.h"
@@ -161,6 +162,11 @@ bool WebAPI::begin() {
     m_server->on("/api/sensors/3/errorrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
         DEBUG_LOG_API("WebAPI: *** SLOT 3 ERROR RATE POST HANDLER CALLED ***");
         this->handleCheckSensorErrorRate(req);
+    });
+
+    // POST /api/sensors/recalibrate - trigger manual PIR recalibration
+    m_server->on("/api/sensors/recalibrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        this->handlePostSensorRecalibrate(req);
     });
 
     // Also register GET handlers for manual browser testing
@@ -1862,6 +1868,78 @@ void WebAPI::handleGetLogs(AsyncWebServerRequest* request) {
     sendJSON(request, 200, json.c_str());
 }
 
+void WebAPI::handlePostSensorRecalibrate(AsyncWebServerRequest* request) {
+    if (!m_sensorManager) {
+        sendError(request, 503, "Sensor manager not available");
+        return;
+    }
+
+    bool found = false;
+    bool initiated = false;
+    bool alreadyInProgress = false;
+
+    // Find first PIR sensor and trigger recalibrate.
+    // Both sensors share one power wire, so one call handles both.
+    for (uint8_t i = 0; i < 4; i++) {
+        HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+        if (sensor && sensor->getSensorType() == SENSOR_TYPE_PIR) {
+            HAL_PIR* pir = static_cast<HAL_PIR*>(sensor);
+            found = true;
+            if (pir->isRecalibrating()) {
+                alreadyInProgress = true;
+                break;
+            }
+            if (pir->recalibrate()) {
+                initiated = true;
+                break;  // Only trigger once (shared power wire)
+            }
+        }
+    }
+
+    StaticJsonDocument<512> doc;
+    if (!found) {
+        doc["success"] = false;
+        doc["message"] = "No PIR sensor found";
+        String json;
+        serializeJson(doc, json);
+        sendJSON(request, 404, json.c_str());
+        return;
+    }
+
+    doc["success"] = true;
+    if (alreadyInProgress) {
+        doc["message"] = "Recalibration already in progress";
+        doc["status"] = "recalibrating";
+    } else if (initiated) {
+        doc["message"] = "Recalibration initiated";
+        doc["status"] = "recalibrating";
+    } else {
+        doc["message"] = "Recalibration could not be started (no power pin configured)";
+        doc["status"] = "error";
+    }
+
+    // Report warmup status on all PIR sensors
+    JsonArray sensorsArr = doc.createNestedArray("sensors");
+    for (uint8_t i = 0; i < 4; i++) {
+        HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+        if (sensor && sensor->getSensorType() == SENSOR_TYPE_PIR) {
+            JsonObject sObj = sensorsArr.createNestedObject();
+            sObj["slot"] = i;
+            sObj["ready"] = sensor->isReady();
+            sObj["warmupRemaining"] = sensor->getWarmupTimeRemaining();
+            HAL_PIR* pir = static_cast<HAL_PIR*>(sensor);
+            sObj["recalibrating"] = pir->isRecalibrating();
+        }
+    }
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+
+    DEBUG_LOG_API("PIR recalibrate: found=%d initiated=%d alreadyInProgress=%d",
+                  found, initiated, alreadyInProgress);
+}
+
 void WebAPI::handlePostReset(AsyncWebServerRequest* request) {
     DEBUG_LOG_API("Factory reset requested via API");
 
@@ -2555,7 +2633,13 @@ void WebAPI::buildDashboardHTML() {
 
     html += "<div id=\"sensors-list\"></div>";
 
-    html += "<button class=\"btn btn-primary\" style=\"margin-top:16px;\" onclick=\"addSensor()\">+ Add Sensor</button>";
+    // Recalibrate button (power-cycles PIR sensors to re-trigger warm-up)
+    html += "<div style=\"margin-top:16px;display:flex;align-items:center;gap:12px;\">";
+    html += "<button class=\"btn btn-secondary\" id=\"recal-btn\" onclick=\"triggerRecalibrate()\">Recalibrate PIR Sensors</button>";
+    html += "<span id=\"recal-status\" style=\"font-size:0.85em;color:#64748b;\"></span>";
+    html += "</div>";
+
+    html += "<button class=\"btn btn-primary\" style=\"margin-top:12px;\" onclick=\"addSensor()\">+ Add Sensor</button>";
 
     html += "</div>"; // End sensors section
 
@@ -3096,6 +3180,29 @@ void WebAPI::buildDashboardHTML() {
     html2 += "IR:{name:'IR Beam-Break',pins:1,config:['debounce']},";
     html2 += "ULTRASONIC:{name:'Ultrasonic (HC-SR04)',pins:2,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']},";
     html2 += "ULTRASONIC_GROVE:{name:'Ultrasonic (Grove)',pins:1,config:['minDistance','maxDistance','directionEnabled','rapidSampleCount','rapidSampleMs']}};";
+
+    // PIR recalibration trigger
+    html2 += "function triggerRecalibrate(){";
+    html2 += "var btn=document.getElementById('recal-btn');";
+    html2 += "var status=document.getElementById('recal-status');";
+    html2 += "btn.disabled=true;status.textContent='Sending...';";
+    html2 += "fetch('/api/sensors/recalibrate',{method:'POST'})";
+    html2 += ".then(function(r){return r.json();})";
+    html2 += ".then(function(d){";
+    html2 += "status.textContent=d.message||'Done';btn.disabled=false;";
+    html2 += "if(d.status==='recalibrating'){";
+    html2 += "status.style.color='#f59e0b';";
+    html2 += "setTimeout(function pollRecal(){";
+    html2 += "fetch('/api/sensors/recalibrate',{method:'POST'})";
+    html2 += ".then(function(r){return r.json();})";
+    html2 += ".then(function(d2){";
+    html2 += "if(d2.sensors&&d2.sensors.some(function(s){return!s.ready;})){";
+    html2 += "var rem=d2.sensors.reduce(function(m,s){return s.warmupRemaining>m?s.warmupRemaining:m;},0);";
+    html2 += "status.textContent='Warming up... ('+Math.ceil(rem/1000)+'s remaining)';";
+    html2 += "setTimeout(pollRecal,3000);}else{";
+    html2 += "status.textContent='Recalibration complete';status.style.color='#10b981';}});},3000);";
+    html2 += "}else{status.style.color='#10b981';}})";
+    html2 += ".catch(function(){status.textContent='Request failed';status.style.color='#ef4444';btn.disabled=false;});}";
 
     // Load sensors from configuration
     html2 += "async function loadSensors(){";

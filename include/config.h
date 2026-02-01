@@ -47,6 +47,14 @@
 
 // Optional Sensor Pins (GPIO 6+, no deep sleep wakeup)
 #define PIN_VBUS_DETECT     6    // USB VBUS detection (GPIO6)
+
+// PIR Power Control (GPIO20) - drives VCC directly to both PIR sensors
+// HIGH = sensors powered (normal), LOW = power cut (recalibration trigger)
+// Current draw: <0.5mA total (two AM312 sensors), well within GPIO limit
+// Deep sleep: gpio_hold_en() latches HIGH before sleep; see power_manager.cpp
+#define PIN_PIR_POWER       20
+#define PIN_PIR_POWER_NONE  0xFF  // Sentinel: no power pin assigned
+
 // NOTE: Light sensor shares GPIO4 with PIR_FAR. Only available in single-PIR mode.
 // #define PIN_LIGHT_SENSOR    4    // Photoresistor (GPIO4, ADC1_CH4) - conflicts with PIR_FAR
 
@@ -116,6 +124,7 @@
 #define PIR_WARMUP_TIME_MS            60000   // 1 minute PIR sensor warm-up
 #define POWER_BOOT_GRACE_PERIOD_MS    60000   // 1 minute: ADC settling + USB detection grace
 #define PIR_OUTPUT_DELAY_MS           2300    // AM312 output timing delay
+#define PIR_RECAL_POWER_OFF_MS        2000    // Min power-off time for AM312 capacitor discharge
 
 // Direction Detection (Dual-PIR)
 #define DIR_CONFIRMATION_WINDOW_MS    5000    // 5s window for pattern confirmation

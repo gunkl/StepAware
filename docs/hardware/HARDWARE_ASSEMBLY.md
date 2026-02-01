@@ -129,17 +129,24 @@
 ### Step 3: Install the PIR Motion Sensor (AM312)
 
 The AM312 has three pins:
-- **VCC** → Connect to 3.3V rail
+- **VCC** → Connect to ESP32 **GPIO20** (not 3.3V rail — see note below)
 - **OUT** → Connect to ESP32 GPIO1
 - **GND** → Connect to GND rail
 
 **Instructions:**
 1. Place the AM312 sensor on the breadboard
-2. Connect VCC pin to the positive power rail (3.3V)
+2. Connect VCC pin to **GPIO20** on the ESP32 (daisy-chain both NEAR and FAR sensors' VCC to this pin)
 3. Connect OUT pin to GPIO1 on the ESP32
 4. Connect GND pin to the negative ground rail
 5. **Important:** Ensure the sensor is positioned where it can detect motion in the desired area
 6. Allow 60 seconds for PIR sensor warm-up after power-on
+
+> **Why GPIO20 instead of 3.3V?**
+> GPIO20 drives the PIR sensors' VCC directly (<0.5 mA total, well within the GPIO current limit).
+> This lets the firmware power-cycle the sensors to trigger periodic recalibration — the AM312's
+> internal pyroelectric element drifts over time and needs a fresh warm-up to re-stabilise.
+> The firmware holds GPIO20 HIGH via `gpio_hold_en()` before deep sleep, so the sensors stay
+> powered and can still wake the device via GPIO1/GPIO4.
 
 **PIR Sensitivity Adjustment:**
 - Some AM312 modules have a small potentiometer on the back
@@ -289,7 +296,8 @@ Before powering on, verify:
 | GPIO4 | Input (ADC) | Photoresistor voltage divider (optional) |
 | GPIO5 | Input (ADC) | Battery voltage monitor (requires external 100kΩ/100kΩ divider — see Step 7a) **⚠️ NEVER use for other sensors!** |
 | GPIO6 | Input | VBUS detect (requires external 10kΩ/10kΩ divider — see Step 7b) |
-| 3.3V | Power | PIR sensor VCC, power rails |
+| GPIO20 | Output | PIR Sensor VCC — drives both NEAR and FAR sensors directly |
+| 3.3V | Power | Power rails (button pull-up, LED, voltage dividers) |
 | GND | Ground | All component grounds |
 
 ### Dual-PIR Mode Pin Assignments
@@ -303,7 +311,8 @@ Before powering on, verify:
 | GPIO4 | Input | PIR Far Sensor OUT (deep sleep wakeup ✅) |
 | GPIO5 | Input (ADC) | Battery voltage monitor (requires external 100kΩ/100kΩ divider — see Step 7a) **⚠️ NEVER use for other sensors!** |
 | GPIO6 | Input | VBUS detect (requires external 10kΩ/10kΩ divider — see Step 7b) |
-| 3.3V | Power | PIR sensors VCC, power rails |
+| GPIO20 | Output | PIR Sensor VCC — drives both NEAR and FAR sensors directly |
+| 3.3V | Power | Power rails (button pull-up, LED, voltage dividers) |
 | GND | Ground | All component grounds |
 
 **Important Notes:**
@@ -327,6 +336,7 @@ Before powering on, verify:
   Batt+ ──[100kΩ R1]──┘                                               │ voltage
                     │                GPIO6├──[10kΩ  R4]── GND          │ dividers
   VBUS  ──[10kΩ  R3]──┘                                               ┘
+                    │               GPIO20├──── PIR VCC (recal power)
                     │                     │
                     └─────────────────────┘
                             │
@@ -348,7 +358,8 @@ Before powering on, verify:
   Batt+ ──[100kΩ R1]──┘                                               │ voltage
                     │                GPIO6├──[10kΩ  R4]── GND          │ dividers
   VBUS  ──[10kΩ  R3]──┘                                               ┘
-                    │                     │
+                    │               GPIO20├──┬── PIR NEAR VCC          ┐ shared
+                    │                     │  └── PIR FAR  VCC          ┘ power
                     └─────────────────────┘
                             │
                         [Battery]

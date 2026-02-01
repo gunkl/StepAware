@@ -233,6 +233,11 @@ private:
     void handleGetAssignments(AsyncWebServerRequest* request);
 
     /**
+     * @brief POST /api/sensors/recalibrate - Trigger manual PIR recalibration
+     */
+    void handlePostSensorRecalibrate(AsyncWebServerRequest* request);
+
+    /**
      * @brief POST /api/reset - Factory reset
      */
     void handlePostReset(AsyncWebServerRequest* request);
