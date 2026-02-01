@@ -347,7 +347,7 @@ private:
     /**
      * @brief Build dashboard HTML
      */
-    String buildDashboardHTML();
+    void buildDashboardHTML();
 };
 
 #endif // STEPAWARE_WEB_API_H

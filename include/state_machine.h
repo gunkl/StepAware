@@ -26,7 +26,7 @@
  * - NIGHTLIGHT_FLASH: Low brightness flashing
  * - NIGHTLIGHT_MOTION: Low brightness on motion
  * - LOW_BATTERY: Special state for battery warning
- * - CHARGING: Battery charging indication
+ * - USB_POWER: USB power connected
  */
 class StateMachine {
 public:
@@ -43,7 +43,7 @@ public:
         NIGHTLIGHT_FLASH,       ///< Low brightness flashing
         NIGHTLIGHT_MOTION,      ///< Low brightness on motion
         LOW_BATTERY,            ///< Battery warning state
-        CHARGING                ///< Battery charging
+        USB_POWER               ///< USB power connected
     };
 
     /**
@@ -57,8 +57,8 @@ public:
         EVENT_TIMER_EXPIRED,    ///< Warning timer expired
         EVENT_BATTERY_LOW,      ///< Battery below threshold
         EVENT_BATTERY_OK,       ///< Battery above threshold
-        EVENT_CHARGING_START,   ///< Charging started
-        EVENT_CHARGING_STOP,    ///< Charging stopped
+        EVENT_USB_POWER_CONNECTED,   ///< USB power connected
+        EVENT_USB_POWER_DISCONNECTED,///< USB power disconnected
         EVENT_LIGHT_DARK,       ///< Ambient light dark
         EVENT_LIGHT_BRIGHT      ///< Ambient light bright
     };

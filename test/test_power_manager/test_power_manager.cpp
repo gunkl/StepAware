@@ -32,8 +32,19 @@ enum PowerState {
     STATE_DEEP_SLEEP = 2,
     STATE_LOW_BATTERY = 3,
     STATE_CRITICAL_BATTERY = 4,
-    STATE_CHARGING = 5
+    STATE_USB_POWER = 5,
+    STATE_MOTION_ALERT = 6
 };
+
+// Wake sources (mirrors the distinction made by detectAndRouteWakeSource)
+enum WakeSource {
+    WAKE_UNKNOWN = 0,
+    WAKE_TIMER = 1,
+    WAKE_PIR = 2,
+    WAKE_BUTTON = 3
+};
+
+#define POWER_BOOT_GRACE_PERIOD_MS    60000
 
 // Simplified Power Manager for testing
 class TestPowerManager {
@@ -41,7 +52,7 @@ private:
     PowerState state;
     float batteryVoltage;
     uint8_t batteryPercentage;
-    bool charging;
+    bool usbPower;
     bool lowBattery;
     bool criticalBattery;
     uint32_t lastActivity;
@@ -52,6 +63,7 @@ private:
     uint32_t deepSleepTimeout;
     float lowBatteryThreshold;
     float criticalBatteryThreshold;
+    WakeSource m_wakeSource;
 
     // Voltage filter
     static const uint8_t VOLTAGE_SAMPLES = 10;
@@ -64,7 +76,7 @@ public:
         : state(STATE_ACTIVE)
         , batteryVoltage(3.8f)
         , batteryPercentage(50)
-        , charging(false)
+        , usbPower(false)
         , lowBattery(false)
         , criticalBattery(false)
         , lastActivity(0)
@@ -77,6 +89,7 @@ public:
         , criticalBatteryThreshold(3.2f)
         , voltageSampleIndex(0)
         , voltageSamplesFilled(false)
+        , m_wakeSource(WAKE_UNKNOWN)
     {
         for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
             voltageSamples[i] = 0.0f;
@@ -142,20 +155,26 @@ public:
     void handlePowerState() {
         switch (state) {
             case STATE_ACTIVE:
-                if (criticalBattery && !charging) {
+                if (millis() - startTime < POWER_BOOT_GRACE_PERIOD_MS) {
+                    if (usbPower) {
+                        state = STATE_USB_POWER;
+                    }
+                    break;
+                }
+                if (criticalBattery && !usbPower) {
                     state = STATE_CRITICAL_BATTERY;
-                } else if (lowBattery && !charging) {
+                } else if (lowBattery && !usbPower) {
                     state = STATE_LOW_BATTERY;
-                } else if (charging) {
-                    state = STATE_CHARGING;
+                } else if (usbPower) {
+                    state = STATE_USB_POWER;
                 } else if (shouldEnterSleep()) {
                     enterLightSleep();
                 }
                 break;
 
             case STATE_LOW_BATTERY:
-                if (charging) {
-                    state = STATE_CHARGING;
+                if (usbPower) {
+                    state = STATE_USB_POWER;
                 } else if (!lowBattery) {
                     state = STATE_ACTIVE;
                 } else if (criticalBattery) {
@@ -164,13 +183,13 @@ public:
                 break;
 
             case STATE_CRITICAL_BATTERY:
-                if (charging) {
-                    state = STATE_CHARGING;
+                if (usbPower) {
+                    state = STATE_USB_POWER;
                 }
                 break;
 
-            case STATE_CHARGING:
-                if (!charging) {
+            case STATE_USB_POWER:
+                if (!usbPower) {
                     if (criticalBattery) {
                         state = STATE_CRITICAL_BATTERY;
                     } else if (lowBattery) {
@@ -201,9 +220,15 @@ public:
     }
 
     void wakeUp() {
-        state = STATE_ACTIVE;
         wakeCount++;
         lastActivity = millis();
+        // Route wake source: PIR → MOTION_ALERT, everything else → ACTIVE
+        if (m_wakeSource == WAKE_PIR) {
+            state = STATE_MOTION_ALERT;
+        } else {
+            state = STATE_ACTIVE;
+        }
+        m_wakeSource = WAKE_UNKNOWN;  // consume after routing
     }
 
     void recordActivity() {
@@ -218,7 +243,7 @@ public:
     PowerState getState() const { return state; }
     float getBatteryVoltage() const { return const_cast<TestPowerManager*>(this)->getFilteredVoltage(); }
     uint8_t getBatteryPercentage() const { return batteryPercentage; }
-    bool isCharging() const { return charging; }
+    bool isUsbPower() const { return usbPower; }
     bool isBatteryLow() const { return lowBattery; }
     bool isBatteryCritical() const { return criticalBattery; }
     uint32_t getWakeCount() const { return wakeCount; }
@@ -240,16 +265,20 @@ public:
         updateBatteryStatus();
     }
 
-    void setCharging(bool isCharging) {
-        charging = isCharging;
+    void setUsbPower(bool usbPowerState) {
+        usbPower = usbPowerState;
         handlePowerState();
+    }
+
+    void setWakeSource(WakeSource source) {
+        m_wakeSource = source;
     }
 
     void reset() {
         state = STATE_ACTIVE;
         batteryVoltage = 3.8f;
         batteryPercentage = 50;
-        charging = false;
+        usbPower = false;
         lowBattery = false;
         criticalBattery = false;
         lastActivity = 0;
@@ -258,6 +287,7 @@ public:
         deepSleepCount = 0;
         voltageSampleIndex = 0;
         voltageSamplesFilled = false;
+        m_wakeSource = WAKE_UNKNOWN;
         for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
             voltageSamples[i] = 0.0f;
         }
@@ -335,6 +365,8 @@ void test_battery_percentage_empty(void) {
  */
 void test_low_battery_detection(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     // Start with good battery
     power.setBatteryVoltage(3.8f);
@@ -354,6 +386,8 @@ void test_low_battery_detection(void) {
  */
 void test_critical_battery_detection(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     // Start with good battery
     power.setBatteryVoltage(3.8f);
@@ -368,55 +402,57 @@ void test_critical_battery_detection(void) {
 }
 
 /**
- * @brief Test charging detection
+ * @brief Test USB power detection
  */
-void test_charging_detection(void) {
+void test_usb_power_detection(void) {
     power.begin();
 
-    // Start not charging
-    power.setCharging(false);
+    // Start without USB power
+    power.setUsbPower(false);
     power.update();
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
 
-    // Start charging
-    power.setCharging(true);
+    // Connect USB power
+    power.setUsbPower(true);
     power.update();
-    TEST_ASSERT_EQUAL(STATE_CHARGING, power.getState());
-    TEST_ASSERT_TRUE(power.isCharging());
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
+    TEST_ASSERT_TRUE(power.isUsbPower());
 }
 
 /**
- * @brief Test charging overrides low battery
+ * @brief Test USB power overrides low battery
  */
-void test_charging_overrides_low_battery(void) {
+void test_usb_power_overrides_low_battery(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
 
     // Low battery
     power.setBatteryVoltage(3.3f);
     power.update();
     TEST_ASSERT_EQUAL(STATE_LOW_BATTERY, power.getState());
 
-    // Plug in charger
-    power.setCharging(true);
+    // Connect USB power
+    power.setUsbPower(true);
     power.update();
-    TEST_ASSERT_EQUAL(STATE_CHARGING, power.getState());
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
 }
 
 /**
- * @brief Test charging overrides critical battery
+ * @brief Test USB power overrides critical battery
  */
-void test_charging_overrides_critical_battery(void) {
+void test_usb_power_overrides_critical_battery(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
 
     // Critical battery
     power.setBatteryVoltage(3.1f);
     power.update();
     TEST_ASSERT_EQUAL(STATE_CRITICAL_BATTERY, power.getState());
 
-    // Plug in charger
-    power.setCharging(true);
+    // Connect USB power
+    power.setUsbPower(true);
     power.update();
-    TEST_ASSERT_EQUAL(STATE_CHARGING, power.getState());
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
 }
 
 /**
@@ -424,6 +460,8 @@ void test_charging_overrides_critical_battery(void) {
  */
 void test_idle_timeout_light_sleep(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
 
@@ -439,6 +477,8 @@ void test_idle_timeout_light_sleep(void) {
  */
 void test_activity_resets_idle_timer(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     // Advance time but keep recording activity
     advance_time(15000); // 15 seconds
@@ -455,6 +495,8 @@ void test_activity_resets_idle_timer(void) {
  */
 void test_wake_from_sleep(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     // Enter sleep
     advance_time(31000);
@@ -463,6 +505,46 @@ void test_wake_from_sleep(void) {
 
     // Wake up
     power.wakeUp();
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+    TEST_ASSERT_EQUAL(1, power.getWakeCount());
+}
+
+/**
+ * @brief Test PIR wake routes to MOTION_ALERT
+ *
+ * Mirrors detectAndRouteWakeSource(): when the wake source is PIR the
+ * power manager should enter MOTION_ALERT (WiFi off, battery-saving).
+ */
+void test_wake_pir_routes_to_motion_alert(void) {
+    power.begin();
+
+    // Simulate entering light sleep then waking via PIR
+    power.enterLightSleep();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+
+    power.setWakeSource(WAKE_PIR);
+    power.wakeUp();
+
+    TEST_ASSERT_EQUAL(STATE_MOTION_ALERT, power.getState());
+    TEST_ASSERT_EQUAL(1, power.getWakeCount());
+}
+
+/**
+ * @brief Test button wake routes to ACTIVE
+ *
+ * When the wake source is BUTTON the power manager should enter ACTIVE
+ * (full functionality, WiFi enabled).
+ */
+void test_wake_button_routes_to_active(void) {
+    power.begin();
+
+    // Simulate entering light sleep then waking via button
+    power.enterLightSleep();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+
+    power.setWakeSource(WAKE_BUTTON);
+    power.wakeUp();
+
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
     TEST_ASSERT_EQUAL(1, power.getWakeCount());
 }
@@ -520,6 +602,8 @@ void test_time_since_activity(void) {
  */
 void test_battery_recovery_low_to_normal(void) {
     power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
 
     // Enter low battery state
     power.setBatteryVoltage(3.3f);
@@ -533,19 +617,94 @@ void test_battery_recovery_low_to_normal(void) {
 }
 
 /**
- * @brief Test state transitions from charging back to normal
+ * @brief Test grace period suppresses critical battery state transition
  */
-void test_charging_to_normal_transition(void) {
+void test_grace_period_suppresses_critical_battery(void) {
     power.begin();
 
-    // Start charging
-    power.setCharging(true);
+    // Set critical battery during grace period (time is 0, well within 60s)
+    power.setBatteryVoltage(3.1f);
     power.update();
-    TEST_ASSERT_EQUAL(STATE_CHARGING, power.getState());
+
+    // State must remain ACTIVE — grace period suppresses the transition
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+    TEST_ASSERT_TRUE(power.isBatteryCritical());  // Flag IS set, just not acted upon
+}
+
+/**
+ * @brief Test grace period suppresses low battery state transition
+ */
+void test_grace_period_suppresses_low_battery(void) {
+    power.begin();
+
+    // Set low battery during grace period
+    power.setBatteryVoltage(3.3f);
+    power.update();
+
+    // State must remain ACTIVE — grace period suppresses the transition
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+    TEST_ASSERT_TRUE(power.isBatteryLow());  // Flag IS set, just not acted upon
+}
+
+/**
+ * @brief Test grace period suppresses auto-sleep transition
+ */
+void test_grace_period_suppresses_auto_sleep(void) {
+    power.begin();
+
+    // Advance past the 30s light sleep timeout but still within 60s grace period
+    advance_time(45000);
+    power.update();
+
+    // Must remain ACTIVE — grace period blocks auto-sleep
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+}
+
+/**
+ * @brief Test grace period still allows USB power detection
+ */
+void test_grace_period_allows_usb_detection(void) {
+    power.begin();
+
+    // Connect USB during grace period (time is 0)
+    power.setUsbPower(true);
+    power.update();
+
+    // USB detection must work even during grace period
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
+}
+
+/**
+ * @brief Test that critical battery transition works after grace period expires
+ */
+void test_grace_period_expired_allows_critical_battery(void) {
+    power.begin();
+
+    // Advance past grace period
+    advance_time(60001);
+
+    // Now set critical battery — should transition normally
+    power.setBatteryVoltage(3.1f);
+    power.update();
+
+    TEST_ASSERT_EQUAL(STATE_CRITICAL_BATTERY, power.getState());
+    TEST_ASSERT_TRUE(power.isBatteryCritical());
+}
+
+/**
+ * @brief Test state transitions from USB power back to normal
+ */
+void test_usb_power_to_normal_transition(void) {
+    power.begin();
+
+    // Connect USB power
+    power.setUsbPower(true);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
 
     // Unplug with good battery
     power.setBatteryVoltage(3.8f);
-    power.setCharging(false);
+    power.setUsbPower(false);
     power.update();
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
 }
@@ -553,17 +712,17 @@ void test_charging_to_normal_transition(void) {
 /**
  * @brief Test unplugging with low battery returns to low battery state
  */
-void test_charging_to_low_battery_transition(void) {
+void test_usb_power_to_low_battery_transition(void) {
     power.begin();
 
-    // Charging with low battery
+    // USB power with low battery
     power.setBatteryVoltage(3.3f);
-    power.setCharging(true);
+    power.setUsbPower(true);
     power.update();
-    TEST_ASSERT_EQUAL(STATE_CHARGING, power.getState());
+    TEST_ASSERT_EQUAL(STATE_USB_POWER, power.getState());
 
     // Unplug while still low
-    power.setCharging(false);
+    power.setUsbPower(false);
     power.update();
     TEST_ASSERT_EQUAL(STATE_LOW_BATTERY, power.getState());
 }
@@ -588,14 +747,16 @@ int main(int argc, char **argv) {
     // Battery state tests
     RUN_TEST(test_low_battery_detection);
     RUN_TEST(test_critical_battery_detection);
-    RUN_TEST(test_charging_detection);
-    RUN_TEST(test_charging_overrides_low_battery);
-    RUN_TEST(test_charging_overrides_critical_battery);
+    RUN_TEST(test_usb_power_detection);
+    RUN_TEST(test_usb_power_overrides_low_battery);
+    RUN_TEST(test_usb_power_overrides_critical_battery);
 
     // Sleep management tests
     RUN_TEST(test_idle_timeout_light_sleep);
     RUN_TEST(test_activity_resets_idle_timer);
     RUN_TEST(test_wake_from_sleep);
+    RUN_TEST(test_wake_pir_routes_to_motion_alert);
+    RUN_TEST(test_wake_button_routes_to_active);
     RUN_TEST(test_deep_sleep_counter);
 
     // Filtering and utility tests
@@ -604,8 +765,16 @@ int main(int argc, char **argv) {
 
     // State transition tests
     RUN_TEST(test_battery_recovery_low_to_normal);
-    RUN_TEST(test_charging_to_normal_transition);
-    RUN_TEST(test_charging_to_low_battery_transition);
+
+    // Grace period tests
+    RUN_TEST(test_grace_period_suppresses_critical_battery);
+    RUN_TEST(test_grace_period_suppresses_low_battery);
+    RUN_TEST(test_grace_period_suppresses_auto_sleep);
+    RUN_TEST(test_grace_period_allows_usb_detection);
+    RUN_TEST(test_grace_period_expired_allows_critical_battery);
+
+    RUN_TEST(test_usb_power_to_normal_transition);
+    RUN_TEST(test_usb_power_to_low_battery_transition);
 
     return UNITY_END();
 }

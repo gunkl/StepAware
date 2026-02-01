@@ -118,18 +118,18 @@ public:
         STATE_DEEP_SLEEP = 2,
         STATE_LOW_BATTERY = 3,
         STATE_CRITICAL_BATTERY = 4,
-        STATE_CHARGING = 5
+        STATE_USB_POWER = 5
     };
 
     PowerState state;
     float batteryVoltage;
     uint8_t batteryPercent;
-    bool charging;
+    bool usbPower;
     bool low;
     bool critical;
 
     MockPowerForAPI() : state(STATE_ACTIVE), batteryVoltage(3.8f),
-        batteryPercent(75), charging(false), low(false), critical(false) {}
+        batteryPercent(75), usbPower(false), low(false), critical(false) {}
 
     PowerState getState() const { return state; }
     float getBatteryVoltage() const { return batteryVoltage; }
@@ -142,7 +142,7 @@ public:
             case STATE_DEEP_SLEEP: return "DEEP_SLEEP";
             case STATE_LOW_BATTERY: return "LOW_BATTERY";
             case STATE_CRITICAL_BATTERY: return "CRITICAL_BATTERY";
-            case STATE_CHARGING: return "CHARGING";
+            case STATE_USB_POWER: return "USB_POWER";
             default: return "UNKNOWN";
         }
     }
@@ -253,7 +253,7 @@ void test_power_state_names(void) {
     TEST_ASSERT_EQUAL_STRING("ACTIVE", MockPowerForAPI::getStateName(MockPowerForAPI::STATE_ACTIVE));
     TEST_ASSERT_EQUAL_STRING("LOW_BATTERY", MockPowerForAPI::getStateName(MockPowerForAPI::STATE_LOW_BATTERY));
     TEST_ASSERT_EQUAL_STRING("CRITICAL_BATTERY", MockPowerForAPI::getStateName(MockPowerForAPI::STATE_CRITICAL_BATTERY));
-    TEST_ASSERT_EQUAL_STRING("CHARGING", MockPowerForAPI::getStateName(MockPowerForAPI::STATE_CHARGING));
+    TEST_ASSERT_EQUAL_STRING("USB_POWER", MockPowerForAPI::getStateName(MockPowerForAPI::STATE_USB_POWER));
 }
 
 /**

@@ -90,6 +90,7 @@ void startWebAPI() {
         webAPI = new WebAPI(&webServer, stateMachine, &configManager);
         webAPI->setWiFiManager(&wifiManager);
         webAPI->setSensorManager(&sensorManager);
+        webAPI->setPowerManager(&g_power);
     }
 
     // Always update LED matrix reference (may be initialized after WebAPI)
@@ -222,15 +223,10 @@ void printStatus() {
     Serial.println();
     const PowerManager::BatteryStatus& battery = g_power.getBatteryStatus();
     Serial.printf("Battery: %.2fV  %u%%\n", battery.voltage, battery.percentage);
-    if (battery.charging) {
-        Serial.println("  Charging: YES (USB connected)");
+    if (battery.usbPower) {
+        Serial.println("  USB Power: YES");
     } else {
-        Serial.println("  Charging: NO");
-        if (battery.timeToEmpty > 0) {
-            uint32_t hours = battery.timeToEmpty / 3600;
-            uint32_t mins = (battery.timeToEmpty % 3600) / 60;
-            Serial.printf("  Time remaining: %uh %um\n", hours, mins);
-        }
+        Serial.println("  USB Power: NO");
     }
     if (battery.critical) {
         Serial.println("  WARNING: CRITICAL battery level!");
@@ -559,6 +555,21 @@ void showBatteryStatus(uint8_t percentage) {
         hazardLED.startPattern(HAL_LED::PATTERN_BLINK_SLOW, 2000);
         DEBUG_LOG_LED("Showing battery low on LED (%u%%)", percentage);
     }
+}
+
+static bool pendingBatteryLow = false;
+
+/**
+ * @brief Callback for PowerManager low/critical battery events.
+ * Defers behind a motion alert animation rather than interrupting it.
+ */
+void onBatteryLowCallback() {
+    if (ledMatrix && ledMatrix->isAnimating() &&
+        ledMatrix->getPattern() == HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT) {
+        pendingBatteryLow = true;  // Play after warning finishes
+        return;
+    }
+    showBatteryStatus(g_power.getBatteryPercentage());
 }
 
 /**
@@ -1047,6 +1058,16 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Initialize Power Manager
+    Serial.println("[Setup] Initializing power manager...");
+    if (!g_power.begin()) {
+        Serial.println("[Setup] WARNING: Power manager initialization failed");
+    } else {
+        Serial.println("[Setup] Power manager initialized");
+        g_power.onLowBattery(onBatteryLowCallback);
+        g_power.onCriticalBattery(onBatteryLowCallback);
+    }
+
     // Initialize WiFi Manager
     Serial.println("[Setup] Initializing WiFi manager...");
     WiFiManager::Config wifiConfig;
@@ -1118,6 +1139,11 @@ void loop() {
     // Update LED matrix (handles animations)
     if (ledMatrix) {
         ledMatrix->update();
+        // Play deferred battery animation after warning finishes
+        if (pendingBatteryLow && !ledMatrix->isAnimating()) {
+            pendingBatteryLow = false;
+            showBatteryStatus(g_power.getBatteryPercentage());
+        }
     }
 
     // Update state machine (handles all hardware and logic)
@@ -1126,13 +1152,19 @@ void loop() {
     // Update WiFi manager (handles connection state, reconnection)
     wifiManager.update();
 
+    // Get current configuration
+    const ConfigManager::Config& cfg = configManager.getConfig();
+
+    // Propagate battery monitoring setting to power manager
+    g_power.setBatteryMonitoringEnabled(cfg.batteryMonitoringEnabled);
+
+    // Update power manager (battery monitoring)
+    g_power.update();
+
     // Update status LED (low priority heartbeat)
     static uint32_t lastStatusBlink = 0;
     static bool statusLedState = false;
     uint32_t now = millis();
-
-    // Get current configuration for power saving check
-    const ConfigManager::Config& cfg = configManager.getConfig();
 
     if (!cfg.powerSavingEnabled) {
         // Heartbeat pattern: short blink every 2 seconds
