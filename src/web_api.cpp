@@ -706,6 +706,12 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
 
     DEBUG_LOG_API("Log level updated to %u from config", cfg.logLevel);
 
+    // Apply power manager config changes at runtime
+    if (m_power) {
+        m_power->setAutoSleepEnabled(cfg.powerSavingEnabled);
+        DEBUG_LOG_API("Auto-sleep %s via config", cfg.powerSavingEnabled ? "enabled" : "disabled");
+    }
+
     // Apply direction detector config changes at runtime
     if (m_directionDetector) {
         const ConfigManager::DirectionDetectorConfig& dirCfg = cfg.directionDetector;
@@ -4031,13 +4037,31 @@ void WebAPI::handleLogWebSocketEvent(AsyncWebSocket* server,
                 return;
             }
 
-            DEBUG_LOG_API("WebSocket client #%u connected", client->id());
-
-            // Send last 50 log entries as catchup
             {
+                uint32_t freeHeap = ESP.getFreeHeap();
+                DEBUG_LOG_API("WebSocket client #%u connected (free heap: %u)", client->id(), freeHeap);
+
+                // Scale catchup count by available heap.  After the dashboard
+                // HTML is cached (~65 KB) free heap is typically ~42 KB.  Each
+                // queued WebSocket frame stays on the heap until TCP drains it,
+                // so flooding 50 frames into a fragmented 42 KB heap crashes.
+                uint32_t maxCatchup;
+                if (freeHeap < 35000) {
+                    maxCatchup = 0;   // Too low — skip catchup entirely
+                } else if (freeHeap < 45000) {
+                    maxCatchup = 10;  // Reduced catchup
+                } else {
+                    maxCatchup = 50;  // Normal catchup
+                }
+
                 uint32_t count = g_logger.getEntryCount();
-                uint32_t start = count > 50 ? count - 50 : 0;
+                uint32_t start = count > maxCatchup ? count - maxCatchup : 0;
                 for (uint32_t i = start; i < count; i++) {
+                    // Bail out if heap drops too low mid-catchup
+                    if (ESP.getFreeHeap() < 25000) {
+                        DEBUG_LOG_API("WebSocket catchup aborted at entry %u (heap: %u)", i, ESP.getFreeHeap());
+                        break;
+                    }
                     Logger::LogEntry entry;
                     if (g_logger.getEntry(i, entry)) {
                         client->text(formatLogEntryJSON(entry, "logger"));
@@ -4084,6 +4108,11 @@ void WebAPI::broadcastLogEntry(const Logger::LogEntry& entry, const char* source
     int clientCount = m_logWebSocket->count();
     if (clientCount == 0) {
         return;  // No clients connected (normal, don't spam)
+    }
+
+    // Skip broadcast if heap is too low to safely queue frame buffers
+    if (ESP.getFreeHeap() < 25000) {
+        return;
     }
 
     String json = formatLogEntryJSON(entry, source);

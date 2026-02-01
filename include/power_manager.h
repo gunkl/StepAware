@@ -190,6 +190,22 @@ public:
     bool isBatteryMonitoringEnabled() const { return m_batteryMonitoringEnabled; }
 
     /**
+     * @brief Enable or disable automatic sleep at runtime
+     *
+     * When disabled, the idle timeout will not trigger light or deep sleep transitions.
+     *
+     * @param enabled True to enable auto-sleep
+     */
+    void setAutoSleepEnabled(bool enabled);
+
+    /**
+     * @brief Check if automatic sleep is enabled
+     *
+     * @return True if auto-sleep is active
+     */
+    bool isAutoSleepEnabled() const { return m_config.enableAutoSleep; }
+
+    /**
      * @brief Enter light sleep mode
      *
      * WiFi off, CPU 80MHz, wake on motion/button/timer.
