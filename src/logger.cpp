@@ -2,6 +2,7 @@
 #include "web_api.h"  // For WebAPI::broadcastLogEntry()
 #include <SPIFFS.h>
 #include <stdarg.h>
+#include <time.h>
 
 // Global WebAPI pointer (defined in main.cpp)
 extern WebAPI* g_webAPI;
@@ -193,8 +194,8 @@ bool Logger::flush() {
     for (uint32_t i = count > m_pendingWrites ? count - m_pendingWrites : 0; i < count; i++) {
         LogEntry entry;
         if (getEntry(i, entry)) {
-            char timestamp[16];
-            formatTimestamp(entry.timestamp, timestamp, sizeof(timestamp));
+            char timestamp[24];
+            formatTimestamp(entry.timestamp, entry.wallTimestamp, timestamp, sizeof(timestamp));
             file.printf("[%s] [%s] %s\n",
                        timestamp,
                        getLevelName((LogLevel)entry.level),
@@ -225,8 +226,8 @@ void Logger::printAll() {
         for (uint32_t i = 0; i < count; i++) {
             LogEntry entry;
             if (getEntry(i, entry)) {
-                char timestamp[16];
-                formatTimestamp(entry.timestamp, timestamp, sizeof(timestamp));
+                char timestamp[24];
+                formatTimestamp(entry.timestamp, entry.wallTimestamp, timestamp, sizeof(timestamp));
                 Serial.printf("[%s] [%s] %s\n",
                              timestamp,
                              getLevelName((LogLevel)entry.level),
@@ -255,6 +256,9 @@ void Logger::addEntry(LogLevel level, const char* message) {
     LogEntry entry;
     entry.sequenceNumber = m_sequenceCounter++;
     entry.timestamp = millis();
+    // Set wall-clock timestamp if time has been synced (time() returns 0 or epoch until SNTP syncs)
+    time_t now = time(NULL);
+    entry.wallTimestamp = (now > 946684800) ? (uint32_t)now : 0;  // 946684800 = Jan 1 2000
     entry.level = level;
     strlcpy(entry.message, message, sizeof(entry.message));
 
@@ -292,8 +296,8 @@ void Logger::addEntry(LogLevel level, const char* message) {
 }
 
 void Logger::writeToSerial(const LogEntry& entry) {
-    char timestamp[16];
-    formatTimestamp(entry.timestamp, timestamp, sizeof(timestamp));
+    char timestamp[24];
+    formatTimestamp(entry.timestamp, entry.wallTimestamp, timestamp, sizeof(timestamp));
 
     Serial.printf("[%s] [%s] %s\n",
                   timestamp,
@@ -304,8 +308,19 @@ void Logger::writeToSerial(const LogEntry& entry) {
 // Removed unused private function (2026-01-30):
 // bool Logger::writeToFile(const LogEntry& entry) - Never called, flush() writes directly to file
 
-void Logger::formatTimestamp(uint32_t timestamp, char* buffer, size_t bufferSize) {
-    uint32_t seconds = timestamp / 1000;
+void Logger::formatTimestamp(uint32_t bootMs, uint32_t wallTs, char* buffer, size_t bufferSize) {
+    if (wallTs > 0) {
+        // Wall-clock time available: format as MM-DD HH:MM:SS
+        time_t t = (time_t)wallTs;
+        struct tm* tm = localtime(&t);
+        if (tm) {
+            strftime(buffer, bufferSize, "%m-%d %H:%M:%S", tm);
+            return;
+        }
+    }
+
+    // Fallback: boot-relative time HH:MM:SS.mmm
+    uint32_t seconds = bootMs / 1000;
     uint32_t minutes = seconds / 60;
     uint32_t hours = minutes / 60;
 
@@ -314,5 +329,5 @@ void Logger::formatTimestamp(uint32_t timestamp, char* buffer, size_t bufferSize
     hours %= 24;
 
     snprintf(buffer, bufferSize, "%02u:%02u:%02u.%03u",
-             hours, minutes, seconds, timestamp % 1000);
+             hours, minutes, seconds, bootMs % 1000);
 }

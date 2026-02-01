@@ -30,6 +30,7 @@
 #include "web_api.h"
 #include "debug_logger.h"
 #include "power_manager.h"
+#include "ntp_manager.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -60,6 +61,9 @@ AsyncWebServer webServer(80);
 WebAPI* webAPI = nullptr;
 WebAPI* g_webAPI = nullptr;  // Global pointer for logger integration
 bool webServerStarted = false;
+
+// NTP Time Sync
+NTPManager ntpManager;
 
 // Diagnostic Mode
 bool diagnosticMode = false;
@@ -120,6 +124,7 @@ void startWebAPI() {
  */
 void onWiFiConnected() {
     DEBUG_LOG_WIFI("Connected callback - starting Web API if needed");
+    ntpManager.onWiFiConnected();
     startWebAPI();
 }
 
@@ -1091,6 +1096,10 @@ void setup() {
         }
     }
 
+    // Initialize NTP Manager
+    Serial.println("[Setup] Initializing NTP manager...");
+    ntpManager.begin(cfg.ntpEnabled, cfg.ntpServer, cfg.timezoneOffsetHours);
+
     // Start Web API immediately if WiFi is already enabled
     // (callback will also fire when WiFi connects later)
     if (cfg.wifiEnabled) {
@@ -1151,6 +1160,9 @@ void loop() {
 
     // Update WiFi manager (handles connection state, reconnection)
     wifiManager.update();
+
+    // Update NTP manager (handles sync completion, hourly checks, daily resync)
+    ntpManager.update();
 
     // Get current configuration
     const ConfigManager::Config& cfg = configManager.getConfig();

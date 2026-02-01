@@ -576,6 +576,12 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     logging["serialEnabled"] = m_config.serialLoggingEnabled;
     logging["fileEnabled"] = m_config.fileLoggingEnabled;
 
+    // NTP Time Sync
+    JsonObject ntp = doc.createNestedObject("ntp");
+    ntp["enabled"] = m_config.ntpEnabled;
+    ntp["server"] = m_config.ntpServer;
+    ntp["timezoneOffset"] = m_config.timezoneOffsetHours;
+
     // Multi-Sensor Configuration
     JsonArray sensorsArray = doc.createNestedArray("sensors");
     for (int i = 0; i < 4; i++) {
@@ -737,6 +743,13 @@ bool ConfigManager::fromJSON(const char* json) {
         m_config.logLevel = doc["logging"]["level"] | LOG_LEVEL_INFO;
         m_config.serialLoggingEnabled = doc["logging"]["serialEnabled"] | true;
         m_config.fileLoggingEnabled = doc["logging"]["fileEnabled"] | false;
+    }
+
+    // NTP Time Sync
+    if (doc.containsKey("ntp")) {
+        m_config.ntpEnabled = doc["ntp"]["enabled"] | false;
+        strlcpy(m_config.ntpServer, doc["ntp"]["server"] | "pool.ntp.org", sizeof(m_config.ntpServer));
+        m_config.timezoneOffsetHours = doc["ntp"]["timezoneOffset"] | -8;
     }
 
     // Multi-Sensor Configuration
@@ -1009,6 +1022,11 @@ void ConfigManager::loadDefaults() {
     m_config.logLevel = LOG_LEVEL_INFO;
     m_config.serialLoggingEnabled = true;
     m_config.fileLoggingEnabled = false;
+
+    // NTP Time Sync
+    m_config.ntpEnabled = false;
+    strlcpy(m_config.ntpServer, "pool.ntp.org", sizeof(m_config.ntpServer));
+    m_config.timezoneOffsetHours = -8;
 
     // Multi-Sensor Configuration - Default PIR sensor
     for (int i = 0; i < 4; i++) {

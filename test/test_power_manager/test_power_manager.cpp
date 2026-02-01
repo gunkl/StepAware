@@ -727,6 +727,30 @@ void test_usb_power_to_low_battery_transition(void) {
     TEST_ASSERT_EQUAL(STATE_LOW_BATTERY, power.getState());
 }
 
+/**
+ * @brief Test that periodic activity (e.g. OTA upload chunks) prevents sleep
+ *
+ * Simulates a long-running OTA upload: chunks arrive every 500 ms over a
+ * total duration that exceeds the light-sleep timeout.  recordActivity() is
+ * called on each "chunk".  The device must remain in STATE_ACTIVE throughout.
+ */
+void test_ota_upload_activity_prevents_sleep(void) {
+    power.begin();
+    advance_time(60001);  // Move past boot grace period
+    power.recordActivity();  // Reset idle timer baseline after grace jump
+
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+
+    // Simulate chunks arriving every 500 ms for 60 seconds
+    // (well past the 30 s light-sleep timeout used by TestPowerManager)
+    for (int i = 0; i < 120; i++) {
+        advance_time(500);
+        power.recordActivity();  // Mirrors the m_power->recordActivity() in handleOTAUpload
+        power.update();
+        TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+    }
+}
+
 // ============================================================================
 // MAIN TEST RUNNER
 // ============================================================================
@@ -775,6 +799,9 @@ int main(int argc, char **argv) {
 
     RUN_TEST(test_usb_power_to_normal_transition);
     RUN_TEST(test_usb_power_to_low_battery_transition);
+
+    // OTA upload sleep protection
+    RUN_TEST(test_ota_upload_activity_prevents_sleep);
 
     return UNITY_END();
 }

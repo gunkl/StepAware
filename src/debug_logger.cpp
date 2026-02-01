@@ -3,6 +3,7 @@
 #include "web_api.h"
 #include "logger.h"
 #include <stdarg.h>
+#include <time.h>
 
 // Global WebAPI pointer (defined in main.cpp)
 extern WebAPI* g_webAPI;
@@ -142,6 +143,8 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
         static uint32_t debugLogSeq = 0;  // Separate sequence counter for debug logs
         entry.sequenceNumber = debugLogSeq++;
         entry.timestamp = millis();
+        time_t now = time(NULL);
+        entry.wallTimestamp = (now > 946684800) ? (uint32_t)now : 0;
         entry.level = level;  // DebugLogger levels match Logger levels
         strlcpy(entry.message, fullMessage, sizeof(entry.message));
 

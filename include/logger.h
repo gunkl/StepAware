@@ -26,7 +26,8 @@ public:
      */
     struct LogEntry {
         uint32_t sequenceNumber;   // Global sequence number across all logs
-        uint32_t timestamp;        // millis() when logged
+        uint32_t timestamp;        // millis() when logged (preserved for ordering)
+        uint32_t wallTimestamp;    // Wall-clock time (seconds since epoch), or 0 if not synced
         uint8_t level;             // Log level
         char message[128];         // Log message
     };
@@ -216,11 +217,15 @@ private:
     /**
      * @brief Format timestamp as string
      *
-     * @param timestamp Timestamp in milliseconds
-     * @param buffer Output buffer
+     * Uses wall-clock time (MM-DD HH:MM:SS) when wallTimestamp is valid,
+     * otherwise falls back to boot-relative time (HH:MM:SS.mmm).
+     *
+     * @param bootMs Boot-relative timestamp in milliseconds
+     * @param wallTs Wall-clock timestamp in seconds since epoch (0 if unavailable)
+     * @param buffer Output buffer (must be at least 24 bytes)
      * @param bufferSize Buffer size
      */
-    void formatTimestamp(uint32_t timestamp, char* buffer, size_t bufferSize);
+    void formatTimestamp(uint32_t bootMs, uint32_t wallTs, char* buffer, size_t bufferSize);
 
     // Removed unused private function (2026-01-30):
     // - bool writeToFile(const LogEntry& entry) - Never called, flush() writes directly to file
