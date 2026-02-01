@@ -168,6 +168,10 @@ bool WebAPI::begin() {
     m_server->on("/api/sensors/recalibrate", HTTP_POST, [this](AsyncWebServerRequest* req) {
         this->handlePostSensorRecalibrate(req);
     });
+    // GET /api/sensors/recalibrate - poll PIR warmup status without triggering
+    m_server->on("/api/sensors/recalibrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleGetSensorRecalibrate(req);
+    });
 
     // Also register GET handlers for manual browser testing
     m_server->on("/api/sensors/0/errorrate", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -1946,6 +1950,59 @@ void WebAPI::handlePostSensorRecalibrate(AsyncWebServerRequest* request) {
                   found, initiated, alreadyInProgress);
 }
 
+void WebAPI::handleGetSensorRecalibrate(AsyncWebServerRequest* request) {
+    if (!m_sensorManager) {
+        sendError(request, 503, "Sensor manager not available");
+        return;
+    }
+
+    StaticJsonDocument<512> doc;
+    doc["success"] = true;
+
+    // Report warmup status on all PIR sensors (read-only, no trigger)
+    JsonArray sensorsArr = doc.createNestedArray("sensors");
+    bool anyPIR = false;
+    for (uint8_t i = 0; i < 4; i++) {
+        HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+        if (sensor && sensor->getSensorType() == SENSOR_TYPE_PIR) {
+            anyPIR = true;
+            JsonObject sObj = sensorsArr.createNestedObject();
+            sObj["slot"] = i;
+            sObj["ready"] = sensor->isReady();
+            sObj["warmupRemaining"] = sensor->getWarmupTimeRemaining();
+            HAL_PIR* pir = static_cast<HAL_PIR*>(sensor);
+            sObj["recalibrating"] = pir->isRecalibrating();
+        }
+    }
+
+    if (!anyPIR) {
+        doc["success"] = false;
+        doc["message"] = "No PIR sensor found";
+    } else if (sensorsArr.size() > 0) {
+        // Determine overall status from sensor states
+        bool anyRecalibrating = false;
+        bool allReady = true;
+        for (size_t i = 0; i < sensorsArr.size(); i++) {
+            if (sensorsArr[i]["recalibrating"].as<bool>()) anyRecalibrating = true;
+            if (!sensorsArr[i]["ready"].as<bool>()) allReady = false;
+        }
+        if (anyRecalibrating) {
+            doc["status"] = "recalibrating";
+            doc["message"] = "Recalibration in progress";
+        } else if (!allReady) {
+            doc["status"] = "warming_up";
+            doc["message"] = "Warming up";
+        } else {
+            doc["status"] = "ready";
+            doc["message"] = "Sensors ready";
+        }
+    }
+
+    String json;
+    serializeJson(doc, json);
+    sendJSON(request, 200, json.c_str());
+}
+
 void WebAPI::handlePostReset(AsyncWebServerRequest* request) {
     DEBUG_LOG_API("Factory reset requested via API");
 
@@ -3199,7 +3256,7 @@ void WebAPI::buildDashboardHTML() {
     html2 += "if(d.status==='recalibrating'){";
     html2 += "status.style.color='#f59e0b';";
     html2 += "setTimeout(function pollRecal(){";
-    html2 += "fetch('/api/sensors/recalibrate',{method:'POST'})";
+    html2 += "fetch('/api/sensors/recalibrate')";
     html2 += ".then(function(r){return r.json();})";
     html2 += ".then(function(d2){";
     html2 += "if(d2.sensors&&d2.sensors.some(function(s){return!s.ready;})){";
