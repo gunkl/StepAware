@@ -583,6 +583,42 @@ Claude should follow existing conventions:
 - Indentation: 4 spaces
 - Line length: 100 characters max
 
+### Logging Best Practices
+
+**CRITICAL: Never pass complex expressions to DEBUG_LOG macros**
+
+The ESP32 variadic argument handling (va_list) can cause stack corruption when complex expressions are passed directly to logging functions.
+
+**BAD - Will cause crashes:**
+```cpp
+DEBUG_LOG_SYSTEM("Value: %d", someVar > 10 ? 1 : 0);  // ❌ Ternary operator
+DEBUG_LOG_SYSTEM("Time: %lu.%lu", time / 1000, (time % 1000) / 100);  // ❌ Arithmetic expressions
+DEBUG_LOG_SYSTEM("Status: %s", enabled ? "ON" : "OFF");  // ❌ Ternary returning pointer
+```
+
+**GOOD - Pre-compute all expressions:**
+```cpp
+// Pre-compute ternary operators
+const char* statusStr = enabled ? "ON" : "OFF";
+DEBUG_LOG_SYSTEM("Status: %s", statusStr);  // ✅ Simple variable
+
+// Pre-compute arithmetic
+uint32_t seconds = time / 1000;
+uint32_t deciseconds = (time % 1000) / 100;
+DEBUG_LOG_SYSTEM("Time: %lu.%lu", seconds, deciseconds);  // ✅ Simple variables
+```
+
+**Why this matters:**
+- Variadic functions (printf, vprintf, etc.) use va_list to read arguments from the stack
+- Complex expressions can cause incorrect stack alignment or argument ordering
+- This results in reading from invalid memory (e.g., 0xfa000000 - uninitialized stack pattern)
+- Symptoms: Guru Meditation Error with Load access fault in vfprintf/svfprintf
+
+**Apply this rule to ALL logging macros:**
+- DEBUG_LOG_SYSTEM, DEBUG_LOG_SENSOR, DEBUG_LOG_API, etc.
+- Serial.printf(), logger.log(), etc.
+- Any function using variadic arguments (...) or va_list
+
 ## Limitations of AI Assistance
 
 ### Claude Cannot:
