@@ -145,6 +145,15 @@ public:
     // =========================================================================
 
     /**
+     * @brief Configure GPIO pin mode for sensor input
+     *
+     * Must be called before begin(). Sets the pinMode for the GPIO input pin.
+     *
+     * @param mode Pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN
+     */
+    void setPinMode(uint8_t mode);
+
+    /**
      * @brief Assign the GPIO pin that drives PIR VCC directly.
      *
      * Must be called before begin(). The pin is driven HIGH (sensors powered)
@@ -221,6 +230,7 @@ public:
 
 private:
     uint8_t m_pin;                  ///< GPIO pin number
+    uint8_t m_pinMode;              ///< GPIO pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN
     bool m_mockMode;                ///< Mock mode enabled
     bool m_initialized;             ///< Initialization complete
 

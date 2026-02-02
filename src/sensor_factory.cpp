@@ -5,8 +5,11 @@
 HAL_MotionSensor* SensorFactory::create(const SensorConfig& config, bool mockMode) {
     switch (config.type) {
         case SENSOR_TYPE_PIR:
-        case SENSOR_TYPE_PASSIVE_IR:
-            return createPIR(config.primaryPin, mockMode);
+        case SENSOR_TYPE_PASSIVE_IR: {
+            HAL_PIR* sensor = new HAL_PIR(config.primaryPin, mockMode);
+            sensor->setPinMode(config.pinMode);
+            return sensor;
+        }
 
         case SENSOR_TYPE_ULTRASONIC: {
             HAL_Ultrasonic* sensor = new HAL_Ultrasonic(

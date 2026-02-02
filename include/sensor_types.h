@@ -99,6 +99,7 @@ struct SensorConfig {
     bool invertLogic;               ///< Invert detection logic (active low)
     uint8_t sampleWindowSize;       ///< Rolling window size for distance sensors (3-20, 0=default)
     uint16_t sampleRateMs;          ///< Sample rate in ms (60+ for ultrasonic, 0=default)
+    uint8_t pinMode;                ///< GPIO pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN (PIR only)
 };
 
 /**

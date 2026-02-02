@@ -43,6 +43,7 @@ public:
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
         uint8_t distanceZone;             // PIR distance zone: 0=None, 1=Near (0.5-4m), 2=Far (3-12m)
         bool sensorStatusDisplay;         // Show triggered state on LED matrix (PIR only)
+        uint8_t pinMode;                  // GPIO pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN (PIR only)
     };
 
     /**
@@ -212,6 +213,20 @@ public:
      * @return true if no corrections were needed, false if corrections were made
      */
     bool validateAndCorrect();
+
+    /**
+     * @brief Validate sensor configuration for common issues
+     *
+     * Checks for:
+     * - Invalid GPIO pins (> 21)
+     * - PIR sensors with LED display enabled but no distance zone
+     * - Duplicate GPIO pin assignments
+     *
+     * Should be called after loading configuration from file.
+     *
+     * @return true if no corrections were needed, false if corrections were made
+     */
+    bool validateSensorConfiguration();
 
     /**
      * @brief Auto-configure direction detector based on sensor distance zones

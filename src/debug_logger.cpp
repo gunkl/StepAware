@@ -37,7 +37,7 @@ DebugLogger::~DebugLogger() {
     }
 }
 
-bool DebugLogger::begin(LogLevel level, uint8_t categoryMask) {
+bool DebugLogger::begin(LogLevel level, uint16_t categoryMask) {
     if (m_initialized) {
         return true;
     }
@@ -262,6 +262,15 @@ void DebugLogger::logSystem(const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     log(LEVEL_INFO, CAT_SYSTEM, "%s", buffer);
+}
+
+void DebugLogger::logCrash(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    char buffer[256];
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    log(LEVEL_ERROR, CAT_CRASH, "%s", buffer);
 }
 
 void DebugLogger::logConfigDump() {
@@ -587,6 +596,7 @@ const char* DebugLogger::getCategoryName(LogCategory cat) {
         case CAT_WIFI:   return "WIFI  ";
         case CAT_API:    return "API   ";
         case CAT_SYSTEM: return "SYSTEM";
+        case CAT_CRASH:  return "CRASH ";
         default:         return "UNKNWN";
     }
 }

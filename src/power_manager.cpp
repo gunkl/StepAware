@@ -74,8 +74,8 @@ PowerManager::PowerManager()
     m_config.lowBatteryThreshold = 3.4f;        // 3.4V (~20%)
     m_config.criticalBatteryThreshold = 3.2f;   // 3.2V (~5%)
     m_config.batteryCheckInterval = 10000;      // 10 seconds
-    m_config.enableAutoSleep = true;
-    m_config.enableDeepSleep = true;
+    m_config.enableAutoSleep = false;
+    m_config.enableDeepSleep = false;
     m_config.voltageCalibrationOffset = 0.0f;
     m_config.lowBatteryLEDBrightness = 128;     // 50% brightness when low battery
 
@@ -110,6 +110,13 @@ void PowerManager::setBatteryMonitoringEnabled(bool enabled) {
 void PowerManager::setPowerSavingMode(uint8_t mode) {
     if (mode > 2) mode = 0;
     if (mode == m_powerSavingMode) return;  // No change — avoid redundant writes and log spam
+
+    // Defensive: log the old state before modifying it
+    DEBUG_LOG_SYSTEM("Power: setPowerSavingMode(%u) called (current mode=%u, autoSleep=%s, deepSleep=%s)",
+        mode, m_powerSavingMode,
+        m_config.enableAutoSleep ? "true" : "false",
+        m_config.enableDeepSleep ? "true" : "false");
+
     m_powerSavingMode = mode;
     m_config.enableAutoSleep = (mode >= 1);
     m_config.enableDeepSleep = (mode == 2);
