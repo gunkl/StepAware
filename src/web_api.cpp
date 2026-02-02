@@ -737,6 +737,8 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
     if (m_power) {
         m_power->setPowerSavingMode(cfg.powerSavingMode);
         DEBUG_LOG_API("Power saving mode set to %u via config", cfg.powerSavingMode);
+        m_power->setEnablePowerSavingOnUSB(cfg.enablePowerSavingOnUSB);
+        DEBUG_LOG_API("USB power override set to %s via config", cfg.enablePowerSavingOnUSB ? "enabled" : "disabled");
     }
 
     // Apply direction detector config changes at runtime
@@ -2944,6 +2946,17 @@ void WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-help\">Light Sleep: wakes on PIR/button (~1ms latency). Deep Sleep+ULP: ULP coprocessor polls PIR for maximum battery life. Requires Battery Monitoring.</div></div>";
     html += "</div>";
 
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\">";
+    html += "<label class=\"form-label\">Enable Power Saving on USB</label>";
+    html += "<select id=\"cfg-powerSavingOnUSB\" class=\"form-select\">";
+    html += "<option value=\"0\">Disabled (default)</option>";
+    html += "<option value=\"1\">Enabled (for debugging)</option>";
+    html += "</select>";
+    html += "<div class=\"form-help\">For debugging purposes, reset at boot. Allows power saving to work while USB is connected (for testing via serial console).</div>";
+    html += "</div>";
+    html += "</div>";
+
     html += "<div style=\"margin-top:24px;\">";
     html += "<button type=\"submit\" class=\"btn btn-primary\">Save Configuration</button>";
     html += "<button type=\"button\" class=\"btn btn-off btn-small\" style=\"margin-left:12px;\" onclick=\"loadConfig()\">Reload</button>";
@@ -3138,6 +3151,7 @@ void WebAPI::buildDashboardHTML() {
     html2 += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html2 += "document.getElementById('cfg-batteryMonitoring').value=cfg.power?.batteryMonitoringEnabled?1:0;";
     html2 += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingMode!==undefined?cfg.power.savingMode:0;";
+    html2 += "document.getElementById('cfg-powerSavingOnUSB').value=cfg.power?.enablePowerSavingOnUSB?1:0;";
     html2 += "var bmSel=document.getElementById('cfg-batteryMonitoring');";
     html2 += "var psSel=document.getElementById('cfg-powerSaving');";
     html2 += "if(bmSel.value==='0'){psSel.value='0';psSel.disabled=true;}";
@@ -3184,6 +3198,7 @@ void WebAPI::buildDashboardHTML() {
     html2 += "cfg.power=cfg.power||{};";
     html2 += "cfg.power.batteryMonitoringEnabled=parseInt(document.getElementById('cfg-batteryMonitoring').value)===1;";
     html2 += "cfg.power.savingMode=parseInt(document.getElementById('cfg-powerSaving').value);";
+    html2 += "cfg.power.enablePowerSavingOnUSB=parseInt(document.getElementById('cfg-powerSavingOnUSB').value)===1;";
     html2 += "cfg.directionDetector=cfg.directionDetector||{};";
     html2 += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
     html2 += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";

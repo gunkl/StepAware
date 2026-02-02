@@ -713,6 +713,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     power["batteryMonitoringEnabled"] = m_config.batteryMonitoringEnabled;
     power["savingMode"] = m_config.powerSavingMode;
     power["deepSleepAfterMs"] = m_config.deepSleepAfterMs;
+    power["enablePowerSavingOnUSB"] = m_config.enablePowerSavingOnUSB;
 
     // Logging
     JsonObject logging = doc.createNestedObject("logging");
@@ -899,6 +900,9 @@ bool ConfigManager::fromJSON(const char* json) {
         if (!m_config.batteryMonitoringEnabled) {
             m_config.powerSavingMode = 0;
         }
+
+        // Load enablePowerSavingOnUSB (defaults to false for safety)
+        m_config.enablePowerSavingOnUSB = doc["power"]["enablePowerSavingOnUSB"] | false;
     }
 
     // Logging
@@ -1185,6 +1189,7 @@ void ConfigManager::loadDefaults() {
     m_config.batteryMonitoringEnabled = false;
     m_config.powerSavingMode = 0;  // Disabled
     m_config.deepSleepAfterMs = 3600000;  // 1 hour
+    m_config.enablePowerSavingOnUSB = false;  // Safety: Never enable by default
 
     // Logging
     m_config.logLevel = LOG_LEVEL_INFO;
