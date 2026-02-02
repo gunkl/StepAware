@@ -604,6 +604,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
             sensorObj["sampleWindowSize"] = m_config.sensors[i].sampleWindowSize;
             sensorObj["sampleRateMs"] = m_config.sensors[i].sampleRateMs;
             sensorObj["distanceZone"] = m_config.sensors[i].distanceZone;
+            sensorObj["sensorStatusDisplay"] = m_config.sensors[i].sensorStatusDisplay;
         }
     }
 
@@ -797,6 +798,7 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 3;  // 3 samples default
                 m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 75;  // 75ms sample interval (adaptive threshold)
                 m_config.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;  // 0 = None (default)
+                m_config.sensors[slot].sensorStatusDisplay = sensorObj["sensorStatusDisplay"] | false;  // false = off (default)
             }
         }
     }
@@ -1072,6 +1074,8 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].directionSensitivity = 0;  // 0 = auto (adaptive threshold)
     m_config.sensors[0].sampleWindowSize = 3;   // Global default window size
     m_config.sensors[0].sampleRateMs = 75;      // Global default sample interval (adaptive threshold)
+    m_config.sensors[0].distanceZone = 0;            // None
+    m_config.sensors[0].sensorStatusDisplay = false; // Off by default
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
 
