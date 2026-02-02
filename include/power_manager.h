@@ -183,6 +183,16 @@ public:
     void setBatteryMonitoringEnabled(bool enabled);
 
     /**
+     * @brief Enable or disable automatic sleep at runtime
+     *
+     * When disabled, the idle-timeout sleep transitions (light sleep / deep sleep)
+     * are suppressed.  Battery-critical deep sleep is unaffected.
+     *
+     * @param enabled True to allow automatic sleep on idle timeout
+     */
+    void setAutoSleepEnabled(bool enabled);
+
+    /**
      * @brief Check if battery monitoring is enabled
      *
      * @return True if battery monitoring is active (requires external voltage divider)

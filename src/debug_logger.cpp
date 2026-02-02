@@ -120,9 +120,9 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
 
-    // Build log line with timestamp, level, category
-    char logLine[384];
+    // Determine timestamp: use wall-clock time when NTP is synced, millis() otherwise
     time_t now = time(NULL);
+    char logLine[384];
     if (now > 946684800) {  // 946684800 = Jan 1 2000; valid only after NTP sync
         struct tm* tm = localtime(&now);
         if (tm) {
@@ -175,7 +175,6 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
         static uint32_t debugLogSeq = 0;  // Separate sequence counter for debug logs
         entry.sequenceNumber = debugLogSeq++;
         entry.timestamp = millis();
-        time_t now = time(NULL);
         entry.wallTimestamp = (now > 946684800) ? (uint32_t)now : 0;
         entry.level = level;  // DebugLogger levels match Logger levels
         strlcpy(entry.message, fullMessage, sizeof(entry.message));
