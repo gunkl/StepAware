@@ -720,8 +720,8 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
 
     // Apply power manager config changes at runtime
     if (m_power) {
-        m_power->setAutoSleepEnabled(cfg.powerSavingEnabled);
-        DEBUG_LOG_API("Auto-sleep %s via config", cfg.powerSavingEnabled ? "enabled" : "disabled");
+        m_power->setPowerSavingMode(cfg.powerSavingMode);
+        DEBUG_LOG_API("Power saving mode set to %u via config", cfg.powerSavingMode);
     }
 
     // Apply direction detector config changes at runtime
@@ -2903,9 +2903,10 @@ void WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-group\"><label class=\"form-label\">Power Saving</label>";
     html += "<select id=\"cfg-powerSaving\" class=\"form-select\">";
     html += "<option value=\"0\">Disabled</option>";
-    html += "<option value=\"1\">Enabled</option>";
+    html += "<option value=\"1\">Light Sleep</option>";
+    html += "<option value=\"2\">Deep Sleep + ULP</option>";
     html += "</select>";
-    html += "<div class=\"form-help\">Enable to reduce power consumption. Requires Battery Monitoring to be enabled.</div></div>";
+    html += "<div class=\"form-help\">Light Sleep: wakes on PIR/button (~1ms latency). Deep Sleep+ULP: ULP coprocessor polls PIR for maximum battery life. Requires Battery Monitoring.</div></div>";
     html += "</div>";
 
     html += "<div style=\"margin-top:24px;\">";
@@ -3097,7 +3098,7 @@ void WebAPI::buildDashboardHTML() {
     html2 += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
     html2 += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html2 += "document.getElementById('cfg-batteryMonitoring').value=cfg.power?.batteryMonitoringEnabled?1:0;";
-    html2 += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingEnabled?1:0;";
+    html2 += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingMode!==undefined?cfg.power.savingMode:0;";
     html2 += "var bmSel=document.getElementById('cfg-batteryMonitoring');";
     html2 += "var psSel=document.getElementById('cfg-powerSaving');";
     html2 += "if(bmSel.value==='0'){psSel.value='0';psSel.disabled=true;}";
@@ -3139,7 +3140,7 @@ void WebAPI::buildDashboardHTML() {
     html2 += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
     html2 += "cfg.power=cfg.power||{};";
     html2 += "cfg.power.batteryMonitoringEnabled=parseInt(document.getElementById('cfg-batteryMonitoring').value)===1;";
-    html2 += "cfg.power.savingEnabled=parseInt(document.getElementById('cfg-powerSaving').value)===1;";
+    html2 += "cfg.power.savingMode=parseInt(document.getElementById('cfg-powerSaving').value);";
     html2 += "cfg.directionDetector=cfg.directionDetector||{};";
     html2 += "cfg.directionDetector.simultaneousThresholdMs=parseInt(document.getElementById('cfg-dirSimultaneousThreshold').value);";
     html2 += "cfg.directionDetector.confirmationWindowMs=parseInt(document.getElementById('cfg-dirConfirmationWindow').value);";

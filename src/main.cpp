@@ -1202,7 +1202,7 @@ void loop() {
 
     // Propagate power settings to power manager
     g_power.setBatteryMonitoringEnabled(cfg.batteryMonitoringEnabled);
-    g_power.setAutoSleepEnabled(cfg.powerSavingEnabled);
+    g_power.setPowerSavingMode(cfg.powerSavingMode);
 
     // Update power manager (battery monitoring)
     g_power.update();
@@ -1212,7 +1212,7 @@ void loop() {
     static bool statusLedState = false;
     uint32_t now = millis();
 
-    if (!cfg.powerSavingEnabled) {
+    if (cfg.powerSavingMode == 0) {
         // Heartbeat pattern: short blink every 2 seconds
         uint32_t blinkInterval = 2000;
 

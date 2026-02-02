@@ -104,7 +104,7 @@ Get current configuration.
     "rememberMode": false
   },
   "power": {
-    "savingEnabled": false,
+    "savingMode": 0,
     "deepSleepAfterMs": 3600000
   },
   "logging": {
@@ -118,6 +118,13 @@ Get current configuration.
   }
 }
 ```
+
+**`power.savingMode`** (integer) — replaces the previous `savingEnabled` boolean.
+- `0` — Disabled (no auto-sleep)
+- `1` — Light Sleep (idle → light sleep; wakes on PIR/button GPIO, ~1 ms latency)
+- `2` — Deep Sleep + ULP (idle → light sleep → deep sleep; ULP coprocessor polls PIR for maximum battery life)
+
+Legacy configs containing `savingEnabled` (bool) are migrated automatically on load: `false` → `0`, `true` → `2`.
 
 ---
 

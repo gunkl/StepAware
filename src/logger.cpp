@@ -317,6 +317,12 @@ void Logger::formatTimestamp(uint32_t bootMs, uint32_t wallTs, char* buffer, siz
             strftime(buffer, bufferSize, "%m-%d %H:%M:%S", tm);
             return;
         }
+        // Timezone not configured — fall back to UTC
+        tm = gmtime(&t);
+        if (tm) {
+            strftime(buffer, bufferSize, "%m-%d %H:%M:%S", tm);
+            return;
+        }
     }
 
     // Fallback: boot-relative time HH:MM:SS.mmm

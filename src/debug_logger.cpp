@@ -122,11 +122,43 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
 
     // Build log line with timestamp, level, category
     char logLine[384];
-    snprintf(logLine, sizeof(logLine), "[%010lu] [%s] [%s] %s\n",
-             millis(),
-             getLevelName(level),
-             getCategoryName(category),
-             message);
+    time_t now = time(NULL);
+    if (now > 946684800) {  // 946684800 = Jan 1 2000; valid only after NTP sync
+        struct tm* tm = localtime(&now);
+        if (tm) {
+            char timeStr[24];
+            strftime(timeStr, sizeof(timeStr), "%m-%d %H:%M:%S", tm);
+            snprintf(logLine, sizeof(logLine), "[%s] [%s] [%s] %s\n",
+                     timeStr,
+                     getLevelName(level),
+                     getCategoryName(category),
+                     message);
+        } else {
+            // Timezone not configured yet — fall back to UTC rather than millis
+            tm = gmtime(&now);
+            if (tm) {
+                char timeStr[24];
+                strftime(timeStr, sizeof(timeStr), "%m-%d %H:%M:%S", tm);
+                snprintf(logLine, sizeof(logLine), "[%s] [%s] [%s] %s\n",
+                         timeStr,
+                         getLevelName(level),
+                         getCategoryName(category),
+                         message);
+            } else {
+                snprintf(logLine, sizeof(logLine), "[%010lu] [%s] [%s] %s\n",
+                         millis(),
+                         getLevelName(level),
+                         getCategoryName(category),
+                         message);
+            }
+        }
+    } else {
+        snprintf(logLine, sizeof(logLine), "[%010lu] [%s] [%s] %s\n",
+                 millis(),
+                 getLevelName(level),
+                 getCategoryName(category),
+                 message);
+    }
 
     // Write to serial
     Serial.print(logLine);
