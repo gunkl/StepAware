@@ -1179,6 +1179,16 @@ void loop() {
     // Update state machine (handles all hardware and logic)
     stateMachine->update();
 
+    // Motion is physical activity — prevent sleep while processing a warning.
+    {
+        static uint32_t lastMotionCount = 0;
+        uint32_t currentMotionCount = stateMachine->getMotionEventCount();
+        if (currentMotionCount != lastMotionCount) {
+            lastMotionCount = currentMotionCount;
+            g_power.recordActivity();
+        }
+    }
+
     // Update WiFi manager (handles connection state, reconnection)
     wifiManager.update();
 

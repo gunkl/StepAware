@@ -42,6 +42,7 @@ public:
         uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
         uint8_t distanceZone;             // PIR distance zone: 0=None, 1=Near (0.5-4m), 2=Far (3-12m)
+        bool sensorStatusDisplay;         // Show triggered state on LED matrix (PIR only)
     };
 
     /**

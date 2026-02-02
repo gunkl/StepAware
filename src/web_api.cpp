@@ -523,6 +523,13 @@ void WebAPI::setDirectionDetector(DirectionDetector* directionDetector) {
 
 void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
     DEBUG_LOG_API("GET /api/status");
+
+    // Dashboard polls this every 2 seconds — keep the idle timer alive so the
+    // device does not enter light/deep sleep while a client is active.
+    if (m_power) {
+        m_power->recordActivity();
+    }
+
     StaticJsonDocument<2048> doc;
 
     // System info
@@ -2331,6 +2338,11 @@ void WebAPI::handleRoot(AsyncWebServerRequest* request) {
     g_htmlResponseInProgress = true;
     g_lastHTMLBuildTime = now;
 
+    // Dashboard page load is user activity — keep the idle timer alive.
+    if (m_power) {
+        m_power->recordActivity();
+    }
+
     // Build HTML only if not already cached
     // Note: We use inline HTML instead of filesystem-based UI because:
     // 1. All features are implemented (multi-sensor, LED matrix, animations)
@@ -3354,7 +3366,8 @@ void WebAPI::buildDashboardHTML() {
     html2 += "if(sensor.type===0){";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
     html2 += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'None');";
-    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';}";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Sensor Status:</span> <span>'+(sensor.sensorStatusDisplay?'On':'Off')+'</span></div>';}";
     html2 += "else if(sensor.type===2||sensor.type===4){";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
@@ -3441,7 +3454,9 @@ void WebAPI::buildDashboardHTML() {
     html2 += "const warmup=parseInt(prompt('PIR warmup time (seconds):',sensor.warmupMs/1000));";
     html2 += "if(!isNaN(warmup)&&warmup>=1&&warmup<=120)sensor.warmupMs=warmup*1000;";
     html2 += "const zoneStr=prompt('Distance Zone:\\n0=None (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
-    html2 += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}}";
+    html2 += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}";
+    html2 += "const statusStr=prompt('Sensor status (show on LED matrix):\\n0=Off\\n1=On',sensor.sensorStatusDisplay?1:0);";
+    html2 += "if(statusStr!==null){const st=parseInt(statusStr);if(!isNaN(st)&&(st===0||st===1))sensor.sensorStatusDisplay=(st===1);}}";
     html2 += "else if(sensor.type===2||sensor.type===4){";
     html2 += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
     html2 += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
