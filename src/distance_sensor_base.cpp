@@ -121,11 +121,14 @@ void DistanceSensorBase::updateDistanceSensor()
         static bool lastWindowOutsideWarning = false;
 
         if (rawWithinWarning != lastRawWithinWarning || windowOutsideWarning != lastWindowOutsideWarning) {
+            // Pre-compute all expressions to avoid stack corruption in variadic functions
+            const char* rawInRangeStr = rawWithinWarning ? "YES" : "NO";
+            const char* windowOutRangeStr = windowOutsideWarning ? "YES" : "NO";
             DEBUG_LOG_SENSOR("WIPE CHECK: raw=%u, rawInRange=%s, winAvg=%u, windowOutRange=%s",
                            rawDistance,
-                           rawWithinWarning ? "YES" : "NO",
+                           rawInRangeStr,
                            m_windowAverage,
-                           windowOutsideWarning ? "YES" : "NO");
+                           windowOutRangeStr);
             lastRawWithinWarning = rawWithinWarning;
             lastWindowOutsideWarning = windowOutsideWarning;
         }
