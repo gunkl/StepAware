@@ -208,6 +208,23 @@ public:
     uint8_t getPowerSavingMode() const { return m_powerSavingMode; }
 
     /**
+     * @brief Enable power saving even when on USB power (for debugging)
+     *
+     * When enabled, power saving modes work normally even when USB is connected.
+     * IMPORTANT: Always resets to false on boot for safety.
+     *
+     * @param enable True to allow power saving on USB, false to disable (default)
+     */
+    void setEnablePowerSavingOnUSB(bool enable);
+
+    /**
+     * @brief Get USB power override status
+     *
+     * @return True if power saving is allowed on USB, false otherwise
+     */
+    bool getEnablePowerSavingOnUSB() const { return m_enablePowerSavingOnUSB; }
+
+    /**
      * @brief Enter light sleep mode
      *
      * WiFi off, CPU 80MHz, wake on motion/button/timer.
@@ -237,8 +254,9 @@ public:
      * @brief Record activity (resets idle timer)
      *
      * Call when system is actively used to prevent sleep.
+     * @param source Optional description of what triggered the activity
      */
-    void recordActivity();
+    void recordActivity(const char* source = nullptr);
 
     /**
      * @brief Set CPU frequency
@@ -322,6 +340,7 @@ private:
     bool m_initialized;                 ///< Initialization flag
     bool m_batteryMonitoringEnabled;    ///< Battery monitoring enabled (runtime)
     uint8_t m_powerSavingMode;          ///< Power saving mode (0=off, 1=light sleep, 2=deep+ULP)
+    bool m_enablePowerSavingOnUSB;      ///< Enable power saving even on USB (debug only, resets to false on boot)
 
     uint32_t m_lastActivity;            ///< Last activity timestamp
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
@@ -344,6 +363,13 @@ private:
      * @brief Handle power state machine
      */
     void handlePowerState();
+
+    /**
+     * @brief Log periodic power state summary
+     *
+     * Logs comprehensive state info every 5 minutes for diagnostics
+     */
+    void logStateSummary();
 
     /**
      * @brief Transition to new power state

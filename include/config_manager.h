@@ -125,6 +125,7 @@ public:
         bool batteryMonitoringEnabled;     // Enable battery monitoring (requires external voltage divider on GPIO5)
         uint8_t powerSavingMode;           // Power saving mode: 0=Disabled, 1=Light Sleep, 2=Deep Sleep+ULP (forced to 0 when battery monitoring is disabled)
         uint32_t deepSleepAfterMs;         // ms of inactivity before deep sleep
+        bool enablePowerSavingOnUSB;       // Enable power saving even on USB (debug only, resets to false on boot)
 
         // Logging
         uint8_t logLevel;                  // Log level (DEBUG, INFO, WARN, ERROR)

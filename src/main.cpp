@@ -1209,6 +1209,20 @@ void setup() {
         g_power.onCriticalBattery(onBatteryLowCallback);
     }
 
+    // ALWAYS reset USB power override to false on boot (for safety/debugging)
+    // This ensures power saving is disabled on USB by default, even if the user
+    // enabled it previously via the web UI
+    if (cfg.enablePowerSavingOnUSB) {
+        DEBUG_LOG_SYSTEM("USB power override was enabled - resetting to disabled on boot (safety)");
+        // Create mutable copy, modify, and save
+        ConfigManager::Config modifiedCfg = cfg;
+        modifiedCfg.enablePowerSavingOnUSB = false;
+        configManager.setConfig(modifiedCfg);
+        configManager.save();
+    }
+    // Always set to false in power manager on boot
+    g_power.setEnablePowerSavingOnUSB(false);
+
     // Initialize WiFi Manager
     Serial.println("[Setup] Initializing WiFi manager...");
     WiFiManager::Config wifiConfig;
@@ -1300,7 +1314,7 @@ void loop() {
         uint32_t currentMotionCount = stateMachine->getMotionEventCount();
         if (currentMotionCount != lastMotionCount) {
             lastMotionCount = currentMotionCount;
-            g_power.recordActivity();
+            g_power.recordActivity("motion detected");
         }
     }
 

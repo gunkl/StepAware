@@ -57,6 +57,7 @@ PowerManager::PowerManager()
     , m_initialized(false)
     , m_batteryMonitoringEnabled(false)
     , m_powerSavingMode(0)
+    , m_enablePowerSavingOnUSB(false)
     , m_lastActivity(0)
     , m_lastBatteryUpdate(0)
     , m_stateEnterTime(0)
@@ -124,6 +125,25 @@ void PowerManager::setPowerSavingMode(uint8_t mode) {
         mode,
         m_config.enableAutoSleep ? "true" : "false",
         m_config.enableDeepSleep ? "true" : "false");
+}
+
+void PowerManager::setEnablePowerSavingOnUSB(bool enable) {
+    if (m_enablePowerSavingOnUSB != enable) {
+        DEBUG_LOG_SYSTEM("USB power override: %s -> %s",
+                         m_enablePowerSavingOnUSB ? "ON" : "OFF",
+                         enable ? "ON" : "OFF");
+        m_enablePowerSavingOnUSB = enable;
+
+        // Immediately re-evaluate power state
+        if (!enable && m_batteryStatus.usbPower && m_state != STATE_USB_POWER) {
+            // Override disabled + USB connected -> force USB_POWER state
+            setState(STATE_USB_POWER, "USB override disabled");
+        } else if (enable && m_state == STATE_USB_POWER && m_batteryStatus.usbPower) {
+            // Override enabled + in USB_POWER state -> return to ACTIVE
+            DEBUG_LOG_SYSTEM("USB override enabled - allowing power saving on USB power");
+            setState(STATE_ACTIVE, "USB override enabled");
+        }
+    }
 }
 
 bool PowerManager::begin(const Config* config) {
@@ -258,6 +278,9 @@ void PowerManager::update() {
 
     // Update statistics
     updateStats();
+
+    // Log periodic state summary
+    logStateSummary();
 }
 
 void PowerManager::updateBatteryStatus() {
@@ -428,6 +451,13 @@ void PowerManager::handlePowerState() {
             // until ADC has settled and USB power has been reliably detected.
             // USB power detection is still allowed during the grace period.
             if (millis() - m_startTime < POWER_BOOT_GRACE_PERIOD_MS) {
+                // Log grace period status every 10 seconds
+                static uint32_t lastGraceLog = 0;
+                if (millis() - lastGraceLog >= 10000) {
+                    uint32_t remaining = POWER_BOOT_GRACE_PERIOD_MS - (millis() - m_startTime);
+                    DEBUG_LOG_SYSTEM("Boot grace period: %lums remaining - sleep blocked", remaining);
+                    lastGraceLog = millis();
+                }
                 if (m_batteryStatus.usbPower) {
                     setState(STATE_USB_POWER);
                 }
@@ -435,10 +465,15 @@ void PowerManager::handlePowerState() {
             }
             // Check for battery issues
             if (m_batteryStatus.critical && !m_batteryStatus.usbPower) {
+                DEBUG_LOG_SYSTEM("Critical battery: %.2fV (%.0f%%) - entering CRITICAL_BATTERY state",
+                                 m_batteryStatus.voltage, m_batteryStatus.percentage);
                 setState(STATE_CRITICAL_BATTERY);
             } else if (m_batteryStatus.low && !m_batteryStatus.usbPower) {
+                DEBUG_LOG_SYSTEM("Low battery: %.2fV (%.0f%%) - entering LOW_BATTERY state",
+                                 m_batteryStatus.voltage, m_batteryStatus.percentage);
                 setState(STATE_LOW_BATTERY);
-            } else if (m_batteryStatus.usbPower) {
+            } else if (m_batteryStatus.usbPower && !m_enablePowerSavingOnUSB) {
+                DEBUG_LOG_SYSTEM("USB power detected - transitioning to USB_POWER state (sleep disabled)");
                 setState(STATE_USB_POWER);
             } else if (m_config.enableAutoSleep && shouldEnterSleep()) {
                 char reason[64];
@@ -488,6 +523,15 @@ void PowerManager::handlePowerState() {
             break;
 
         case STATE_USB_POWER:
+            // Log periodic reminder that sleep is disabled on USB
+            {
+                static uint32_t lastUSBLog = 0;
+                if (millis() - lastUSBLog >= 300000) {  // Every 5 minutes
+                    DEBUG_LOG_SYSTEM("USB_POWER state: sleep disabled while on USB power (battery: %.2fV)",
+                                     m_batteryStatus.voltage);
+                    lastUSBLog = millis();
+                }
+            }
             // Return to active when unplugged
             if (!m_batteryStatus.usbPower) {
                 if (m_batteryStatus.critical) {
@@ -500,6 +544,54 @@ void PowerManager::handlePowerState() {
             }
             break;
     }
+}
+
+void PowerManager::logStateSummary() {
+    static uint32_t lastSummaryLog = 0;
+
+    // Log every 5 minutes
+    if (millis() - lastSummaryLog < 300000) {
+        return;
+    }
+    lastSummaryLog = millis();
+
+    uint32_t idleTime = millis() - m_lastActivity;
+    uint32_t timeInState = millis() - m_stateEnterTime;
+
+    DEBUG_LOG_SYSTEM("=== Power State Summary ===");
+    DEBUG_LOG_SYSTEM("State: %s (for %lu.%lum)",
+                     getStateName(m_state),
+                     timeInState / 60000, (timeInState % 60000) / 1000);
+    DEBUG_LOG_SYSTEM("Battery: %.2fV (%.0f%%) %s",
+                     m_batteryStatus.voltage,
+                     m_batteryStatus.percentage,
+                     m_batteryStatus.usbPower ? "[USB]" : "[BATTERY]");
+    DEBUG_LOG_SYSTEM("Power Mode: %d (autoSleep=%s, deepSleep=%s)",
+                     m_powerSavingMode,
+                     m_config.enableAutoSleep ? "ON" : "OFF",
+                     m_config.enableDeepSleep ? "ON" : "OFF");
+    DEBUG_LOG_SYSTEM("USB Override: %s", m_enablePowerSavingOnUSB ? "ENABLED (power saving on USB)" : "DISABLED (default)");
+    DEBUG_LOG_SYSTEM("Idle: %lu.%lus / %lu.%lus",
+                     idleTime / 1000, (idleTime % 1000) / 100,
+                     m_config.idleToLightSleepMs / 1000,
+                     (m_config.idleToLightSleepMs % 1000) / 100);
+
+    // Explain why sleep is blocked (if applicable)
+    if (m_state == STATE_USB_POWER) {
+        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (USB power connected)");
+    } else if (m_state == STATE_CRITICAL_BATTERY || m_state == STATE_LOW_BATTERY) {
+        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (battery state)");
+    } else if (!m_config.enableAutoSleep) {
+        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (autoSleep disabled, mode=%d)", m_powerSavingMode);
+    } else if (idleTime < m_config.idleToLightSleepMs) {
+        uint32_t remaining = m_config.idleToLightSleepMs - idleTime;
+        DEBUG_LOG_SYSTEM("Sleep: WAITING (need %lu.%lus more idle time)",
+                         remaining / 1000, (remaining % 1000) / 100);
+    } else {
+        DEBUG_LOG_SYSTEM("Sleep: READY (conditions met)");
+    }
+
+    DEBUG_LOG_SYSTEM("==========================");
 }
 
 void PowerManager::setState(PowerState newState, const char* reason) {
@@ -519,15 +611,38 @@ void PowerManager::setState(PowerState newState, const char* reason) {
 bool PowerManager::shouldEnterSleep() {
     uint32_t idleTime = millis() - m_lastActivity;
 
-    // Check idle to light sleep timeout
-    if (m_config.enableAutoSleep && idleTime >= m_config.idleToLightSleepMs) {
+    if (!m_config.enableAutoSleep) {
+        // Log only every 60 seconds to avoid spam
+        static uint32_t lastAutoSleepLog = 0;
+        if (millis() - lastAutoSleepLog >= 60000) {
+            DEBUG_LOG_SYSTEM("Sleep check: autoSleep=DISABLED - sleep not allowed");
+            lastAutoSleepLog = millis();
+        }
+        return false;
+    }
+
+    if (idleTime >= m_config.idleToLightSleepMs) {
+        DEBUG_LOG_SYSTEM("Sleep check: READY - idle=%lums >= timeout=%lums",
+                         idleTime, m_config.idleToLightSleepMs);
         return true;
+    }
+
+    // Log only every 60 seconds to avoid spam
+    static uint32_t lastIdleLog = 0;
+    if (millis() - lastIdleLog >= 60000) {
+        uint32_t remaining = m_config.idleToLightSleepMs - idleTime;
+        DEBUG_LOG_SYSTEM("Sleep check: NOT READY - idle=%lums < timeout=%lums (need %lu.%lus more)",
+                         idleTime, m_config.idleToLightSleepMs,
+                         remaining / 1000, (remaining % 1000) / 100);
+        lastIdleLog = millis();
     }
 
     return false;
 }
 
 void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
+    DEBUG_LOG_SYSTEM("Entering light sleep: duration=%lums, wakeup=[GPIO,TIMER]", duration_ms);
+
     saveStateToRTC();
     setState(STATE_LIGHT_SLEEP, reason);
 
@@ -535,6 +650,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Configure wake sources
     if (duration_ms > 0) {
         esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL); // Convert to µs
+        DEBUG_LOG_SYSTEM("Light sleep: timer wakeup enabled (%lums)", duration_ms);
     }
 
     // ESP32-C3 uses GPIO wakeup for light sleep (gpio_wakeup_enable)
@@ -547,14 +663,20 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Wake on button press (LOW level since button is active-low with pull-up)
     gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
 
+    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (PIR pin=%d, BUTTON pin=%d)",
+                     PIR_SENSOR_PIN, BUTTON_PIN);
+
     // Reduce CPU frequency (ESP32-C3 max is 160MHz)
+    DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
 
     // Enter light sleep
+    DEBUG_LOG_SYSTEM("Light sleep: entering now...");
     esp_light_sleep_start();
 
     // Restore after wake (ESP32-C3 max is 160MHz, not 240MHz)
     setCPUFrequency(160);
+    DEBUG_LOG_SYSTEM("Light sleep: woke up, CPU restored to 160MHz");
 #endif
 
     // millis() on ESP32 is compensated for light sleep time
@@ -678,8 +800,13 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
         prevStateName, getStateName(newState), wakeSource, durationBuf);
 }
 
-void PowerManager::recordActivity() {
+void PowerManager::recordActivity(const char* source) {
     m_lastActivity = millis();
+    if (source) {
+        DEBUG_LOG_SYSTEM("Activity recorded: %s (idle timer reset)", source);
+    } else {
+        DEBUG_LOG_SYSTEM("Activity recorded (idle timer reset)");
+    }
 }
 
 uint32_t PowerManager::getTimeSinceActivity() const {
