@@ -152,7 +152,9 @@ void printStatus() {
 
     Serial.printf("Operating Mode: %s\n",
                   StateMachine::getModeName(stateMachine->getMode()));
-    Serial.printf("Warning Active: %s\n", stateMachine->isWarningActive() ? "YES" : "NO");
+    // Pre-compute expression to avoid stack corruption in variadic functions
+    const char* warningActiveStr = stateMachine->isWarningActive() ? "YES" : "NO";
+    Serial.printf("Warning Active: %s\n", warningActiveStr);
     Serial.println();
 
     // Sensor info (multi-sensor support)
@@ -167,11 +169,13 @@ void printStatus() {
         HAL_MotionSensor* sensor = sensorManager.getSensor(i);
         if (sensor) {
             const SensorCapabilities& caps = sensor->getCapabilities();
-            Serial.printf("  [%u] %s - %s\n", i,
-                         (sensor == primarySensor) ? "PRIMARY" : "secondary",
-                         caps.sensorTypeName);
-            Serial.printf("      Ready: %s\n", sensor->isReady() ? "YES" : "NO");
-            Serial.printf("      Motion: %s\n", sensor->motionDetected() ? "DETECTED" : "clear");
+            // Pre-compute expressions to avoid stack corruption in variadic functions
+            const char* sensorRoleStr = (sensor == primarySensor) ? "PRIMARY" : "secondary";
+            const char* readyStr = sensor->isReady() ? "YES" : "NO";
+            const char* motionStr = sensor->motionDetected() ? "DETECTED" : "clear";
+            Serial.printf("  [%u] %s - %s\n", i, sensorRoleStr, caps.sensorTypeName);
+            Serial.printf("      Ready: %s\n", readyStr);
+            Serial.printf("      Motion: %s\n", motionStr);
 
             if (!sensor->isReady() && caps.requiresWarmup) {
                 Serial.printf("      Warmup remaining: %u seconds\n",
@@ -412,18 +416,20 @@ void processSerialCommand() {
                 Serial.printf("\n--- Slot %u ---\n", i);
                 Serial.printf("Config: active=%d enabled=%d type=%d pin=%u\n",
                              cfg.active, cfg.enabled, cfg.type, cfg.primaryPin);
-                Serial.printf("Zone: %u (%s)\n", cfg.distanceZone,
-                             cfg.distanceZone == 0 ? "None" :
-                             cfg.distanceZone == 1 ? "Near" :
-                             cfg.distanceZone == 2 ? "Far" : "INVALID");
-                Serial.printf("LED Display: %s\n",
-                             cfg.sensorStatusDisplay ? "Enabled" : "Disabled");
+                // Pre-compute expressions to avoid stack corruption in variadic functions
+                const char* zoneStr = cfg.distanceZone == 0 ? "None" :
+                                     cfg.distanceZone == 1 ? "Near" :
+                                     cfg.distanceZone == 2 ? "Far" : "INVALID";
+                const char* ledDisplayStr = cfg.sensorStatusDisplay ? "Enabled" : "Disabled";
+                Serial.printf("Zone: %u (%s)\n", cfg.distanceZone, zoneStr);
+                Serial.printf("LED Display: %s\n", ledDisplayStr);
 
                 if (sensor) {
+                    // Pre-compute expressions to avoid stack corruption in variadic functions
+                    const char* readyStr = sensor->isReady() ? "YES" : "NO";
+                    const char* motionStr = sensor->motionDetected() ? "DETECTED" : "clear";
                     Serial.printf("Runtime: ready=%s motion=%s events=%u\n",
-                                 sensor->isReady() ? "YES" : "NO",
-                                 sensor->motionDetected() ? "DETECTED" : "clear",
-                                 sensor->getEventCount());
+                                 readyStr, motionStr, sensor->getEventCount());
                     if (!sensor->isReady()) {
                         Serial.printf("Warmup: %u ms remaining\n",
                                      sensor->getWarmupTimeRemaining());
@@ -1022,8 +1028,9 @@ void setup() {
             Serial.printf("[Setup]   - Confirmation window: %u ms\n", dirCfg.confirmationWindowMs);
             Serial.printf("[Setup]   - Simultaneous threshold: %u ms\n", dirCfg.simultaneousThresholdMs);
             Serial.printf("[Setup]   - Pattern timeout: %u ms\n", dirCfg.patternTimeoutMs);
-            Serial.printf("[Setup]   - Trigger on approaching: %s\n",
-                         dirCfg.triggerOnApproaching ? "YES" : "NO");
+            // Pre-compute expression to avoid stack corruption in variadic functions
+            const char* triggerApproachingStr = dirCfg.triggerOnApproaching ? "YES" : "NO";
+            Serial.printf("[Setup]   - Trigger on approaching: %s\n", triggerApproachingStr);
         } else {
             Serial.printf("[Setup] ERROR: Cannot create direction detector - invalid sensor slots (far=%d, near=%d)\n",
                          dirCfg.farSensorSlot, dirCfg.nearSensorSlot);
@@ -1445,8 +1452,10 @@ void loop() {
                         }
 
                         // Motion state
+                        // Pre-compute expression to avoid stack corruption in variadic functions
+                        const char* motionStr = motion ? "YES" : "NO ";
                         pos += snprintf(statusLine + pos, sizeof(statusLine) - pos,
-                                      "Motion:%s ", motion ? "YES" : "NO ");
+                                      "Motion:%s ", motionStr);
 
                         // Direction if supported
                         if (caps.supportsDirectionDetection) {

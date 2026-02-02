@@ -296,13 +296,18 @@ void DebugLogger::logSensorReading(uint8_t slot, uint8_t sensorType, uint32_t di
 
     // Format output based on sensor type
     if (sensorType == 1) {  // SENSOR_TYPE_PIR
+        // Pre-compute all expressions to avoid stack corruption in variadic functions
+        const char* triggeredStr = motion ? "TRIGGERED" : "idle";
+        const char* motionStr = motion ? "YES" : "NO";
         log(LEVEL_VERBOSE, CAT_SENSOR,
             "Slot %u: PIR=%s, motion=%s, dir=%s",
-            slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr);
+            slot, triggeredStr, motionStr, dirStr);
     } else {
+        // Pre-compute all expressions to avoid stack corruption in variadic functions
+        const char* motionStr = motion ? "YES" : "NO";
         log(LEVEL_VERBOSE, CAT_SENSOR,
             "Slot %u: dist=%u mm, motion=%s, dir=%s",
-            slot, distance, motion ? "YES" : "NO", dirStr);
+            slot, distance, motionStr, dirStr);
     }
 }
 
@@ -341,13 +346,18 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint8_t sensorType, ui
         else if (direction == 3) dirStr = "RECEDING";
 
         if (sensorType == 1) {  // SENSOR_TYPE_PIR
+            // Pre-compute all expressions to avoid stack corruption in variadic functions
+            const char* triggeredStr = motion ? "TRIGGERED" : "idle";
+            const char* motionStr = motion ? "YES" : "NO";
             log(LEVEL_VERBOSE, CAT_SENSOR,
                 "Slot %u: PIR=%s, motion=%s, dir=%s [INITIAL]",
-                slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr);
+                slot, triggeredStr, motionStr, dirStr);
         } else {
+            // Pre-compute all expressions to avoid stack corruption in variadic functions
+            const char* motionStr = motion ? "YES" : "NO";
             log(LEVEL_VERBOSE, CAT_SENSOR,
                 "Slot %u: dist=%u mm, motion=%s, dir=%s [INITIAL]",
-                slot, distance, motion ? "YES" : "NO", dirStr);
+                slot, distance, motionStr, dirStr);
         }
         return;
     }
@@ -401,13 +411,18 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint8_t sensorType, ui
         }
 
         if (sensorType == 1) {  // SENSOR_TYPE_PIR
+            // Pre-compute all expressions to avoid stack corruption in variadic functions
+            const char* triggeredStr = motion ? "TRIGGERED" : "idle";
+            const char* motionStr = motion ? "YES" : "NO";
             log(LEVEL_VERBOSE, CAT_SENSOR,
                 "Slot %u: PIR=%s, motion=%s, dir=%s [CHANGED: %s]",
-                slot, motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO", dirStr, changeDesc);
+                slot, triggeredStr, motionStr, dirStr, changeDesc);
         } else {
+            // Pre-compute all expressions to avoid stack corruption in variadic functions
+            const char* motionStr = motion ? "YES" : "NO";
             log(LEVEL_VERBOSE, CAT_SENSOR,
                 "Slot %u: dist=%u mm, motion=%s, dir=%s [CHANGED: %s]",
-                slot, distance, motion ? "YES" : "NO", dirStr, changeDesc);
+                slot, distance, motionStr, dirStr, changeDesc);
         }
 
         // Update state
@@ -436,15 +451,20 @@ void DebugLogger::logSensorReadingIfChanged(uint8_t slot, uint8_t sensorType, ui
         if (shouldLogSummary) {
             uint32_t timeSinceLastLog = now - state.lastLogTime;
             if (sensorType == 1) {  // SENSOR_TYPE_PIR
+                // Pre-compute all expressions to avoid stack corruption in variadic functions
+                const char* triggeredStr = motion ? "TRIGGERED" : "idle";
+                const char* motionStr = motion ? "YES" : "NO";
                 log(LEVEL_VERBOSE, CAT_SENSOR,
                     "Slot %u: No change (%u readings over %u ms) - PIR=%s, motion=%s",
                     slot, state.unchangedCount, timeSinceLastLog,
-                    motion ? "TRIGGERED" : "idle", motion ? "YES" : "NO");
+                    triggeredStr, motionStr);
             } else {
+                // Pre-compute all expressions to avoid stack corruption in variadic functions
+                const char* motionStr = motion ? "YES" : "NO";
                 log(LEVEL_VERBOSE, CAT_SENSOR,
                     "Slot %u: No change (%u readings over %u ms) - dist=%u mm, motion=%s",
                     slot, state.unchangedCount, timeSinceLastLog,
-                    distance, motion ? "YES" : "NO");
+                    distance, motionStr);
             }
 
             state.unchangedCount = 0;
