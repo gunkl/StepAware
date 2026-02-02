@@ -61,3 +61,62 @@ However, `framework-arduinoespressif32` (v3.0.0 / espressif32@6.5.0) does
 **To enable ULP when the framework adds C3 support**, uncomment the three
 lines in `platformio.ini` marked `HAS_ULP_RISCV`.  Do not assume this is a
 hardware limitation — it is a framework packaging gap.
+
+---
+
+## ESP32-C3 GPIO Pin Restrictions
+
+**Reserved/Restricted Pins (DO NOT use for general purpose):**
+- **GPIO5**: Used for battery voltage divider circuit
+- **GPIO6**: Not a general-purpose I/O pin on ESP32-C3
+
+**Deep Sleep Wakeup Constraint:**
+- Only GPIO 0-5 can wake from deep sleep on ESP32-C3
+- Sensors/buttons for wakeup must be on GPIO 0-5
+
+**Current Pin Assignments:**
+- GPIO1: Near PIR sensor
+- GPIO2: (formerly Status LED - now configurable)
+- GPIO3: (formerly Hazard LED - now configurable)
+- GPIO4: Far PIR sensor
+- GPIO5: Battery voltage divider (RESERVED)
+
+---
+
+## Web UI Buffer Constraints
+
+**Critical ESP32 Heap Limitation:** Max contiguous heap allocation is ~64KB.
+
+The inline HTML dashboard (`buildDashboardHTML()` in `src/web_api.cpp`) is split
+into TWO parts to stay within this limit:
+
+**Current Buffer Sizes (lines 2542, 2993):**
+- `g_htmlPart1` (HTML/CSS): Reserved 44KB (45056 bytes)
+- `g_htmlPart2` (JavaScript): Reserved 44KB (45056 bytes), typically ~41KB used
+
+**IMPORTANT: When adding UI features:**
+1. Check serial log during boot for current sizes:
+   ```
+   buildDashboardHTML() complete: part1=XXXXX part2=XXXXX total=XXXXX bytes
+   ```
+2. If either part approaches its reservation (44KB):
+   - **Increase reservation** at lines 2542 or 2993 (max ~48KB per part is safe)
+   - **OR minify** JavaScript (remove whitespace, shorten variable names)
+   - **OR split into 3 parts** (last resort)
+
+3. Each part MUST stay under 64KB individually
+4. Total size can exceed 64KB (parts are allocated separately)
+
+**Symptoms of buffer overflow:**
+- Device crashes during web UI load
+- Boot loops when accessing dashboard
+- Heap fragmentation warnings in serial log
+
+**Known safe ranges:**
+- **As of 2026-01:** Part 1: ~35-40KB typical, 44KB reserved; Part 2: ~41KB, 44KB reserved (3KB headroom)
+- **As of 2026-02-02:** Part 2 increased to 48KB (49152 bytes) after adding:
+  - Single LED display type support with type-aware UI (~1.5KB JavaScript)
+  - Enhanced editDisplay() with GPIO pin editing (~1KB JavaScript)
+  - 4 new global LED settings (brightnessMedium, 3 blink rates) (~1KB HTML + JavaScript)
+  - Total additions: ~3.5KB to Part 2
+  - New Part 2 headroom: ~3-4KB at 48KB reservation

@@ -75,6 +75,7 @@ WebAPI::WebAPI(AsyncWebServer* server, StateMachine* stateMachine, ConfigManager
     , m_corsEnabled(true)
     , m_logWebSocket(nullptr)
     , m_maxWebSocketClients(3)
+    , m_initialized(false)
 {
 }
 
@@ -87,6 +88,12 @@ WebAPI::~WebAPI() {
 }
 
 bool WebAPI::begin() {
+    // Prevent duplicate initialization
+    if (m_initialized) {
+        DEBUG_LOG_API("WebAPI: Already initialized, skipping");
+        return true;
+    }
+
     if (!m_server || !m_stateMachine || !m_config) {
         DEBUG_LOG_API("WebAPI: Invalid parameters");
         return false;
@@ -490,6 +497,7 @@ bool WebAPI::begin() {
     DEBUG_LOG_API("WebSocket /ws/logs registered");
 
     DEBUG_LOG_API("WebAPI: ✓ Endpoints registered");
+    m_initialized = true;
     return true;
 }
 
@@ -2729,8 +2737,8 @@ void WebAPI::buildDashboardHTML() {
 
     // DISPLAYS SECTION
     html += "<div class=\"card\" style=\"margin-top:24px;\">";
-    html += "<h2>LED Matrix Display</h2>";
-    html += "<p class=\"form-help\" style=\"margin-bottom:16px;\">Configure 8x8 LED matrix for enhanced visual feedback.</p>";
+    html += "<h2>Display Configuration</h2>";
+    html += "<p class=\"form-help\" style=\"margin-bottom:16px;\">Configure single LED indicators and/or 8x8 LED matrices for visual feedback.</p>";
 
     html += "<div id=\"displays-list\"></div>";
 
@@ -2886,9 +2894,23 @@ void WebAPI::buildDashboardHTML() {
     html += "<div class=\"form-group\"><label class=\"form-label\">Full Brightness (0-255)</label>";
     html += "<input type=\"number\" id=\"cfg-ledBrightnessFull\" class=\"form-input\" min=\"0\" max=\"255\" value=\"255\">";
     html += "<div class=\"form-help\">LED brightness when fully on</div></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Medium Brightness (0-255)</label>";
+    html += "<input type=\"number\" id=\"cfg-ledBrightnessMedium\" class=\"form-input\" min=\"0\" max=\"255\" value=\"128\">";
+    html += "<div class=\"form-help\">LED brightness at medium level</div></div>";
     html += "<div class=\"form-group\"><label class=\"form-label\">Dim Brightness (0-255)</label>";
     html += "<input type=\"number\" id=\"cfg-ledBrightnessDim\" class=\"form-input\" min=\"0\" max=\"255\" value=\"50\">";
     html += "<div class=\"form-help\">LED brightness when dimmed</div></div>";
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Fast Blink Rate (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-ledBlinkFastMs\" class=\"form-input\" min=\"50\" max=\"5000\" value=\"200\">";
+    html += "<div class=\"form-help\">Milliseconds for fast blink pattern</div></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Slow Blink Rate (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-ledBlinkSlowMs\" class=\"form-input\" min=\"100\" max=\"10000\" value=\"1000\">";
+    html += "<div class=\"form-help\">Milliseconds for slow blink pattern</div></div>";
+    html += "<div class=\"form-group\"><label class=\"form-label\">Warning Blink Rate (ms)</label>";
+    html += "<input type=\"number\" id=\"cfg-ledBlinkWarningMs\" class=\"form-input\" min=\"50\" max=\"5000\" value=\"500\">";
+    html += "<div class=\"form-help\">Milliseconds for warning blink pattern</div></div>";
     html += "</div>";
 
     html += "<h3>Logging</h3>";
@@ -2982,9 +3004,9 @@ void WebAPI::buildDashboardHTML() {
 
     // --- Part 2: JavaScript ---
     g_htmlPart2.clear();
-    g_htmlPart2.reserve(45056);  // 44KB — fits the JS portion (last measured: ~41KB)
+    g_htmlPart2.reserve(49152);  // 48KB — increased from 44KB for LED config additions (was ~41KB, now ~44-45KB)
     String& html2 = g_htmlPart2;
-    LOG_DEBUG("Reserved 44KB for HTML part 2");
+    LOG_DEBUG("Reserved 48KB for HTML part 2");
 
     html2 += "<script>";
 
@@ -3108,7 +3130,11 @@ void WebAPI::buildDashboardHTML() {
     html2 += "else{document.getElementById('cfg-wifiPassword').value='';document.getElementById('cfg-wifiPassword').placeholder='';}";
     html2 += "document.getElementById('cfg-motionWarningDuration').value=Math.round((cfg.motion?.warningDuration||30000)/1000);";
     html2 += "document.getElementById('cfg-ledBrightnessFull').value=(cfg.led?.brightnessFull!==undefined)?cfg.led.brightnessFull:255;";
+    html2 += "document.getElementById('cfg-ledBrightnessMedium').value=(cfg.led?.brightnessMedium!==undefined)?cfg.led.brightnessMedium:128;";
     html2 += "document.getElementById('cfg-ledBrightnessDim').value=(cfg.led?.brightnessDim!==undefined)?cfg.led.brightnessDim:50;";
+    html2 += "document.getElementById('cfg-ledBlinkFastMs').value=(cfg.led?.blinkFastMs!==undefined)?cfg.led.blinkFastMs:200;";
+    html2 += "document.getElementById('cfg-ledBlinkSlowMs').value=(cfg.led?.blinkSlowMs!==undefined)?cfg.led.blinkSlowMs:1000;";
+    html2 += "document.getElementById('cfg-ledBlinkWarningMs').value=(cfg.led?.blinkWarningMs!==undefined)?cfg.led.blinkWarningMs:500;";
     html2 += "document.getElementById('cfg-logLevel').value=(cfg.logging?.level!==undefined)?cfg.logging.level:2;";
     html2 += "document.getElementById('cfg-batteryMonitoring').value=cfg.power?.batteryMonitoringEnabled?1:0;";
     html2 += "document.getElementById('cfg-powerSaving').value=cfg.power?.savingMode!==undefined?cfg.power.savingMode:0;";
@@ -3148,7 +3174,11 @@ void WebAPI::buildDashboardHTML() {
     html2 += "cfg.motion.warningDuration=parseInt(document.getElementById('cfg-motionWarningDuration').value)*1000;";
     html2 += "cfg.led=cfg.led||{};";
     html2 += "cfg.led.brightnessFull=parseInt(document.getElementById('cfg-ledBrightnessFull').value);";
+    html2 += "cfg.led.brightnessMedium=parseInt(document.getElementById('cfg-ledBrightnessMedium').value);";
     html2 += "cfg.led.brightnessDim=parseInt(document.getElementById('cfg-ledBrightnessDim').value);";
+    html2 += "cfg.led.blinkFastMs=parseInt(document.getElementById('cfg-ledBlinkFastMs').value);";
+    html2 += "cfg.led.blinkSlowMs=parseInt(document.getElementById('cfg-ledBlinkSlowMs').value);";
+    html2 += "cfg.led.blinkWarningMs=parseInt(document.getElementById('cfg-ledBlinkWarningMs').value);";
     html2 += "cfg.logging=cfg.logging||{};";
     html2 += "cfg.logging.level=parseInt(document.getElementById('cfg-logLevel').value);";
     html2 += "cfg.power=cfg.power||{};";
@@ -3457,7 +3487,9 @@ void WebAPI::buildDashboardHTML() {
     html2 += "const zoneStr=prompt('Distance Zone:\\n0=None (default)\\n1=Near (0.5-4m, position lower)\\n2=Far (3-12m, position higher)',sensor.distanceZone||0);";
     html2 += "if(zoneStr!==null){const zone=parseInt(zoneStr);if(!isNaN(zone)&&zone>=0&&zone<=2)sensor.distanceZone=zone;}";
     html2 += "const statusStr=prompt('Sensor status (show on LED matrix):\\n0=Off\\n1=On',sensor.sensorStatusDisplay?1:0);";
-    html2 += "if(statusStr!==null){const st=parseInt(statusStr);if(!isNaN(st)&&(st===0||st===1))sensor.sensorStatusDisplay=(st===1);}}";
+    html2 += "if(statusStr!==null){const st=parseInt(statusStr);if(!isNaN(st)&&(st===0||st===1))sensor.sensorStatusDisplay=(st===1);}";
+    html2 += "const pinModeStr=prompt('Pin Mode:\\n0=INPUT (AM312, main rail power)\\n1=INPUT_PULLUP (SR602, GPIO power - recommended)\\n2=INPUT_PULLDOWN (special cases)',sensor.pinMode||1);";
+    html2 += "if(pinModeStr!==null){const pinMode=parseInt(pinModeStr);if(pinMode>=0&&pinMode<=2){sensor.pinMode=pinMode;}else{alert('Invalid pin mode. Must be 0-2.');return;}}}";
     html2 += "else if(sensor.type===2||sensor.type===4){";
     html2 += "const maxDist=parseInt(prompt('Max detection distance (mm)\\nSensor starts detecting at this range:',sensor.maxDetectionDistance||3000));";
     html2 += "if(!isNaN(maxDist)&&maxDist>=100)sensor.maxDetectionDistance=maxDist;";
@@ -3537,16 +3569,23 @@ void WebAPI::buildDashboardHTML() {
     html2 += "content+='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;\">';";
     html2 += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Wiring Diagram</div>';";
     html2 += "content+='<div style=\"line-height:1.6;\">';";
+    html2 += "if(display.type===0){";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">LED Anode (+) → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sdaPin+'</span></div>';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">LED Cathode (-) → <span style=\"color:#000;font-weight:600;\">GND</span> (via resistor)</div>';";
+    html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">PWM Channel: <span style=\"color:#2563eb;font-weight:600;\">'+display.sclPin+'</span></div>';";
+    html2 += "}else{";
     html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix VCC → <span style=\"color:#dc2626;font-weight:600;\">3.3V</span></div>';";
     html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix GND → <span style=\"color:#000;font-weight:600;\">GND</span></div>';";
     html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SDA → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sdaPin+'</span></div>';";
     html2 += "content+='<div style=\"color:#64748b;font-size:0.85em;\">Matrix SCL → <span style=\"color:#2563eb;font-weight:600;\">GPIO '+display.sclPin+'</span></div>';";
+    html2 += "}";
     html2 += "content+='</div></div>';";
     html2 += "content+='<div><div style=\"font-weight:600;margin-bottom:6px;font-size:0.9em;\">Configuration</div>';";
     html2 += "content+='<div style=\"line-height:1.6;\">';";
-    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">I2C Address:</span> <span>0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';";
-    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Brightness:</span> <span>'+display.brightness+'/15</span></div>';";
-    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Rotation:</span> <span>'+(display.rotation*90)+'°</span></div>';";
+    html2 += "if(display.type===1){content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">I2C Address:</span> <span>0x'+display.i2cAddress.toString(16).toUpperCase()+'</span></div>';}";
+    html2 += "const maxBright=display.type===0?255:15;";
+    html2 += "content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Brightness:</span> <span>'+display.brightness+'/'+maxBright+'</span></div>';";
+    html2 += "if(display.type===1){content+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Rotation:</span> <span>'+(display.rotation*90)+'°</span></div>';}";
     html2 += "content+='</div></div></div>';";
 
     // Hardware Info section for displays (LED Matrix I2C error rate)
@@ -3581,9 +3620,25 @@ void WebAPI::buildDashboardHTML() {
     html2 += "let slot=-1;";
     html2 += "for(let i=0;i<2;i++){if(!displaySlots[i]){slot=i;break;}}";
     html2 += "if(slot===-1){alert('Maximum 2 displays reached');return;}";
-    html2 += "const name=prompt('Display name:','8x8 Matrix');";
+    html2 += "const isStatus=confirm('Add Status LED (OK) or Hazard LED (Cancel)?');";
+    html2 += "const name=prompt('Display name:',isStatus?'Status LED':'Hazard LED');";
     html2 += "if(!name)return;";
-    html2 += "const newDisplay={slot:slot,name:name,type:1,i2cAddress:0x70,sdaPin:7,sclPin:10,enabled:true,brightness:15,rotation:0,useForStatus:true};";
+    html2 += "const typeStr=prompt('Display type:\\n0 = Single LED\\n1 = 8x8 Matrix','0');";
+    html2 += "const type=parseInt(typeStr);";
+    html2 += "if(type!==0&&type!==1){alert('Invalid type. Must be 0 or 1.');return;}";
+    html2 += "let newDisplay;";
+    html2 += "if(type===0){";
+    html2 += "const gpioPin=prompt('GPIO Pin:','2');";
+    html2 += "const pwmChannel=prompt('PWM Channel (0-15):','0');";
+    html2 += "const brightness=prompt('Brightness (0-255):','255');";
+    html2 += "newDisplay={slot:slot,name:name,type:0,i2cAddress:0,sdaPin:parseInt(gpioPin),sclPin:parseInt(pwmChannel),enabled:true,brightness:parseInt(brightness),rotation:0,useForStatus:isStatus};";
+    html2 += "}else{";
+    html2 += "const i2cAddr=prompt('I2C Address (0x70-0x77):','0x70');";
+    html2 += "const sdaPin=prompt('SDA Pin:','7');";
+    html2 += "const sclPin=prompt('SCL Pin:','10');";
+    html2 += "const brightness=prompt('Brightness (0-15):','15');";
+    html2 += "newDisplay={slot:slot,name:name,type:1,i2cAddress:parseInt(i2cAddr),sdaPin:parseInt(sdaPin),sclPin:parseInt(sclPin),enabled:true,brightness:parseInt(brightness),rotation:0,useForStatus:isStatus};";
+    html2 += "}";
     html2 += "displaySlots[slot]=newDisplay;";
     html2 += "renderDisplays();";
     html2 += "saveDisplays();}";
@@ -3607,11 +3662,33 @@ void WebAPI::buildDashboardHTML() {
     html2 += "const display=displaySlots[slotIdx];";
     html2 += "if(!display)return;";
     html2 += "const name=prompt('Display name:',display.name);";
-    html2 += "if(name){display.name=name;}";
-    html2 += "const brightness=prompt('Brightness (0-15):',display.brightness);";
-    html2 += "if(brightness){display.brightness=parseInt(brightness)||15;}";
-    html2 += "const rotation=prompt('Rotation (0,1,2,3):',display.rotation);";
-    html2 += "if(rotation){display.rotation=parseInt(rotation)||0;}";
+    html2 += "if(name===null)return;";
+    html2 += "if(name)display.name=name;";
+    html2 += "const maxBright=display.type===0?255:15;";
+    html2 += "const brightness=prompt('Brightness (0-'+maxBright+'):',display.brightness);";
+    html2 += "if(brightness===null)return;";
+    html2 += "if(brightness)display.brightness=parseInt(brightness);";
+    html2 += "if(display.type===0){";
+    html2 += "const gpioPin=prompt('GPIO Pin:',display.sdaPin);";
+    html2 += "if(gpioPin===null)return;";
+    html2 += "if(gpioPin)display.sdaPin=parseInt(gpioPin);";
+    html2 += "const pwmChannel=prompt('PWM Channel (0-15):',display.sclPin);";
+    html2 += "if(pwmChannel===null)return;";
+    html2 += "if(pwmChannel)display.sclPin=parseInt(pwmChannel);";
+    html2 += "}else{";
+    html2 += "const sdaPin=prompt('SDA Pin:',display.sdaPin);";
+    html2 += "if(sdaPin===null)return;";
+    html2 += "if(sdaPin)display.sdaPin=parseInt(sdaPin);";
+    html2 += "const sclPin=prompt('SCL Pin:',display.sclPin);";
+    html2 += "if(sclPin===null)return;";
+    html2 += "if(sclPin)display.sclPin=parseInt(sclPin);";
+    html2 += "const i2cAddr=prompt('I2C Address (hex):','0x'+display.i2cAddress.toString(16));";
+    html2 += "if(i2cAddr===null)return;";
+    html2 += "if(i2cAddr)display.i2cAddress=parseInt(i2cAddr);";
+    html2 += "const rotation=prompt('Rotation (0-3):',display.rotation);";
+    html2 += "if(rotation===null)return;";
+    html2 += "if(rotation)display.rotation=parseInt(rotation);";
+    html2 += "}";
     html2 += "renderDisplays();";
     html2 += "saveDisplays();}";
 

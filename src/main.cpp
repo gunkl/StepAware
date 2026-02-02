@@ -29,6 +29,7 @@
 #include "wifi_manager.h"
 #include "web_api.h"
 #include "debug_logger.h"
+#include "crash_handler.h"
 #include "power_manager.h"
 #include "ntp_manager.h"
 #include "recal_scheduler.h"
@@ -45,8 +46,8 @@ DirectionDetector* directionDetector = nullptr;
 
 // Display components (Issue #12)
 HAL_LEDMatrix_8x8* ledMatrix = nullptr;  // 8x8 LED matrix display
-HAL_LED hazardLED(PIN_HAZARD_LED, LED_PWM_CHANNEL, MOCK_HARDWARE);
-HAL_LED statusLED(PIN_STATUS_LED, LED_PWM_CHANNEL + 1, MOCK_HARDWARE);
+HAL_LED* hazardLED = nullptr;            // Hazard LED (initialized conditionally based on config)
+HAL_LED* statusLED = nullptr;            // Status LED (initialized conditionally based on config)
 HAL_Button modeButton(PIN_BUTTON, BUTTON_DEBOUNCE_MS, 1000, MOCK_HARDWARE);
 
 // State Machine (initialized after sensor creation)
@@ -399,6 +400,41 @@ void processSerialCommand() {
             configManager.print();
             break;
 
+        case 'd':
+        case 'D':
+            // Sensor diagnostics - show config and runtime status
+            Serial.println("\n[Diagnostics] Sensor Configuration & Status");
+            Serial.println("=============================================");
+            for (uint8_t i = 0; i < 4; i++) {
+                const ConfigManager::SensorSlotConfig& cfg = configManager.getConfig().sensors[i];
+                HAL_MotionSensor* sensor = sensorManager.getSensor(i);
+
+                Serial.printf("\n--- Slot %u ---\n", i);
+                Serial.printf("Config: active=%d enabled=%d type=%d pin=%u\n",
+                             cfg.active, cfg.enabled, cfg.type, cfg.primaryPin);
+                Serial.printf("Zone: %u (%s)\n", cfg.distanceZone,
+                             cfg.distanceZone == 0 ? "None" :
+                             cfg.distanceZone == 1 ? "Near" :
+                             cfg.distanceZone == 2 ? "Far" : "INVALID");
+                Serial.printf("LED Display: %s\n",
+                             cfg.sensorStatusDisplay ? "Enabled" : "Disabled");
+
+                if (sensor) {
+                    Serial.printf("Runtime: ready=%s motion=%s events=%u\n",
+                                 sensor->isReady() ? "YES" : "NO",
+                                 sensor->motionDetected() ? "DETECTED" : "clear",
+                                 sensor->getEventCount());
+                    if (!sensor->isReady()) {
+                        Serial.printf("Warmup: %u ms remaining\n",
+                                     sensor->getWarmupTimeRemaining());
+                    }
+                } else {
+                    Serial.println("Runtime: NO SENSOR OBJECT!");
+                }
+            }
+            Serial.println("=============================================\n");
+            break;
+
         case 'l':
         case 'L':
             // List all configured sensors
@@ -536,13 +572,15 @@ void triggerWarningDisplay(uint32_t duration_ms) {
             duration_ms
         );
         DEBUG_LOG_LED("Triggered matrix motion alert (duration: %u ms)", duration_ms);
-    } else {
+    } else if (hazardLED) {
         // Fall back to hazard LED warning pattern
-        hazardLED.startPattern(
+        hazardLED->startPattern(
             HAL_LED::PATTERN_BLINK_WARNING,
             duration_ms
         );
         DEBUG_LOG_LED("Triggered LED warning (duration: %u ms)", duration_ms);
+    } else {
+        DEBUG_LOG_LED("WARNING: No display configured for warnings");
     }
 }
 
@@ -559,9 +597,9 @@ void showBatteryStatus(uint8_t percentage) {
             2000
         );
         DEBUG_LOG_LED("Showing battery low on matrix (%u%%)", percentage);
-    } else if (percentage < 30) {
+    } else if (percentage < 30 && hazardLED) {
         // Blink hazard LED slowly for low battery
-        hazardLED.startPattern(HAL_LED::PATTERN_BLINK_SLOW, 2000);
+        hazardLED->startPattern(HAL_LED::PATTERN_BLINK_SLOW, 2000);
         DEBUG_LOG_LED("Showing battery low on LED (%u%%)", percentage);
     }
 }
@@ -588,7 +626,9 @@ void stopDisplayAnimations() {
     if (ledMatrix) {
         ledMatrix->stopAnimation();
     }
-    hazardLED.stopPattern();
+    if (hazardLED) {
+        hazardLED->stopPattern();
+    }
 }
 
 // ============================================================================
@@ -610,11 +650,13 @@ void performWiFiReset() {
     // when those components are integrated into main.cpp
 
     // Blink 3 times to confirm WiFi reset
-    for (int i = 0; i < 3; i++) {
-        hazardLED.on(LED_BRIGHTNESS_FULL);
-        delay(200);
-        hazardLED.off();
-        delay(200);
+    if (hazardLED) {
+        for (int i = 0; i < 3; i++) {
+            hazardLED->on();
+            delay(200);
+            hazardLED->off();
+            delay(200);
+        }
     }
 
     Serial.println("[RESET] WiFi credentials cleared");
@@ -651,9 +693,11 @@ void performFactoryReset() {
     modeButton.resetClickCount();
 
     // Solid LED for 2 seconds to confirm factory reset
-    hazardLED.on(LED_BRIGHTNESS_FULL);
-    delay(2000);
-    hazardLED.off();
+    if (hazardLED) {
+        hazardLED->on();
+        delay(2000);
+        hazardLED->off();
+    }
 
     Serial.println("[RESET] All configuration reset to factory defaults");
     Serial.println("[RESET] Rebooting device...\n");
@@ -683,7 +727,9 @@ void handleBootButtonHold() {
     Serial.println("[BOOT] Hold 15s for WiFi reset, 30s for factory reset");
 
     // Indicate we're in reset detection mode with slow pulse
-    hazardLED.setPattern(HAL_LED::PATTERN_PULSE);
+    if (hazardLED) {
+        hazardLED->setPattern(HAL_LED::PATTERN_PULSE);
+    }
 
     while (modeButton.isPressed()) {
         uint32_t pressDuration = millis() - pressStart;
@@ -695,7 +741,9 @@ void handleBootButtonHold() {
             Serial.println("[BOOT] Keep holding for factory reset (15 more seconds)");
 
             // Fast blink to indicate WiFi reset pending
-            hazardLED.setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            if (hazardLED) {
+                hazardLED->setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            }
             wifiResetTriggered = true;
         }
 
@@ -706,12 +754,16 @@ void handleBootButtonHold() {
             Serial.println("[BOOT] WARNING: This will erase ALL settings!");
 
             // Solid LED to indicate factory reset pending
-            hazardLED.setPattern(HAL_LED::PATTERN_ON);
+            if (hazardLED) {
+                hazardLED->setPattern(HAL_LED::PATTERN_ON);
+            }
             factoryResetTriggered = true;
         }
 
         // Update LED pattern
-        hazardLED.update();
+        if (hazardLED) {
+            hazardLED->update();
+        }
         modeButton.update();
 
         delay(10);
@@ -730,7 +782,9 @@ void handleBootButtonHold() {
     }
 
     // Turn off LED
-    hazardLED.off();
+    if (hazardLED) {
+        hazardLED->off();
+    }
 }
 
 // ============================================================================
@@ -798,6 +852,11 @@ void setup() {
         Serial.println("[Setup] WARNING: Debug logger initialization failed");
     }
 
+    // Initialize crash handler and check for previous crash
+    Serial.println("[Setup] Initializing crash handler...");
+    CrashHandler::begin();  // Register panic/abort hooks
+    CrashHandler::logResetReason();  // Log reset reason, display any crash from previous boot
+
     // Initialize configuration manager (loads from SPIFFS)
     Serial.println("[Setup] Initializing configuration manager...");
     if (!configManager.begin()) {
@@ -815,6 +874,13 @@ void setup() {
     } else {
         Serial.println("[Setup] Configuration validation: PASSED");
         DEBUG_LOG_CONFIG("Configuration validation: PASSED (no errors)");
+    }
+
+    // Validate sensor configuration for common issues
+    Serial.println("[Setup] Validating sensor configuration...");
+    if (!configManager.validateSensorConfiguration()) {
+        Serial.println("[Setup] WARNING: Sensor configuration had errors and was corrected");
+        DEBUG_LOG_CONFIG("Sensor configuration validation found and corrected errors");
     }
 
     // Auto-configure direction detector based on sensor distance zones
@@ -880,6 +946,7 @@ void setup() {
             config.invertLogic = false;
             config.sampleWindowSize = sensorCfg.sampleWindowSize;
             config.sampleRateMs = sensorCfg.sampleRateMs;
+            config.pinMode = sensorCfg.pinMode;
 
             if (sensorManager.addSensor(i, config, sensorCfg.name,
                                        sensorCfg.isPrimary, MOCK_HARDWARE)) {
@@ -965,16 +1032,64 @@ void setup() {
         Serial.println("[Setup] Direction detector disabled");
     }
 
-    Serial.println("[Setup] Initializing hazard LED...");
-    if (!hazardLED.begin()) {
-        Serial.println("[Setup] ERROR: Failed to initialize hazard LED");
-        while (1) { delay(1000); }
+    // Initialize LEDs based on configuration
+    Serial.println("[Setup] Initializing LEDs based on configuration...");
+    hazardLED = nullptr;
+    statusLED = nullptr;
+
+    for (uint8_t i = 0; i < 2; i++) {
+        const ConfigManager::DisplaySlotConfig& display = cfg.displays[i];
+
+        // Skip if not a single LED, not active, or not enabled
+        if (display.type != DISPLAY_TYPE_SINGLE_LED || !display.active || !display.enabled) {
+            continue;
+        }
+
+        Serial.printf("[Setup] Initializing %s on GPIO%u (PWM channel %u)\n",
+                      display.name, display.sdaPin, display.sclPin);
+
+        // Create LED instance
+        HAL_LED* led = new HAL_LED(display.sdaPin, display.sclPin, MOCK_HARDWARE);
+        if (!led->begin()) {
+            Serial.printf("[Setup] WARNING: Failed to initialize %s on GPIO%u\n",
+                         display.name, display.sdaPin);
+            DEBUG_LOG_SYSTEM("Failed to initialize %s on GPIO%u", display.name, display.sdaPin);
+            delete led;
+            led = nullptr;
+            continue;  // Non-fatal - continue without this LED
+        }
+
+        // Set brightness
+        led->setBrightness(display.brightness);
+
+        // Assign to global pointer based on useForStatus flag
+        if (display.useForStatus) {
+            if (statusLED == nullptr) {
+                statusLED = led;
+                Serial.printf("[Setup] Status LED configured on GPIO%u\n", display.sdaPin);
+            } else {
+                Serial.printf("[Setup] WARNING: Multiple status LEDs configured, using first\n");
+                delete led;
+            }
+        } else {
+            if (hazardLED == nullptr) {
+                hazardLED = led;
+                Serial.printf("[Setup] Hazard LED configured on GPIO%u\n", display.sdaPin);
+            } else {
+                Serial.printf("[Setup] WARNING: Multiple hazard LEDs configured, using first\n");
+                delete led;
+            }
+        }
     }
 
-    Serial.println("[Setup] Initializing status LED...");
-    if (!statusLED.begin()) {
-        Serial.println("[Setup] ERROR: Failed to initialize status LED");
-        while (1) { delay(1000); }
+    // Log final LED configuration
+    if (hazardLED == nullptr) {
+        Serial.println("[Setup] WARNING: No hazard LED configured");
+        DEBUG_LOG_SYSTEM("No hazard LED configured");
+    }
+    if (statusLED == nullptr) {
+        Serial.println("[Setup] WARNING: No status LED configured");
+        DEBUG_LOG_SYSTEM("No status LED configured");
     }
 
     Serial.println("[Setup] Initializing mode button...");
@@ -1057,7 +1172,7 @@ void setup() {
 
     // Create and initialize state machine
     Serial.println("[Setup] Creating state machine...");
-    stateMachine = new StateMachine(&sensorManager, &hazardLED, &statusLED, &modeButton, &configManager);
+    stateMachine = new StateMachine(&sensorManager, hazardLED, statusLED, &modeButton, &configManager);
     if (!stateMachine) {
         Serial.println("[Setup] ERROR: Failed to allocate state machine");
         while (1) { delay(1000); }
@@ -1230,21 +1345,25 @@ void loop() {
             lastStatusBlink = now;
             statusLedState = !statusLedState;
 
-            if (statusLedState) {
-                // Brief flash (50ms)
-                statusLED.setBrightness(20);  // Dim brightness
-            } else {
-                statusLED.setBrightness(0);   // Off
+            if (statusLED) {
+                if (statusLedState) {
+                    // Brief flash (50ms)
+                    statusLED->setBrightness(20);  // Dim brightness
+                } else {
+                    statusLED->setBrightness(0);   // Off
+                }
             }
         }
 
         // Turn off after 50ms flash
-        if (statusLedState && (now - lastStatusBlink >= 50)) {
-            statusLED.setBrightness(0);
+        if (statusLED && statusLedState && (now - lastStatusBlink >= 50)) {
+            statusLED->setBrightness(0);
         }
     } else {
         // Power saving mode: keep status LED off
-        statusLED.setBrightness(0);
+        if (statusLED) {
+            statusLED->setBrightness(0);
+        }
     }
 
     // Diagnostic mode - real-time sensor view with change detection

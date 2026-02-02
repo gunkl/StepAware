@@ -51,7 +51,8 @@ public:
         CAT_WIFI       = 0x20,  // WiFi/network
         CAT_API        = 0x40,  // Web API calls
         CAT_SYSTEM     = 0x80,  // System events
-        CAT_ALL        = 0xFF   // All categories
+        CAT_CRASH      = 0x100, // Crash diagnostics
+        CAT_ALL        = 0x1FF  // All categories
     };
 
     DebugLogger();
@@ -64,7 +65,7 @@ public:
      * @param categoryMask Enabled categories (bitmask)
      * @return true if successful
      */
-    bool begin(LogLevel level = LEVEL_ERROR, uint8_t categoryMask = CAT_ALL);
+    bool begin(LogLevel level = LEVEL_ERROR, uint16_t categoryMask = CAT_ALL);
 
     /**
      * @brief Set log level
@@ -79,12 +80,12 @@ public:
     /**
      * @brief Enable/disable category
      */
-    void setCategoryMask(uint8_t mask) { m_categoryMask = mask; }
+    void setCategoryMask(uint16_t mask) { m_categoryMask = mask; }
 
     /**
      * @brief Get current category mask
      */
-    uint8_t getCategoryMask() const { return m_categoryMask; }
+    uint16_t getCategoryMask() const { return m_categoryMask; }
 
     /**
      * @brief Log message
@@ -107,6 +108,7 @@ public:
     void logWiFi(const char* format, ...);
     void logAPI(const char* format, ...);
     void logSystem(const char* format, ...);
+    void logCrash(const char* format, ...);
 
     /**
      * @brief Special logging for detailed diagnostics
@@ -184,7 +186,7 @@ private:
     };
 
     LogLevel m_level;
-    uint8_t m_categoryMask;
+    uint16_t m_categoryMask;
     bool m_initialized;
     uint32_t m_bootCycle;
     File m_currentFile;
@@ -244,5 +246,6 @@ extern DebugLogger g_debugLogger;
 #define DEBUG_LOG_WIFI(...)   g_debugLogger.logWiFi(__VA_ARGS__)
 #define DEBUG_LOG_API(...)    g_debugLogger.logAPI(__VA_ARGS__)
 #define DEBUG_LOG_SYSTEM(...) g_debugLogger.logSystem(__VA_ARGS__)
+#define DEBUG_LOG_CRASH(...)  g_debugLogger.logCrash(__VA_ARGS__)
 
 #endif // STEPAWARE_DEBUG_LOGGER_H

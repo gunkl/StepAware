@@ -19,6 +19,7 @@ const SensorCapabilities HAL_PIR::s_capabilities = {
 
 HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     : m_pin(pin)
+    , m_pinMode(1)  // Default to INPUT_PULLUP
     , m_mockMode(mock_mode)
     , m_initialized(false)
     , m_motionDetected(false)
@@ -49,9 +50,9 @@ bool HAL_PIR::begin() {
     DEBUG_LOG_SENSOR("HAL_PIR: Initializing PIR sensor...");
 
     if (!m_mockMode) {
-        // Configure GPIO pin as input
-        pinMode(m_pin, INPUT);
-        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured as INPUT", m_pin);
+        // Configure GPIO pin mode (0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN)
+        pinMode(m_pin, m_pinMode);
+        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured with mode %d", m_pin, m_pinMode);
 
         // Configure power pin if assigned (drives PIR VCC directly)
         if (m_powerPin != PIN_PIR_POWER_NONE) {
@@ -237,6 +238,12 @@ void HAL_PIR::mockSetReady(bool ready) {
 // =========================================================================
 // Power-Cycle Recalibration Methods
 // =========================================================================
+
+void HAL_PIR::setPinMode(uint8_t mode) {
+    if (mode <= 2) {
+        m_pinMode = mode;
+    }
+}
 
 void HAL_PIR::setPowerPin(uint8_t pin) {
     m_powerPin = pin;

@@ -46,10 +46,10 @@ static const uint8_t MODE_INDICATOR_MOTION[] = {
 // Gap at top, arrow at left end points up-right toward the opening
 static const uint8_t MODE_INDICATOR_REBOOT[] = {
     0b00000000,  //
-    0b00010000,  //    # #         arrow tip
-    0b00110000,  //   # ##         arrowhead
-    0b01110010,  //  #             arrow base + right arc (2-px gap)
-    0b01000010,  //  #    #        circle sides
+    0b00010000,  //    ##          arrow tip
+    0b00110000,  //   #   #        arrowhead
+    0b01110010,  //  #    #        arrow base + right arc (2-px gap)
+    0b01000010,  //  #             circle sides
     0b01000010,  //  #    #        circle sides
     0b00100100,  //   #  #         circle narrows
     0b00011000   //    ##          circle bottom
@@ -108,10 +108,18 @@ bool StateMachine::begin(OperatingMode initialMode) {
 
     DEBUG_LOG_STATE("StateMachine: Initializing...");
 
-    // Validate hardware pointers
-    if (!m_sensorManager || !m_hazardLED || !m_statusLED || !m_button) {
+    // Validate essential hardware pointers (LEDs are optional)
+    if (!m_sensorManager || !m_button) {
         DEBUG_LOG_STATE("StateMachine: Hardware HAL not initialized");
         return false;
+    }
+
+    // Log LED configuration status
+    if (!m_hazardLED) {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No hazard LED configured");
+    }
+    if (!m_statusLED) {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No status LED configured");
     }
 
     m_startTime = millis();
@@ -132,9 +140,13 @@ void StateMachine::update() {
         return;
     }
 
-    // Update hardware HALs
-    m_hazardLED->update();
-    m_statusLED->update();
+    // Update hardware HALs (LEDs may be nullptr)
+    if (m_hazardLED) {
+        m_hazardLED->update();
+    }
+    if (m_statusLED) {
+        m_statusLED->update();
+    }
     m_button->update();
 
     // Update sensor manager
@@ -361,7 +373,7 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
         DEBUG_LOG_STATE("StateMachine: LED matrix available and ready, starting MOTION_ALERT animation");
         m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
-    } else {
+    } else if (m_hazardLED) {
         if (m_ledMatrix) {
             DEBUG_LOG_STATE("StateMachine: LED matrix exists but not ready (isReady=%d)", m_ledMatrix->isReady());
         } else {
@@ -369,6 +381,8 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
         }
         m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
+    } else {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No display configured for warnings");
     }
 }
 
@@ -383,7 +397,9 @@ void StateMachine::stopWarning() {
     if (m_ledMatrix) {
         m_ledMatrix->stopAnimation();
     }
-    m_hazardLED->stopPattern();
+    if (m_hazardLED) {
+        m_hazardLED->stopPattern();
+    }
 
     DEBUG_LOG_STATE("StateMachine: Warning stopped");
 }
@@ -404,8 +420,12 @@ void StateMachine::enterMode(OperatingMode mode) {
     switch (mode) {
         case OFF:
             // Turn off all LEDs
-            m_hazardLED->stopPattern();
-            m_statusLED->setPattern(HAL_LED::PATTERN_OFF);
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_OFF);
+            }
             // Show OFF indicator on matrix
             if (m_ledMatrix && m_ledMatrix->isReady()) {
                 m_ledMatrix->stopAnimation();
@@ -419,8 +439,12 @@ void StateMachine::enterMode(OperatingMode mode) {
 
         case CONTINUOUS_ON:
             // Start continuous hazard warning
-            m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, 0);  // 0 = infinite
-            m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_SLOW);
+            if (m_hazardLED) {
+                m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, 0);  // 0 = infinite
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_SLOW);
+            }
             // Show CONTINUOUS_ON indicator; arrow loop starts after indicator expires (see update())
             if (m_ledMatrix && m_ledMatrix->isReady()) {
                 m_ledMatrix->stopAnimation();
@@ -433,9 +457,13 @@ void StateMachine::enterMode(OperatingMode mode) {
 
         case MOTION_DETECT:
             // Wait for motion events
-            m_hazardLED->stopPattern();
-            m_hazardLED->off();  // Defensive: ensure LED is physically off
-            m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+                m_hazardLED->off();  // Defensive: ensure LED is physically off
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            }
             // Show MOTION_DETECT indicator on matrix
             if (m_ledMatrix && m_ledMatrix->isReady()) {
                 m_ledMatrix->stopAnimation();
@@ -475,7 +503,9 @@ void StateMachine::exitMode(OperatingMode mode) {
 
         case CONTINUOUS_ON:
             // Stop continuous pattern
-            m_hazardLED->stopPattern();
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+            }
             // Stop matrix arrow loop if running
             if (m_ledMatrix && m_ledMatrix->isReady()) {
                 m_ledMatrix->stopAnimation();
@@ -634,19 +664,42 @@ void StateMachine::updateSensorStatusLEDs() {
     for (uint8_t i = 0; i < 4; i++) {
         const ConfigManager::SensorSlotConfig& sensorCfg = cfg.sensors[i];
 
-        // Only process active PIR sensors with status display enabled and a valid zone
-        if (!sensorCfg.active || !sensorCfg.enabled ||
-            sensorCfg.type != SENSOR_TYPE_PIR ||
-            !sensorCfg.sensorStatusDisplay ||
-            (sensorCfg.distanceZone != 1 && sensorCfg.distanceZone != 2)) {
-            // Log sensors that are active but fail the filter (one-time when matrix becomes idle)
-            if (sensorCfg.active && matrixJustBecameIdle) {
-                DEBUG_LOG_STATE("SensorStatusLEDs: Slot %d active=%d enabled=%d type=%d "
-                               "statusDisplay=%d zone=%d (skipped)",
-                               i, sensorCfg.active, sensorCfg.enabled, sensorCfg.type,
-                               sensorCfg.sensorStatusDisplay, sensorCfg.distanceZone);
+        // Log configuration when matrix becomes idle
+        if (matrixJustBecameIdle && sensorCfg.active) {
+            DEBUG_LOG_STATE("Slot %u: active=%d enabled=%d type=%d zone=%d display=%d",
+                           i, sensorCfg.active, sensorCfg.enabled, sensorCfg.type,
+                           sensorCfg.distanceZone, sensorCfg.sensorStatusDisplay);
+        }
+
+        // Enhanced filter logic with detailed logging
+        if (!sensorCfg.active) {
+            if (matrixJustBecameIdle && i < 2) DEBUG_LOG_STATE("  Slot %u: inactive", i);
+            continue;
+        }
+        if (!sensorCfg.enabled) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: disabled", i);
+            continue;
+        }
+        if (sensorCfg.type != SENSOR_TYPE_PIR) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: not PIR (type %d)", i, sensorCfg.type);
+            continue;
+        }
+        if (!sensorCfg.sensorStatusDisplay) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: status display OFF", i);
+            continue;
+        }
+        if (sensorCfg.distanceZone != 1 && sensorCfg.distanceZone != 2) {
+            if (matrixJustBecameIdle) {
+                DEBUG_LOG_STATE("  Slot %u: FILTERED - invalid zone %d (need 1=Near or 2=Far)",
+                               i, sensorCfg.distanceZone);
             }
             continue;
+        }
+
+        // Passed all filters
+        if (matrixJustBecameIdle) {
+            DEBUG_LOG_STATE("  Slot %u: PASSED - will display on LED matrix (zone %d)",
+                           i, sensorCfg.distanceZone);
         }
 
         // Pixel positions: rightmost column, zone determines vertical position
@@ -663,7 +716,8 @@ void StateMachine::updateSensorStatusLEDs() {
         HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
         if (sensor && sensor->isReady()) {
             currentMotion = sensor->motionDetected();
-        } else {
+        } else if (matrixJustBecameIdle) {
+            // Log sensor readiness issues only once when matrix becomes idle
             DEBUG_LOG_STATE("SensorStatusLEDs: Slot %d sensor=%p ready=%d",
                            i, sensor, sensor ? sensor->isReady() : 0);
         }

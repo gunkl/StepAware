@@ -129,6 +129,7 @@ private:
     bool m_corsEnabled;                        ///< CORS enabled flag
     AsyncWebSocket* m_logWebSocket;            ///< WebSocket for log streaming
     uint32_t m_maxWebSocketClients;            ///< Maximum WebSocket clients (default: 3)
+    bool m_initialized;                        ///< Initialization guard (prevent duplicate begin() calls)
 
     // Endpoint handlers
 
