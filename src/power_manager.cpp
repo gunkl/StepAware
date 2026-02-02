@@ -558,23 +558,32 @@ void PowerManager::logStateSummary() {
     uint32_t idleTime = millis() - m_lastActivity;
     uint32_t timeInState = millis() - m_stateEnterTime;
 
+    // Pre-compute all complex expressions to avoid stack corruption in variadic functions
+    uint32_t stateMinutes = timeInState / 60000;
+    uint32_t stateSeconds = (timeInState % 60000) / 1000;
+    const char* batterySource = m_batteryStatus.usbPower ? "[USB]" : "[BATTERY]";
+    const char* autoSleepStr = m_config.enableAutoSleep ? "ON" : "OFF";
+    const char* deepSleepStr = m_config.enableDeepSleep ? "ON" : "OFF";
+    const char* usbOverrideStr = m_enablePowerSavingOnUSB
+        ? "ENABLED (power saving on USB)"
+        : "DISABLED (default)";
+    uint32_t idleSeconds = idleTime / 1000;
+    uint32_t idleDecimals = (idleTime % 1000) / 100;
+    uint32_t thresholdSeconds = m_config.idleToLightSleepMs / 1000;
+    uint32_t thresholdDecimals = (m_config.idleToLightSleepMs % 1000) / 100;
+
     DEBUG_LOG_SYSTEM("=== Power State Summary ===");
     DEBUG_LOG_SYSTEM("State: %s (for %lu.%lum)",
-                     getStateName(m_state),
-                     timeInState / 60000, (timeInState % 60000) / 1000);
+                     getStateName(m_state), stateMinutes, stateSeconds);
     DEBUG_LOG_SYSTEM("Battery: %.2fV (%.0f%%) %s",
                      m_batteryStatus.voltage,
                      m_batteryStatus.percentage,
-                     m_batteryStatus.usbPower ? "[USB]" : "[BATTERY]");
+                     batterySource);
     DEBUG_LOG_SYSTEM("Power Mode: %d (autoSleep=%s, deepSleep=%s)",
-                     m_powerSavingMode,
-                     m_config.enableAutoSleep ? "ON" : "OFF",
-                     m_config.enableDeepSleep ? "ON" : "OFF");
-    DEBUG_LOG_SYSTEM("USB Override: %s", m_enablePowerSavingOnUSB ? "ENABLED (power saving on USB)" : "DISABLED (default)");
+                     m_powerSavingMode, autoSleepStr, deepSleepStr);
+    DEBUG_LOG_SYSTEM("USB Override: %s", usbOverrideStr);
     DEBUG_LOG_SYSTEM("Idle: %lu.%lus / %lu.%lus",
-                     idleTime / 1000, (idleTime % 1000) / 100,
-                     m_config.idleToLightSleepMs / 1000,
-                     (m_config.idleToLightSleepMs % 1000) / 100);
+                     idleSeconds, idleDecimals, thresholdSeconds, thresholdDecimals);
 
     // Explain why sleep is blocked (if applicable)
     if (m_state == STATE_USB_POWER) {
@@ -585,8 +594,10 @@ void PowerManager::logStateSummary() {
         DEBUG_LOG_SYSTEM("Sleep: BLOCKED (autoSleep disabled, mode=%d)", m_powerSavingMode);
     } else if (idleTime < m_config.idleToLightSleepMs) {
         uint32_t remaining = m_config.idleToLightSleepMs - idleTime;
+        uint32_t remainingSeconds = remaining / 1000;
+        uint32_t remainingDecimals = (remaining % 1000) / 100;
         DEBUG_LOG_SYSTEM("Sleep: WAITING (need %lu.%lus more idle time)",
-                         remaining / 1000, (remaining % 1000) / 100);
+                         remainingSeconds, remainingDecimals);
     } else {
         DEBUG_LOG_SYSTEM("Sleep: READY (conditions met)");
     }
@@ -803,9 +814,11 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
 void PowerManager::recordActivity(const char* source) {
     m_lastActivity = millis();
     if (source) {
-        DEBUG_LOG_SYSTEM("Activity recorded: %s (idle timer reset)", source);
+        g_debugLogger.log(DebugLogger::LEVEL_VERBOSE, DebugLogger::CAT_SYSTEM,
+                         "Activity recorded: %s (idle timer reset)", source);
     } else {
-        DEBUG_LOG_SYSTEM("Activity recorded (idle timer reset)");
+        g_debugLogger.log(DebugLogger::LEVEL_VERBOSE, DebugLogger::CAT_SYSTEM,
+                         "Activity recorded (idle timer reset)");
     }
 }
 

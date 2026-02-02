@@ -184,7 +184,8 @@ void HAL_PIR::mockSetMotion(bool detected) {
 
     m_motionDetected = detected;
     m_mockMotionEndTime = 0;
-    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion set to %s", detected ? "TRUE" : "FALSE");
+    const char* detectedStr = detected ? "TRUE" : "FALSE";
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion set to %s", detectedStr);
 }
 
 void HAL_PIR::mockSetReady() {
@@ -232,7 +233,8 @@ void HAL_PIR::mockSetReady(bool ready) {
     }
 
     m_sensorReady = ready;
-    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor ready state set to %s", ready ? "TRUE" : "FALSE");
+    const char* readyStr = ready ? "TRUE" : "FALSE";
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor ready state set to %s", readyStr);
 }
 
 // =========================================================================

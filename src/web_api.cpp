@@ -738,7 +738,8 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
         m_power->setPowerSavingMode(cfg.powerSavingMode);
         DEBUG_LOG_API("Power saving mode set to %u via config", cfg.powerSavingMode);
         m_power->setEnablePowerSavingOnUSB(cfg.enablePowerSavingOnUSB);
-        DEBUG_LOG_API("USB power override set to %s via config", cfg.enablePowerSavingOnUSB ? "enabled" : "disabled");
+        const char* usbOverrideStr = cfg.enablePowerSavingOnUSB ? "enabled" : "disabled";
+        DEBUG_LOG_API("USB power override set to %s via config", usbOverrideStr);
     }
 
     // Apply direction detector config changes at runtime

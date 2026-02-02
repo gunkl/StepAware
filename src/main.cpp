@@ -1261,8 +1261,10 @@ void setup() {
 
     DEBUG_LOG_BOOT("=== Boot Complete ===");
     DEBUG_LOG_BOOT("Sensors active: %u", sensorManager.getActiveSensorCount());
-    DEBUG_LOG_BOOT("WiFi: %s", cfg.wifiEnabled ? "enabled" : "disabled");
-    DEBUG_LOG_BOOT("LED Matrix: %s", (ledMatrix && ledMatrix->isReady()) ? "ready" : "not available");
+    const char* wifiStatusStr = cfg.wifiEnabled ? "enabled" : "disabled";
+    DEBUG_LOG_BOOT("WiFi: %s", wifiStatusStr);
+    const char* ledMatrixStatusStr = (ledMatrix && ledMatrix->isReady()) ? "ready" : "not available";
+    DEBUG_LOG_BOOT("LED Matrix: %s", ledMatrixStatusStr);
 
     // Print help
     printHelp();
