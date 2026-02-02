@@ -5,6 +5,7 @@
 
 #include <unity.h>
 #include <stdint.h>
+#include <cstring>
 
 // Mock time
 unsigned long mock_time = 0;
