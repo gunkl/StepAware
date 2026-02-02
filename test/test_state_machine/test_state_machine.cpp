@@ -422,6 +422,76 @@ void test_short_press_does_not_reboot(void) {
     TEST_ASSERT_FALSE(sm->isRebootPending());
 }
 
+void test_sensor_status_display(void) {
+    // Configure slot 0 as Near PIR with status display on
+    sm->configureSensor(0, 1, true);   // zone=1 (Near), statusDisplay=true
+    // Configure slot 1 as Far PIR with status display on
+    sm->configureSensor(1, 2, true);   // zone=2 (Far), statusDisplay=true
+
+    // --- Trigger Near sensor (slot 0) ---
+    sm->setSensorTriggered(0, true);
+    sm->update();
+
+    // Bottom-right pixels (7,6) and (7,7) should be ON
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+    // Top-right pixels (7,0) and (7,1) should still be OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 0));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 1));
+
+    // --- Trigger Far sensor (slot 1) ---
+    sm->setSensorTriggered(1, true);
+    sm->update();
+
+    // Top-right pixels should now be ON
+    TEST_ASSERT_TRUE(sm->getPixel(7, 0));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 1));
+    // Bottom-right still ON from slot 0
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+
+    // --- Clear Near sensor (slot 0) ---
+    sm->setSensorTriggered(0, false);
+    sm->update();
+
+    // Bottom-right should be OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+    // Top-right still ON (slot 1 still triggered)
+    TEST_ASSERT_TRUE(sm->getPixel(7, 0));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 1));
+
+    // --- Clear Far sensor (slot 1) ---
+    sm->setSensorTriggered(1, false);
+    sm->update();
+
+    // Both corners OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 0));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 1));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+}
+
+void test_sensor_status_suppressed_during_animation(void) {
+    sm->configureSensor(0, 1, true);   // Near sensor with status display
+
+    // Sensor is triggered while matrix is animating
+    sm->setSensorTriggered(0, true);
+    sm->setMatrixAnimating(true);
+    sm->update();
+
+    // LEDs should NOT be drawn while animating
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+
+    // Animation ends — status LEDs should appear on next update
+    sm->setMatrixAnimating(false);
+    sm->update();
+
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -438,6 +508,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_long_press_triggers_reboot);
     RUN_TEST(test_mode_indicator_on_cycle);
     RUN_TEST(test_short_press_does_not_reboot);
+    RUN_TEST(test_sensor_status_display);
+    RUN_TEST(test_sensor_status_suppressed_during_animation);
 
     return UNITY_END();
 }
