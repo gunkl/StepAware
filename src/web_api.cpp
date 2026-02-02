@@ -886,6 +886,7 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         currentConfig.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 60;
         currentConfig.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;
         currentConfig.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;
+        currentConfig.sensors[slot].sensorStatusDisplay = sensorObj["sensorStatusDisplay"] | false;
     }
 
     freeRequestBuffer(request);

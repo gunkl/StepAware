@@ -171,7 +171,7 @@ void StateMachine::update() {
     // Reboot countdown expiry
     if (m_rebootPending && millis() >= m_rebootTime) {
         LOG_INFO("Reboot: executing ESP.restart()");
-#ifndef MOCK_HARDWARE
+#if !MOCK_HARDWARE
         ESP.restart();
 #else
         m_rebootPending = false;
@@ -618,8 +618,10 @@ void StateMachine::updateSensorStatusLEDs() {
     bool matrixBusy = m_ledMatrix->isAnimating() || m_modeIndicatorActive || m_rebootPending;
 
     // Animation just ended — matrix was cleared, force redraw of any active sensor indicators
-    if (m_lastMatrixWasAnimating && !matrixBusy) {
+    bool matrixJustBecameIdle = m_lastMatrixWasAnimating && !matrixBusy;
+    if (matrixJustBecameIdle) {
         memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
+        LOG_INFO("SensorStatusLEDs: matrix now idle, will scan for triggers");
     }
     m_lastMatrixWasAnimating = matrixBusy;
 
@@ -637,6 +639,13 @@ void StateMachine::updateSensorStatusLEDs() {
             sensorCfg.type != SENSOR_TYPE_PIR ||
             !sensorCfg.sensorStatusDisplay ||
             (sensorCfg.distanceZone != 1 && sensorCfg.distanceZone != 2)) {
+            // Log sensors that are active but fail the filter (one-time when matrix becomes idle)
+            if (sensorCfg.active && matrixJustBecameIdle) {
+                DEBUG_LOG_STATE("SensorStatusLEDs: Slot %d active=%d enabled=%d type=%d "
+                               "statusDisplay=%d zone=%d (skipped)",
+                               i, sensorCfg.active, sensorCfg.enabled, sensorCfg.type,
+                               sensorCfg.sensorStatusDisplay, sensorCfg.distanceZone);
+            }
             continue;
         }
 
@@ -654,10 +663,16 @@ void StateMachine::updateSensorStatusLEDs() {
         HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
         if (sensor && sensor->isReady()) {
             currentMotion = sensor->motionDetected();
+        } else {
+            DEBUG_LOG_STATE("SensorStatusLEDs: Slot %d sensor=%p ready=%d",
+                           i, sensor, sensor ? sensor->isReady() : 0);
         }
 
         // Only write to hardware when state actually changes (minimises I2C traffic)
         if (currentMotion != m_lastSensorDisplayState[i]) {
+            LOG_INFO("SensorStatusLEDs: Slot %d %s zone=%d → pixels (%d,%d)+(%d,%d)",
+                     i, currentMotion ? "ON " : "OFF", sensorCfg.distanceZone,
+                     x, y1, x, y2);
             m_ledMatrix->setPixel(x, y1, currentMotion);
             m_ledMatrix->setPixel(x, y2, currentMotion);
             m_lastSensorDisplayState[i] = currentMotion;
