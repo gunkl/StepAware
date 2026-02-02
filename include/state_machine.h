@@ -60,7 +60,8 @@ public:
         EVENT_USB_POWER_CONNECTED,   ///< USB power connected
         EVENT_USB_POWER_DISCONNECTED,///< USB power disconnected
         EVENT_LIGHT_DARK,       ///< Ambient light dark
-        EVENT_LIGHT_BRIGHT      ///< Ambient light bright
+        EVENT_LIGHT_BRIGHT,     ///< Ambient light bright
+        EVENT_BUTTON_LONG_PRESS ///< Mode button held >1 s (reboot)
     };
 
     /**
@@ -240,6 +241,12 @@ private:
     bool m_lastMotionState;      ///< Previous motion sensor state
     bool m_sensorReady;          ///< Motion sensor ready (warmup complete)
     bool m_lastApproachingState; ///< Previous approaching state (for edge detection)
+
+    // Mode indicator & reboot timing
+    bool     m_modeIndicatorActive;      ///< Indicator bitmap currently on-screen
+    uint32_t m_modeIndicatorEndTime;     ///< millis() when indicator should clear / transition
+    bool     m_rebootPending;            ///< Reboot requested, waiting for feedback delay
+    uint32_t m_rebootTime;               ///< millis() when ESP.restart() fires
 
     /**
      * @brief Enter a new operating mode
