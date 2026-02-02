@@ -425,6 +425,45 @@ setCpuFrequencyMhz(80);
 // Deep sleep: CPU off
 ```
 
+### Deep Sleep + ULP Mode
+
+When power saving mode 2 (Deep Sleep + ULP) is selected, the ESP32-C3's RISC-V ULP
+coprocessor takes over PIR motion detection during deep sleep. This replaces the
+standard GPIO deep-sleep wakeup for the PIR pin with a software polling loop that
+runs on the ULP core.
+
+**How it works:**
+
+1. Before entering deep sleep, `PowerManager::enterDeepSleep()` loads the ULP binary
+   (`ulp/ulp_pir_monitor.c`) into RTC SLOW memory and starts it.
+2. The ULP polls GPIO1 (PIR_SENSOR_PIN) every ~11 ms.
+3. On motion detection (GPIO1 HIGH), the ULP calls `ulp_riscv_wake_main_core()`.
+4. The main CPU boots (~150–300 ms); `esp_sleep_get_wakeup_cause()` returns
+   `ESP_SLEEP_WAKEUP_ULP`, which `detectAndRouteWakeSource()` routes to
+   `STATE_MOTION_ALERT`.
+
+**Why ULP instead of GPIO wakeup for PIR:**
+
+GPIO deep-sleep wakeup and ULP both result in the same main-CPU boot latency. The
+ULP adds a clean, unambiguous wakeup cause (`ESP_SLEEP_WAKEUP_ULP`) that does not
+require the button-vs-PIR GPIO-level disambiguation used by the GPIO wakeup path.
+The button (GPIO0) continues to use standard GPIO deep-sleep wakeup.
+
+**Fallback:**
+
+If `esp_ulp_load_program()` or `esp_ulp_start()` fails (e.g. RTC memory corruption
+or size overflow), `startULPPirMonitor()` automatically re-enables standard GPIO
+deep-sleep wakeup for the PIR pin. Motion detection continues to work; only the
+clean ULP wakeup-cause distinction is lost.
+
+**Power budget:**
+
+The ULP RISC-V core adds approximately 20–30 µA of average current during the
+polling loop. This is negligible compared to the ~120 µA quiescent deep-sleep
+current of the ESP32-C3.
+
+**Source:** `ulp/ulp_pir_monitor.c`
+
 ### 2. WiFi Power Saving
 
 ```cpp
@@ -611,8 +650,8 @@ public:
         float lowBatteryThreshold;           ///< Low battery voltage (V, default: 3.4V ~20%)
         float criticalBatteryThreshold;      ///< Critical battery voltage (V, default: 3.2V ~5%)
         uint32_t batteryCheckInterval;       ///< Battery check interval (ms, default: 10000)
-        bool enableAutoSleep;                ///< Enable automatic sleep (default: true)
-        bool enableDeepSleep;                ///< Enable deep sleep mode (default: true)
+        bool enableAutoSleep;                ///< Enable automatic sleep — driven internally by setPowerSavingMode() (not user-facing)
+        bool enableDeepSleep;                ///< Enable deep sleep mode — driven internally by setPowerSavingMode() (not user-facing)
         float voltageCalibrationOffset;      ///< Voltage calibration offset (V, default: 0.0)
         uint8_t lowBatteryLEDBrightness;     ///< LED brightness when low battery (0-255, default: 128 = 50%)
     };

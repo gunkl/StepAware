@@ -507,11 +507,21 @@ void HAL_LEDMatrix_8x8::animateMotionAlert() {
             drawFrame(shiftedArrow);
         }
     }
-    // Phase 3: Flash arrow twice (1600ms - 2400ms)
+    // Phase 3: flash arrow/clear (1600–2400 ms), then loop back to Phase 1 when duration == 0
     else {
+        uint32_t phaseElapsed = (now - m_animationStartTime) - 1600;
+
+        // After 800 ms in Phase 3 (total cycle = 2400 ms), loop if running indefinitely
+        if (m_animationDuration == 0 && phaseElapsed >= 800) {
+            m_animationStartTime = now;
+            m_animationFrame    = 0;
+            m_lastFrameTime     = now;
+            drawBitmap(ARROW_DOWN);   // first visible frame of Phase 1
+            return;
+        }
+
         if (elapsed >= MATRIX_FLASH_DURATION_MS) {
             m_lastFrameTime = now;
-
             if ((m_animationFrame % 2) == 0) {
                 clear();
             } else {

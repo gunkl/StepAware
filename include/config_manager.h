@@ -42,6 +42,8 @@ public:
         uint8_t sampleWindowSize;         // Rolling window size (3-20, 0=default 10)
         uint16_t sampleRateMs;            // Sample rate in ms (60+ for ultrasonic, 0=default 60)
         uint8_t distanceZone;             // PIR distance zone: 0=None, 1=Near (0.5-4m), 2=Far (3-12m)
+        bool sensorStatusDisplay;         // Show triggered state on LED matrix (PIR only)
+        uint8_t pinMode;                  // GPIO pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN (PIR only)
     };
 
     /**
@@ -121,8 +123,9 @@ public:
 
         // Power Management
         bool batteryMonitoringEnabled;     // Enable battery monitoring (requires external voltage divider on GPIO5)
-        bool powerSavingEnabled;           // Enable power saving (forced off when battery monitoring is disabled)
+        uint8_t powerSavingMode;           // Power saving mode: 0=Disabled, 1=Light Sleep, 2=Deep Sleep+ULP (forced to 0 when battery monitoring is disabled)
         uint32_t deepSleepAfterMs;         // ms of inactivity before deep sleep
+        bool enablePowerSavingOnUSB;       // Enable power saving even on USB (debug only, resets to false on boot)
 
         // Logging
         uint8_t logLevel;                  // Log level (DEBUG, INFO, WARN, ERROR)
@@ -211,6 +214,20 @@ public:
      * @return true if no corrections were needed, false if corrections were made
      */
     bool validateAndCorrect();
+
+    /**
+     * @brief Validate sensor configuration for common issues
+     *
+     * Checks for:
+     * - Invalid GPIO pins (> 21)
+     * - PIR sensors with LED display enabled but no distance zone
+     * - Duplicate GPIO pin assignments
+     *
+     * Should be called after loading configuration from file.
+     *
+     * @return true if no corrections were needed, false if corrections were made
+     */
+    bool validateSensorConfiguration();
 
     /**
      * @brief Auto-configure direction detector based on sensor distance zones

@@ -4,6 +4,60 @@
 #include "logger.h"
 #include "debug_logger.h"
 
+// ─── Mode-indicator bitmaps (8×8, MSB = leftmost pixel) ───
+
+// OFF: bold X — clearly distinct from the circle-based MOTION eye
+static const uint8_t MODE_INDICATOR_OFF[] = {
+    0b10000001,  // #      #
+    0b01000010,  //  #    #
+    0b00100100,  //   #  #
+    0b00011000,  //    ##
+    0b00011000,  //    ##
+    0b00100100,  //   #  #
+    0b01000010,  //  #    #
+    0b10000001   // #      #
+};
+
+// CONTINUOUS_ON: filled circle — always-on beacon
+static const uint8_t MODE_INDICATOR_CONTINUOUS[] = {
+    0b00011000,  //    ##
+    0b01111110,  //  ######
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b01111110,  //  ######
+    0b00011000   //    ##
+};
+
+// MOTION_DETECT: eye with pupil — sensing/watching
+static const uint8_t MODE_INDICATOR_MOTION[] = {
+    0b00000000,  //
+    0b00111100,  //   ####
+    0b01000010,  //  #    #
+    0b10011001,  // #  ##  #
+    0b10011001,  // #  ##  #
+    0b01000010,  //  #    #
+    0b00111100,  //   ####
+    0b00000000   //
+};
+
+// REBOOT: open circle with arrowhead pointing up into gap (refresh symbol)
+// Gap at top, arrow at left end points up-right toward the opening
+static const uint8_t MODE_INDICATOR_REBOOT[] = {
+    0b00000000,  //
+    0b00010000,  //    ##          arrow tip
+    0b00110000,  //   #   #        arrowhead
+    0b01110010,  //  #    #        arrow base + right arc (2-px gap)
+    0b01000010,  //  #             circle sides
+    0b01000010,  //  #    #        circle sides
+    0b00100100,  //   #  #         circle narrows
+    0b00011000   //    ##          circle bottom
+};
+
+#define MODE_INDICATOR_DURATION_MS   2000  // How long indicator bitmap stays on-screen
+#define REBOOT_FEEDBACK_DURATION_MS  2000  // How long reboot bitmap shows before restart
+
 StateMachine::StateMachine(SensorManager* sensorManager,
                            HAL_LED* hazardLED,
                            HAL_LED* statusLED,
@@ -28,7 +82,13 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_lastMotionState(false)
     , m_sensorReady(false)
     , m_lastApproachingState(false)
+    , m_modeIndicatorActive(false)
+    , m_modeIndicatorEndTime(0)
+    , m_rebootPending(false)
+    , m_rebootTime(0)
+    , m_lastMatrixWasAnimating(false)
 {
+    memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
 }
 
 StateMachine::~StateMachine() {
@@ -48,10 +108,18 @@ bool StateMachine::begin(OperatingMode initialMode) {
 
     DEBUG_LOG_STATE("StateMachine: Initializing...");
 
-    // Validate hardware pointers
-    if (!m_sensorManager || !m_hazardLED || !m_statusLED || !m_button) {
+    // Validate essential hardware pointers (LEDs are optional)
+    if (!m_sensorManager || !m_button) {
         DEBUG_LOG_STATE("StateMachine: Hardware HAL not initialized");
         return false;
+    }
+
+    // Log LED configuration status
+    if (!m_hazardLED) {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No hazard LED configured");
+    }
+    if (!m_statusLED) {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No status LED configured");
     }
 
     m_startTime = millis();
@@ -72,9 +140,13 @@ void StateMachine::update() {
         return;
     }
 
-    // Update hardware HALs
-    m_hazardLED->update();
-    m_statusLED->update();
+    // Update hardware HALs (LEDs may be nullptr)
+    if (m_hazardLED) {
+        m_hazardLED->update();
+    }
+    if (m_statusLED) {
+        m_statusLED->update();
+    }
     m_button->update();
 
     // Update sensor manager
@@ -92,6 +164,33 @@ void StateMachine::update() {
         handleEvent(EVENT_BUTTON_PRESS);
     }
 
+    // Check for long press (reboot trigger)
+    if (m_button->hasEvent(HAL_Button::EVENT_LONG_PRESS)) {
+        handleEvent(EVENT_BUTTON_LONG_PRESS);
+    }
+
+    // Mode-indicator expiry: clear matrix or start CONTINUOUS_ON arrow loop
+    if (m_modeIndicatorActive && millis() >= m_modeIndicatorEndTime) {
+        m_modeIndicatorActive = false;
+        if (m_currentMode == CONTINUOUS_ON && m_ledMatrix && m_ledMatrix->isReady()) {
+            m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, 0); // 0 = loop forever
+            LOG_INFO("CONTINUOUS_ON: started looping arrow animation on matrix");
+        } else if (m_ledMatrix && m_ledMatrix->isReady()) {
+            m_ledMatrix->clear();  // OFF / MOTION_DETECT: indicator done, go dark
+        }
+    }
+
+    // Reboot countdown expiry
+    if (m_rebootPending && millis() >= m_rebootTime) {
+        LOG_INFO("Reboot: executing ESP.restart()");
+#if !MOCK_HARDWARE
+        ESP.restart();
+#else
+        m_rebootPending = false;
+        LOG_INFO("Reboot: MOCK_HARDWARE — skipped actual restart");
+#endif
+    }
+
     // Check for motion events
     handleMotionDetection();
 
@@ -106,6 +205,9 @@ void StateMachine::update() {
 
     // Check for state transitions
     checkTransitions();
+
+    // Update per-sensor status LEDs (runs after all animation/mode logic has settled)
+    updateSensorStatusLEDs();
 }
 
 void StateMachine::handleEvent(SystemEvent event) {
@@ -113,6 +215,18 @@ void StateMachine::handleEvent(SystemEvent event) {
         case EVENT_BUTTON_PRESS:
             DEBUG_LOG_STATE("StateMachine: Event BUTTON_PRESS");
             cycleMode();
+            break;
+
+        case EVENT_BUTTON_LONG_PRESS:
+            LOG_INFO("Button: long press detected — reboot requested");
+            DEBUG_LOG_STATE("StateMachine: Event BUTTON_LONG_PRESS");
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->stopAnimation();
+                m_ledMatrix->drawBitmap(MODE_INDICATOR_REBOOT);
+                LOG_INFO("Reboot: displaying reboot indicator on matrix");
+            }
+            m_rebootPending = true;
+            m_rebootTime = millis() + REBOOT_FEEDBACK_DURATION_MS;
             break;
 
         case EVENT_MOTION_DETECTED:
@@ -185,6 +299,7 @@ void StateMachine::setMode(OperatingMode mode) {
 
     DEBUG_LOG_STATE("StateMachine: Mode change: %s -> %s",
              getModeName(m_currentMode), getModeName(mode));
+    LOG_INFO("Mode change: %s -> %s", getModeName(m_currentMode), getModeName(mode));
 
     // Log state transition
     g_debugLogger.logStateTransition(
@@ -258,7 +373,7 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
         DEBUG_LOG_STATE("StateMachine: LED matrix available and ready, starting MOTION_ALERT animation");
         m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on matrix (%u ms)", duration_ms);
-    } else {
+    } else if (m_hazardLED) {
         if (m_ledMatrix) {
             DEBUG_LOG_STATE("StateMachine: LED matrix exists but not ready (isReady=%d)", m_ledMatrix->isReady());
         } else {
@@ -266,6 +381,8 @@ void StateMachine::triggerWarning(uint32_t duration_ms) {
         }
         m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, duration_ms);
         DEBUG_LOG_STATE("StateMachine: Warning triggered on LED (%u ms)", duration_ms);
+    } else {
+        DEBUG_LOG_STATE("StateMachine: WARNING - No display configured for warnings");
     }
 }
 
@@ -280,7 +397,9 @@ void StateMachine::stopWarning() {
     if (m_ledMatrix) {
         m_ledMatrix->stopAnimation();
     }
-    m_hazardLED->stopPattern();
+    if (m_hazardLED) {
+        m_hazardLED->stopPattern();
+    }
 
     DEBUG_LOG_STATE("StateMachine: Warning stopped");
 }
@@ -301,22 +420,58 @@ void StateMachine::enterMode(OperatingMode mode) {
     switch (mode) {
         case OFF:
             // Turn off all LEDs
-            m_hazardLED->stopPattern();
-            m_statusLED->setPattern(HAL_LED::PATTERN_OFF);
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_OFF);
+            }
+            // Show OFF indicator on matrix
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->stopAnimation();
+                m_ledMatrix->drawBitmap(MODE_INDICATOR_OFF);
+                m_modeIndicatorActive = true;
+                m_modeIndicatorEndTime = millis() + MODE_INDICATOR_DURATION_MS;
+                LOG_INFO("Mode indicator: showing OFF bitmap on matrix");
+            }
             // Future: Enter deep sleep
             break;
 
         case CONTINUOUS_ON:
             // Start continuous hazard warning
-            m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, 0);  // 0 = infinite
-            m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_SLOW);
+            if (m_hazardLED) {
+                m_hazardLED->startPattern(HAL_LED::PATTERN_BLINK_WARNING, 0);  // 0 = infinite
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_SLOW);
+            }
+            // Show CONTINUOUS_ON indicator; arrow loop starts after indicator expires (see update())
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->stopAnimation();
+                m_ledMatrix->drawBitmap(MODE_INDICATOR_CONTINUOUS);
+                m_modeIndicatorActive = true;
+                m_modeIndicatorEndTime = millis() + MODE_INDICATOR_DURATION_MS;
+                LOG_INFO("Mode indicator: showing CONTINUOUS_ON bitmap on matrix");
+            }
             break;
 
         case MOTION_DETECT:
             // Wait for motion events
-            m_hazardLED->stopPattern();
-            m_hazardLED->off();  // Defensive: ensure LED is physically off
-            m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+                m_hazardLED->off();  // Defensive: ensure LED is physically off
+            }
+            if (m_statusLED) {
+                m_statusLED->setPattern(HAL_LED::PATTERN_BLINK_FAST);
+            }
+            // Show MOTION_DETECT indicator on matrix
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->stopAnimation();
+                m_ledMatrix->drawBitmap(MODE_INDICATOR_MOTION);
+                m_modeIndicatorActive = true;
+                m_modeIndicatorEndTime = millis() + MODE_INDICATOR_DURATION_MS;
+                LOG_INFO("Mode indicator: showing MOTION_DETECT bitmap on matrix");
+            }
             break;
 
         case MOTION_LIGHT:
@@ -332,6 +487,9 @@ void StateMachine::enterMode(OperatingMode mode) {
 }
 
 void StateMachine::exitMode(OperatingMode mode) {
+    // Cancel any active mode indicator display
+    m_modeIndicatorActive = false;
+
     // Stop any active warnings
     if (m_warningActive) {
         stopWarning();
@@ -345,7 +503,13 @@ void StateMachine::exitMode(OperatingMode mode) {
 
         case CONTINUOUS_ON:
             // Stop continuous pattern
-            m_hazardLED->stopPattern();
+            if (m_hazardLED) {
+                m_hazardLED->stopPattern();
+            }
+            // Stop matrix arrow loop if running
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->stopAnimation();
+            }
             break;
 
         case MOTION_DETECT:
@@ -472,5 +636,100 @@ void StateMachine::setDirectionDetector(DirectionDetector* detector) {
         DEBUG_LOG_STATE("StateMachine: Direction detector enabled (dual-PIR filtering)");
     } else {
         DEBUG_LOG_STATE("StateMachine: Direction detector disabled");
+    }
+}
+
+void StateMachine::updateSensorStatusLEDs() {
+    if (!m_ledMatrix || !m_ledMatrix->isReady() || !m_config || !m_initialized) {
+        return;
+    }
+
+    // Matrix is "busy" when an animation, mode indicator, or reboot bitmap owns the display
+    bool matrixBusy = m_ledMatrix->isAnimating() || m_modeIndicatorActive || m_rebootPending;
+
+    // Animation just ended — matrix was cleared, force redraw of any active sensor indicators
+    bool matrixJustBecameIdle = m_lastMatrixWasAnimating && !matrixBusy;
+    if (matrixJustBecameIdle) {
+        memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
+        LOG_INFO("SensorStatusLEDs: matrix now idle, will scan for triggers");
+    }
+    m_lastMatrixWasAnimating = matrixBusy;
+
+    if (matrixBusy) {
+        return;
+    }
+
+    const ConfigManager::Config& cfg = m_config->getConfig();
+
+    for (uint8_t i = 0; i < 4; i++) {
+        const ConfigManager::SensorSlotConfig& sensorCfg = cfg.sensors[i];
+
+        // Log configuration when matrix becomes idle
+        if (matrixJustBecameIdle && sensorCfg.active) {
+            DEBUG_LOG_STATE("Slot %u: active=%d enabled=%d type=%d zone=%d display=%d",
+                           i, sensorCfg.active, sensorCfg.enabled, sensorCfg.type,
+                           sensorCfg.distanceZone, sensorCfg.sensorStatusDisplay);
+        }
+
+        // Enhanced filter logic with detailed logging
+        if (!sensorCfg.active) {
+            if (matrixJustBecameIdle && i < 2) DEBUG_LOG_STATE("  Slot %u: inactive", i);
+            continue;
+        }
+        if (!sensorCfg.enabled) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: disabled", i);
+            continue;
+        }
+        if (sensorCfg.type != SENSOR_TYPE_PIR) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: not PIR (type %d)", i, sensorCfg.type);
+            continue;
+        }
+        if (!sensorCfg.sensorStatusDisplay) {
+            if (matrixJustBecameIdle) DEBUG_LOG_STATE("  Slot %u: status display OFF", i);
+            continue;
+        }
+        if (sensorCfg.distanceZone != 1 && sensorCfg.distanceZone != 2) {
+            if (matrixJustBecameIdle) {
+                DEBUG_LOG_STATE("  Slot %u: FILTERED - invalid zone %d (need 1=Near or 2=Far)",
+                               i, sensorCfg.distanceZone);
+            }
+            continue;
+        }
+
+        // Passed all filters
+        if (matrixJustBecameIdle) {
+            DEBUG_LOG_STATE("  Slot %u: PASSED - will display on LED matrix (zone %d)",
+                           i, sensorCfg.distanceZone);
+        }
+
+        // Pixel positions: rightmost column, zone determines vertical position
+        uint8_t x = 7;
+        uint8_t y1, y2;
+        if (sensorCfg.distanceZone == 1) {   // Near → bottom-right
+            y1 = 6; y2 = 7;
+        } else {                              // Far  → top-right
+            y1 = 0; y2 = 1;
+        }
+
+        // Read current motion state from the sensor
+        bool currentMotion = false;
+        HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+        if (sensor && sensor->isReady()) {
+            currentMotion = sensor->motionDetected();
+        } else if (matrixJustBecameIdle) {
+            // Log sensor readiness issues only once when matrix becomes idle
+            DEBUG_LOG_STATE("SensorStatusLEDs: Slot %d sensor=%p ready=%d",
+                           i, sensor, sensor ? sensor->isReady() : 0);
+        }
+
+        // Only write to hardware when state actually changes (minimises I2C traffic)
+        if (currentMotion != m_lastSensorDisplayState[i]) {
+            LOG_INFO("SensorStatusLEDs: Slot %d %s zone=%d → pixels (%d,%d)+(%d,%d)",
+                     i, currentMotion ? "ON " : "OFF", sensorCfg.distanceZone,
+                     x, y1, x, y2);
+            m_ledMatrix->setPixel(x, y1, currentMotion);
+            m_ledMatrix->setPixel(x, y2, currentMotion);
+            m_lastSensorDisplayState[i] = currentMotion;
+        }
     }
 }

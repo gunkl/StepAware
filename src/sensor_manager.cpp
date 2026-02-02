@@ -102,7 +102,13 @@ void SensorManager::update() {
 
 bool SensorManager::addSensor(uint8_t slotIndex, const SensorConfig& config,
                               const char* name, bool isPrimary, bool mockMode) {
+    DEBUG_LOG_SENSOR("addSensor: slot=%u type=%u pin=%u name='%s' primary=%d",
+                     slotIndex, config.type, config.primaryPin,
+                     name ? name : "", isPrimary);
+
     if (slotIndex >= MAX_SENSORS) {
+        DEBUG_LOG_SENSOR("addSensor FAILED: slot %u invalid (max %u)",
+                        slotIndex, MAX_SENSORS);
         setError("Invalid slot index");
         return false;
     }
@@ -114,11 +120,15 @@ bool SensorManager::addSensor(uint8_t slotIndex, const SensorConfig& config,
     }
 
     // Create sensor via factory
+    DEBUG_LOG_SENSOR("addSensor: Creating sensor type %u on GPIO%u",
+                    config.type, config.primaryPin);
     HAL_MotionSensor* sensor = SensorFactory::create(config, mockMode);
     if (!sensor) {
+        DEBUG_LOG_SENSOR("addSensor FAILED: Factory returned null for slot %u", slotIndex);
         setError("Failed to create sensor");
         return false;
     }
+    DEBUG_LOG_SENSOR("addSensor: Sensor object created");
 
     // Configure slot
     m_slots[slotIndex].sensor = sensor;
@@ -148,17 +158,19 @@ bool SensorManager::addSensor(uint8_t slotIndex, const SensorConfig& config,
 
     // Initialize sensor if manager is already initialized
     if (m_initialized) {
+        DEBUG_LOG_SENSOR("addSensor: Initializing sensor hardware (slot %u)", slotIndex);
         if (!sensor->begin()) {
-            DEBUG_LOG_SENSOR("SensorManager: Failed to initialize sensor %u (%s)",
-                     slotIndex, m_slots[slotIndex].name);
+            DEBUG_LOG_SENSOR("addSensor FAILED: Hardware init failed for slot %u: %s",
+                           slotIndex, m_lastError);
             setError("Failed to initialize sensor");
             return false;
         }
+        DEBUG_LOG_SENSOR("addSensor: Hardware initialized successfully");
     }
 
-    DEBUG_LOG_SENSOR("SensorManager: Added sensor %u (%s) - %s",
-            slotIndex, m_slots[slotIndex].name,
-            sensor->getCapabilities().sensorTypeName);
+    DEBUG_LOG_SENSOR("addSensor SUCCESS: Slot %u ready as '%s' (%s)",
+                    slotIndex, m_slots[slotIndex].name,
+                    sensor->getCapabilities().sensorTypeName);
 
     return true;
 }

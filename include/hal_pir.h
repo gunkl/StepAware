@@ -141,6 +141,49 @@ public:
     void mockSetReady() override;
 
     // =========================================================================
+    // Power-Cycle Recalibration
+    // =========================================================================
+
+    /**
+     * @brief Configure GPIO pin mode for sensor input
+     *
+     * Must be called before begin(). Sets the pinMode for the GPIO input pin.
+     *
+     * @param mode Pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN
+     */
+    void setPinMode(uint8_t mode);
+
+    /**
+     * @brief Assign the GPIO pin that drives PIR VCC directly.
+     *
+     * Must be called before begin(). The pin is driven HIGH (sensors powered)
+     * during normal operation and LOW (power cut) during recalibration.
+     *
+     * @param pin GPIO number, or PIN_PIR_POWER_NONE (0xFF) to disable
+     */
+    void setPowerPin(uint8_t pin);
+
+    /**
+     * @brief Initiate a non-blocking power-cycle recalibration.
+     *
+     * Drives the power pin LOW to cut PIR VCC. The update() loop restores
+     * power after PIR_RECAL_POWER_OFF_MS and restarts the warm-up timer.
+     * Both PIR sensors share one power wire, so one recalibrate() call
+     * on the near sensor handles both physically.
+     *
+     * @return true if recalibration was initiated or is already in progress;
+     *         false if no power pin is assigned
+     */
+    bool recalibrate();
+
+    /**
+     * @brief Check if a recalibration cycle is currently active.
+     *
+     * @return true if in the power-off or warm-up phase of recalibration
+     */
+    bool isRecalibrating() const;
+
+    // =========================================================================
     // Legacy Interface (backward compatibility)
     // =========================================================================
 
@@ -187,6 +230,7 @@ public:
 
 private:
     uint8_t m_pin;                  ///< GPIO pin number
+    uint8_t m_pinMode;              ///< GPIO pin mode: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN
     bool m_mockMode;                ///< Mock mode enabled
     bool m_initialized;             ///< Initialization complete
 
@@ -209,6 +253,11 @@ private:
 
     // Mock mode state
     uint32_t m_mockMotionEndTime;   ///< When mock motion should end
+
+    // Recalibration state
+    uint8_t  m_powerPin;            ///< GPIO driving PIR VCC (PIN_PIR_POWER_NONE = unset)
+    bool     m_recalibrating;       ///< Recal cycle in progress
+    uint32_t m_recalStartTime;      ///< millis() when power-off phase began
 
     // Static capabilities
     static const SensorCapabilities s_capabilities;

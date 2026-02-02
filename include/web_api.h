@@ -129,6 +129,7 @@ private:
     bool m_corsEnabled;                        ///< CORS enabled flag
     AsyncWebSocket* m_logWebSocket;            ///< WebSocket for log streaming
     uint32_t m_maxWebSocketClients;            ///< Maximum WebSocket clients (default: 3)
+    bool m_initialized;                        ///< Initialization guard (prevent duplicate begin() calls)
 
     // Endpoint handlers
 
@@ -231,6 +232,16 @@ private:
      * @brief GET /api/animations/assignments - Get animation assignments (Issue #12)
      */
     void handleGetAssignments(AsyncWebServerRequest* request);
+
+    /**
+     * @brief POST /api/sensors/recalibrate - Trigger manual PIR recalibration
+     */
+    void handlePostSensorRecalibrate(AsyncWebServerRequest* request);
+
+    /**
+     * @brief GET /api/sensors/recalibrate - Poll PIR warmup status (no side effects)
+     */
+    void handleGetSensorRecalibrate(AsyncWebServerRequest* request);
 
     /**
      * @brief POST /api/reset - Factory reset

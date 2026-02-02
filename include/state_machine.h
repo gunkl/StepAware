@@ -60,7 +60,8 @@ public:
         EVENT_USB_POWER_CONNECTED,   ///< USB power connected
         EVENT_USB_POWER_DISCONNECTED,///< USB power disconnected
         EVENT_LIGHT_DARK,       ///< Ambient light dark
-        EVENT_LIGHT_BRIGHT      ///< Ambient light bright
+        EVENT_LIGHT_BRIGHT,     ///< Ambient light bright
+        EVENT_BUTTON_LONG_PRESS ///< Mode button held >1 s (reboot)
     };
 
     /**
@@ -241,6 +242,16 @@ private:
     bool m_sensorReady;          ///< Motion sensor ready (warmup complete)
     bool m_lastApproachingState; ///< Previous approaching state (for edge detection)
 
+    // Mode indicator & reboot timing
+    bool     m_modeIndicatorActive;      ///< Indicator bitmap currently on-screen
+    uint32_t m_modeIndicatorEndTime;     ///< millis() when indicator should clear / transition
+    bool     m_rebootPending;            ///< Reboot requested, waiting for feedback delay
+    uint32_t m_rebootTime;               ///< millis() when ESP.restart() fires
+
+    // Sensor status display tracking
+    bool m_lastSensorDisplayState[4];    ///< Last-drawn motion state per sensor slot (avoids redundant I2C writes)
+    bool m_lastMatrixWasAnimating;       ///< Detects busy→idle transition to force redraw
+
     /**
      * @brief Enter a new operating mode
      *
@@ -289,6 +300,16 @@ private:
      * Manages warning LED pattern and duration.
      */
     void updateWarning();
+
+    /**
+     * @brief Update per-sensor status LEDs on matrix
+     *
+     * Draws two LEDs per active PIR sensor when the matrix is idle.
+     * Near sensors (distanceZone==1) use bottom-right pixels (7,6)+(7,7).
+     * Far sensors  (distanceZone==2) use top-right pixels  (7,0)+(7,1).
+     * Suppressed while any animation, mode indicator, or reboot bitmap is active.
+     */
+    void updateSensorStatusLEDs();
 };
 
 #endif // STEPAWARE_STATE_MACHINE_H

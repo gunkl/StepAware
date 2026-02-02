@@ -5,6 +5,7 @@
 
 #include <unity.h>
 #include <stdint.h>
+#include <cstring>
 
 // Mock time
 unsigned long mock_time = 0;
@@ -35,11 +36,32 @@ private:
     bool led_on;
     bool warning_active;
     unsigned long warning_end_time;
+    bool rebootPending;
+    bool modeIndicatorShown;
+    OperatingMode lastIndicatorMode;
+
+    // Sensor status display
+    bool sensorTriggered[4];
+    uint8_t mockFrame[8];
+    bool sensorStatusDisplay[4];
+    uint8_t sensorDistanceZone[4];
+    bool sensorActive[4];
+    bool lastSensorDisplayState[4];
+    bool lastMatrixWasAnimating;
+    bool matrixAnimating;
 
 public:
     TestStateMachine()
         : mode(OFF), motion_events(0), mode_changes(0),
-          led_on(false), warning_active(false), warning_end_time(0) {
+          led_on(false), warning_active(false), warning_end_time(0),
+          rebootPending(false), modeIndicatorShown(false), lastIndicatorMode(OFF),
+          lastMatrixWasAnimating(false), matrixAnimating(false) {
+        memset(sensorTriggered, 0, sizeof(sensorTriggered));
+        memset(mockFrame, 0, sizeof(mockFrame));
+        memset(sensorStatusDisplay, 0, sizeof(sensorStatusDisplay));
+        memset(sensorDistanceZone, 0, sizeof(sensorDistanceZone));
+        memset(sensorActive, 0, sizeof(sensorActive));
+        memset(lastSensorDisplayState, 0, sizeof(lastSensorDisplayState));
     }
 
     void cycleMode() {
@@ -58,6 +80,12 @@ public:
                 break;
         }
         mode_changes++;
+        modeIndicatorShown = true;
+        lastIndicatorMode = mode;
+    }
+
+    void handleLongPress() {
+        rebootPending = true;
     }
 
     void setMode(OperatingMode new_mode) {
@@ -82,11 +110,77 @@ public:
         }
     }
 
+    void configureSensor(uint8_t slot, uint8_t zone, bool statusDisplay) {
+        if (slot < 4) {
+            sensorActive[slot] = true;
+            sensorDistanceZone[slot] = zone;
+            sensorStatusDisplay[slot] = statusDisplay;
+        }
+    }
+
+    void setSensorTriggered(uint8_t slot, bool triggered) {
+        if (slot < 4) {
+            sensorTriggered[slot] = triggered;
+        }
+    }
+
+    void setMatrixAnimating(bool animating) {
+        matrixAnimating = animating;
+    }
+
+    // Mirrors StateMachine::updateSensorStatusLEDs() logic using mock frame buffer
+    // Bit layout: MSB (bit 7) = x=0 (leftmost), LSB (bit 0) = x=7 (rightmost)
+    void updateSensorStatusLEDs() {
+        bool matrixBusy = matrixAnimating || rebootPending;
+
+        if (lastMatrixWasAnimating && !matrixBusy) {
+            memset(lastSensorDisplayState, 0, sizeof(lastSensorDisplayState));
+        }
+        lastMatrixWasAnimating = matrixBusy;
+
+        if (matrixBusy) return;
+
+        for (uint8_t i = 0; i < 4; i++) {
+            if (!sensorActive[i] || !sensorStatusDisplay[i] ||
+                (sensorDistanceZone[i] != 1 && sensorDistanceZone[i] != 2)) {
+                continue;
+            }
+
+            uint8_t y1, y2;
+            if (sensorDistanceZone[i] == 1) {  // Near: bottom-right
+                y1 = 6; y2 = 7;
+            } else {                            // Far:  top-right
+                y1 = 0; y2 = 1;
+            }
+
+            bool currentMotion = sensorTriggered[i];
+
+            if (currentMotion != lastSensorDisplayState[i]) {
+                // x=7 → bit 0 (LSB)
+                if (currentMotion) {
+                    mockFrame[y1] |=  (1 << 0);
+                    mockFrame[y2] |=  (1 << 0);
+                } else {
+                    mockFrame[y1] &= ~(1 << 0);
+                    mockFrame[y2] &= ~(1 << 0);
+                }
+                lastSensorDisplayState[i] = currentMotion;
+            }
+        }
+    }
+
+    bool getPixel(uint8_t x, uint8_t y) const {
+        if (x > 7 || y > 7) return false;
+        // bit (7-x): MSB = x=0, LSB = x=7
+        return (mockFrame[y] & (1 << (7 - x))) != 0;
+    }
+
     void update() {
         // Check if warning expired
         if (warning_active && millis() >= warning_end_time) {
             warning_active = false;
         }
+        updateSensorStatusLEDs();
     }
 
     OperatingMode getMode() const { return mode; }
@@ -94,6 +188,9 @@ public:
     uint32_t getModeChangeCount() const { return mode_changes; }
     bool isLedOn() const { return led_on || warning_active; }
     bool isWarningActive() const { return warning_active; }
+    bool isRebootPending() const { return rebootPending; }
+    bool isModeIndicatorShown() const { return modeIndicatorShown; }
+    OperatingMode getLastIndicatorMode() const { return lastIndicatorMode; }
 
     void reset() {
         motion_events = 0;
@@ -276,6 +373,126 @@ void test_mode_change_during_warning(void) {
     TEST_ASSERT_FALSE(sm->isLedOn());
 }
 
+void test_long_press_triggers_reboot(void) {
+    // Reboot should not be pending at startup
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+
+    // A long press sets the reboot-pending flag
+    sm->handleLongPress();
+    TEST_ASSERT_TRUE(sm->isRebootPending());
+}
+
+void test_mode_indicator_on_cycle(void) {
+    // No indicator has been shown yet
+    TEST_ASSERT_FALSE(sm->isModeIndicatorShown());
+
+    // Cycle OFF -> CONTINUOUS_ON: indicator shown for CONTINUOUS_ON
+    sm->cycleMode();
+    TEST_ASSERT_TRUE(sm->isModeIndicatorShown());
+    TEST_ASSERT_EQUAL(CONTINUOUS_ON, sm->getLastIndicatorMode());
+
+    // Cycle CONTINUOUS_ON -> MOTION_DETECT: indicator shown for MOTION_DETECT
+    sm->cycleMode();
+    TEST_ASSERT_TRUE(sm->isModeIndicatorShown());
+    TEST_ASSERT_EQUAL(MOTION_DETECT, sm->getLastIndicatorMode());
+
+    // Cycle MOTION_DETECT -> OFF: indicator shown for OFF
+    sm->cycleMode();
+    TEST_ASSERT_TRUE(sm->isModeIndicatorShown());
+    TEST_ASSERT_EQUAL(OFF, sm->getLastIndicatorMode());
+}
+
+void test_short_press_does_not_reboot(void) {
+    // Reboot should not be pending at startup
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+
+    // Cycle through all three modes (three short presses)
+    sm->cycleMode(); // OFF -> CONTINUOUS_ON
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+
+    sm->cycleMode(); // CONTINUOUS_ON -> MOTION_DETECT
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+
+    sm->cycleMode(); // MOTION_DETECT -> OFF
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+
+    // Full second cycle to be thorough
+    sm->cycleMode();
+    sm->cycleMode();
+    sm->cycleMode();
+    TEST_ASSERT_FALSE(sm->isRebootPending());
+}
+
+void test_sensor_status_display(void) {
+    // Configure slot 0 as Near PIR with status display on
+    sm->configureSensor(0, 1, true);   // zone=1 (Near), statusDisplay=true
+    // Configure slot 1 as Far PIR with status display on
+    sm->configureSensor(1, 2, true);   // zone=2 (Far), statusDisplay=true
+
+    // --- Trigger Near sensor (slot 0) ---
+    sm->setSensorTriggered(0, true);
+    sm->update();
+
+    // Bottom-right pixels (7,6) and (7,7) should be ON
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+    // Top-right pixels (7,0) and (7,1) should still be OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 0));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 1));
+
+    // --- Trigger Far sensor (slot 1) ---
+    sm->setSensorTriggered(1, true);
+    sm->update();
+
+    // Top-right pixels should now be ON
+    TEST_ASSERT_TRUE(sm->getPixel(7, 0));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 1));
+    // Bottom-right still ON from slot 0
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+
+    // --- Clear Near sensor (slot 0) ---
+    sm->setSensorTriggered(0, false);
+    sm->update();
+
+    // Bottom-right should be OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+    // Top-right still ON (slot 1 still triggered)
+    TEST_ASSERT_TRUE(sm->getPixel(7, 0));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 1));
+
+    // --- Clear Far sensor (slot 1) ---
+    sm->setSensorTriggered(1, false);
+    sm->update();
+
+    // Both corners OFF
+    TEST_ASSERT_FALSE(sm->getPixel(7, 0));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 1));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+}
+
+void test_sensor_status_suppressed_during_animation(void) {
+    sm->configureSensor(0, 1, true);   // Near sensor with status display
+
+    // Sensor is triggered while matrix is animating
+    sm->setSensorTriggered(0, true);
+    sm->setMatrixAnimating(true);
+    sm->update();
+
+    // LEDs should NOT be drawn while animating
+    TEST_ASSERT_FALSE(sm->getPixel(7, 6));
+    TEST_ASSERT_FALSE(sm->getPixel(7, 7));
+
+    // Animation ends — status LEDs should appear on next update
+    sm->setMatrixAnimating(false);
+    sm->update();
+
+    TEST_ASSERT_TRUE(sm->getPixel(7, 6));
+    TEST_ASSERT_TRUE(sm->getPixel(7, 7));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -289,6 +506,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_multiple_motion_events);
     RUN_TEST(test_reset_counters);
     RUN_TEST(test_mode_change_during_warning);
+    RUN_TEST(test_long_press_triggers_reboot);
+    RUN_TEST(test_mode_indicator_on_cycle);
+    RUN_TEST(test_short_press_does_not_reboot);
+    RUN_TEST(test_sensor_status_display);
+    RUN_TEST(test_sensor_status_suppressed_during_animation);
 
     return UNITY_END();
 }

@@ -2,6 +2,8 @@
 
 This directory contains specialized subagent definitions for the StepAware project.
 
+> **Skills vs Agents** — These are *agents*: task-template documents invoked manually via the Task tool or by referencing them in conversation. They are **not** slash commands. If you need a slash command (auto-discovered `/command`), put it in [`.claude/commands/`](../commands/) instead. Currently available skills: `/coredump`.
+
 ## Available Agents
 
 ### High Priority (Use Frequently)

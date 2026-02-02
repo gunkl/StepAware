@@ -303,7 +303,32 @@ bool ConfigManager::validateAndCorrect() {
         }
     }
 
-    // Validate and correct display configurations
+    // First pass: Check mutual exclusivity - 8x8 matrix OR simple LEDs, not both
+    bool hasMatrix = false;
+    bool hasSimpleLED = false;
+    for (uint8_t i = 0; i < 2; i++) {
+        if (!m_config.displays[i].active || !m_config.displays[i].enabled) continue;
+
+        if (m_config.displays[i].type == DISPLAY_TYPE_MATRIX_8X8) {
+            hasMatrix = true;
+        } else if (m_config.displays[i].type == DISPLAY_TYPE_SINGLE_LED) {
+            hasSimpleLED = true;
+        }
+    }
+
+    if (hasMatrix && hasSimpleLED) {
+        DEBUG_LOG_CONFIG("ERROR: Both 8x8 matrix and simple LEDs configured - disabling simple LEDs");
+        DEBUG_LOG_CONFIG("  The 8x8 matrix handles both status and hazard indicators");
+        for (uint8_t i = 0; i < 2; i++) {
+            if (m_config.displays[i].type == DISPLAY_TYPE_SINGLE_LED) {
+                m_config.displays[i].active = false;
+                m_config.displays[i].enabled = false;
+                hadErrors = true;
+            }
+        }
+    }
+
+    // Second pass: Validate each display configuration
     for (uint8_t i = 0; i < 2; i++) {
         DisplaySlotConfig& display = m_config.displays[i];
 
@@ -321,27 +346,96 @@ bool ConfigManager::validateAndCorrect() {
             continue;
         }
 
+        // Validate single LED configurations
+        if (display.type == DISPLAY_TYPE_SINGLE_LED) {
+            // Validate GPIO pin (ESP32-C3 has GPIO 0-21)
+            if (display.sdaPin > 21) {
+                DEBUG_LOG_CONFIG("Display %u: Invalid GPIO %u (max 21), disabling", i, display.sdaPin);
+                display.active = false;
+                display.enabled = false;
+                displayErrorCount++;
+                continue;
+            }
+
+            // Check restricted GPIO pins
+            if (display.sdaPin == 5) {
+                DEBUG_LOG_CONFIG("Display %u: GPIO5 is reserved for battery voltage divider, disabling", i);
+                display.active = false;
+                display.enabled = false;
+                displayErrorCount++;
+                continue;
+            }
+            if (display.sdaPin == 6) {
+                DEBUG_LOG_CONFIG("Display %u: GPIO6 is not a general-purpose pin, disabling", i);
+                display.active = false;
+                display.enabled = false;
+                displayErrorCount++;
+                continue;
+            }
+
+            // Validate PWM channel (ESP32 has 8 channels, 0-7)
+            if (display.sclPin > 7) {
+                DEBUG_LOG_CONFIG("Display %u: Invalid PWM channel %u (max 7), disabling", i, display.sclPin);
+                display.active = false;
+                display.enabled = false;
+                displayErrorCount++;
+                continue;
+            }
+
+            // Check for GPIO conflicts with sensors
+            for (uint8_t s = 0; s < 4; s++) {
+                if (m_config.sensors[s].active && m_config.sensors[s].primaryPin == display.sdaPin) {
+                    DEBUG_LOG_CONFIG("Display %u: GPIO%u conflicts with sensor %u, disabling display",
+                                    i, display.sdaPin, s);
+                    display.active = false;
+                    display.enabled = false;
+                    displayErrorCount++;
+                    break;
+                }
+            }
+
+            if (!display.active) {
+                continue;  // Skip if disabled due to sensor conflict
+            }
+
+            // Check for GPIO conflicts with other displays
+            for (uint8_t j = i + 1; j < 2; j++) {
+                DisplaySlotConfig& other = m_config.displays[j];
+                if (!other.active) continue;
+
+                if (other.type == DISPLAY_TYPE_SINGLE_LED && other.sdaPin == display.sdaPin) {
+                    DEBUG_LOG_CONFIG("Display %u and %u both use GPIO%u, disabling slot %u",
+                                    i, j, display.sdaPin, j);
+                    other.active = false;
+                    other.enabled = false;
+                    displayErrorCount++;
+                }
+            }
+        }
+
         // Validate I2C address (0x00 to 0x7F, typically 0x70-0x77 for HT16K33)
-        if (display.i2cAddress > 0x7F) {
+        if (display.type == DISPLAY_TYPE_MATRIX_8X8 && display.i2cAddress > 0x7F) {
             DEBUG_LOG_CONFIG("Display[%u]: CORRECTED i2cAddress: 0x%02X → 0x70 (max 0x7F)",
                      i, display.i2cAddress);
             display.i2cAddress = 0x70;
             displayHadError = true;
         }
 
-        // Validate I2C pins (GPIO 0-21)
-        if (display.sdaPin > 21) {
-            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sdaPin: %u → 7 (max 21)",
-                     i, display.sdaPin);
-            display.sdaPin = 7;
-            displayHadError = true;
-        }
+        // Validate I2C pins (GPIO 0-21) - only for matrix displays
+        if (display.type == DISPLAY_TYPE_MATRIX_8X8) {
+            if (display.sdaPin > 21) {
+                DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sdaPin: %u → 7 (max 21)",
+                         i, display.sdaPin);
+                display.sdaPin = 7;
+                displayHadError = true;
+            }
 
-        if (display.sclPin > 21) {
-            DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sclPin: %u → 10 (max 21)",
-                     i, display.sclPin);
-            display.sclPin = 10;
-            displayHadError = true;
+            if (display.sclPin > 21) {
+                DEBUG_LOG_CONFIG("Display[%u]: CORRECTED sclPin: %u → 10 (max 21)",
+                         i, display.sclPin);
+                display.sclPin = 10;
+                displayHadError = true;
+            }
         }
 
         // Validate brightness (0-15 for matrix, 0-255 for LED)
@@ -494,6 +588,56 @@ void ConfigManager::autoConfigureDirectionDetector() {
     }
 }
 
+bool ConfigManager::validateSensorConfiguration() {
+    bool corrected = false;
+
+    for (uint8_t i = 0; i < 4; i++) {
+        SensorSlotConfig& sensor = m_config.sensors[i];
+
+        if (!sensor.active) continue;
+
+        // Validate GPIO pins
+        if (sensor.primaryPin > 21) {
+            DEBUG_LOG_CONFIG("ERROR: Sensor %u has invalid GPIO %u, disabling",
+                            i, sensor.primaryPin);
+            sensor.active = false;
+            sensor.enabled = false;
+            corrected = true;
+        }
+
+        // Warn if PIR has status display but no zone
+        if (sensor.type == SENSOR_TYPE_PIR &&
+            sensor.enabled &&
+            sensor.sensorStatusDisplay &&
+            sensor.distanceZone == 0) {
+            DEBUG_LOG_CONFIG("WARNING: Sensor %u has LED display enabled but no distance zone", i);
+            DEBUG_LOG_CONFIG("  Set distanceZone to 1 (Near) or 2 (Far) for LED matrix display");
+        }
+
+        // Validate pinMode value (0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN)
+        if (sensor.pinMode > 2) {
+            DEBUG_LOG_CONFIG("WARNING: Sensor %u has invalid pinMode %u, correcting to INPUT_PULLUP",
+                            i, sensor.pinMode);
+            sensor.pinMode = 1;  // Default to INPUT_PULLUP
+            corrected = true;
+        }
+
+        // Check for duplicate GPIO pins
+        for (uint8_t j = i + 1; j < 4; j++) {
+            if (m_config.sensors[j].active &&
+                m_config.sensors[j].primaryPin == sensor.primaryPin) {
+                DEBUG_LOG_CONFIG("ERROR: Sensors %u and %u both use GPIO%u, disabling slot %u",
+                                i, j, sensor.primaryPin, j);
+                m_config.sensors[j].active = false;
+                m_config.sensors[j].enabled = false;
+                corrected = true;
+            }
+        }
+    }
+
+    return !corrected;
+}
+
 const ConfigManager::Config& ConfigManager::getConfig() const {
     return m_config;
 }
@@ -567,8 +711,9 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     // Power
     JsonObject power = doc.createNestedObject("power");
     power["batteryMonitoringEnabled"] = m_config.batteryMonitoringEnabled;
-    power["savingEnabled"] = m_config.powerSavingEnabled;
+    power["savingMode"] = m_config.powerSavingMode;
     power["deepSleepAfterMs"] = m_config.deepSleepAfterMs;
+    power["enablePowerSavingOnUSB"] = m_config.enablePowerSavingOnUSB;
 
     // Logging
     JsonObject logging = doc.createNestedObject("logging");
@@ -604,6 +749,8 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
             sensorObj["sampleWindowSize"] = m_config.sensors[i].sampleWindowSize;
             sensorObj["sampleRateMs"] = m_config.sensors[i].sampleRateMs;
             sensorObj["distanceZone"] = m_config.sensors[i].distanceZone;
+            sensorObj["sensorStatusDisplay"] = m_config.sensors[i].sensorStatusDisplay;
+            sensorObj["pinMode"] = m_config.sensors[i].pinMode;
         }
     }
 
@@ -730,12 +877,32 @@ bool ConfigManager::fromJSON(const char* json) {
     // Power
     if (doc.containsKey("power")) {
         m_config.batteryMonitoringEnabled = doc["power"]["batteryMonitoringEnabled"] | false;
-        m_config.powerSavingEnabled = doc["power"]["savingEnabled"] | false;
         m_config.deepSleepAfterMs = doc["power"]["deepSleepAfterMs"] | 3600000;  // 1 hour
+
+        // Migration: savingMode (new) takes priority over savingEnabled (legacy bool).
+        // Legacy true -> 2 because the old bool always ran the full light->deep cascade.
+        if (doc["power"].containsKey("savingMode")) {
+            m_config.powerSavingMode = doc["power"]["savingMode"] | 0;
+        } else if (doc["power"].containsKey("savingEnabled")) {
+            bool legacyEnabled = doc["power"]["savingEnabled"] | false;
+            m_config.powerSavingMode = legacyEnabled ? 2 : 0;
+            DEBUG_LOG_CONFIG("Config migration: savingEnabled(%s) -> savingMode(%u)",
+                legacyEnabled ? "true" : "false", m_config.powerSavingMode);
+        } else {
+            m_config.powerSavingMode = 0;
+        }
+
+        if (m_config.powerSavingMode > 2) {
+            m_config.powerSavingMode = 0;
+        }
+
         // If battery monitoring is off, power saving must be disabled
         if (!m_config.batteryMonitoringEnabled) {
-            m_config.powerSavingEnabled = false;
+            m_config.powerSavingMode = 0;
         }
+
+        // Load enablePowerSavingOnUSB (defaults to false for safety)
+        m_config.enablePowerSavingOnUSB = doc["power"]["enablePowerSavingOnUSB"] | false;
     }
 
     // Logging
@@ -780,6 +947,8 @@ bool ConfigManager::fromJSON(const char* json) {
                 m_config.sensors[slot].sampleWindowSize = sensorObj["sampleWindowSize"] | 3;  // 3 samples default
                 m_config.sensors[slot].sampleRateMs = sensorObj["sampleRateMs"] | 75;  // 75ms sample interval (adaptive threshold)
                 m_config.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;  // 0 = None (default)
+                m_config.sensors[slot].sensorStatusDisplay = sensorObj["sensorStatusDisplay"] | false;  // false = off (default)
+                m_config.sensors[slot].pinMode = sensorObj["pinMode"] | 1;  // 1 = INPUT_PULLUP (default for SR602)
             }
         }
     }
@@ -952,7 +1121,10 @@ void ConfigManager::print() {
 
     Serial.println("Power:");
     Serial.printf("  Battery Monitoring: %s\n", m_config.batteryMonitoringEnabled ? "YES" : "NO");
-    Serial.printf("  Saving Enabled: %s\n", m_config.powerSavingEnabled ? "YES" : "NO");
+    static const char* powerSavingModeNames[] = {"Disabled", "Light Sleep", "Deep Sleep+ULP"};
+    Serial.printf("  Saving Mode: %s (%u)\n",
+        m_config.powerSavingMode <= 2 ? powerSavingModeNames[m_config.powerSavingMode] : "INVALID",
+        m_config.powerSavingMode);
     Serial.printf("  Deep Sleep After: %u ms\n", m_config.deepSleepAfterMs);
     Serial.println();
 
@@ -1015,8 +1187,9 @@ void ConfigManager::loadDefaults() {
 
     // Power
     m_config.batteryMonitoringEnabled = false;
-    m_config.powerSavingEnabled = false;
+    m_config.powerSavingMode = 0;  // Disabled
     m_config.deepSleepAfterMs = 3600000;  // 1 hour
+    m_config.enablePowerSavingOnUSB = false;  // Safety: Never enable by default
 
     // Logging
     m_config.logLevel = LOG_LEVEL_INFO;
@@ -1035,12 +1208,12 @@ void ConfigManager::loadDefaults() {
         strlcpy(m_config.sensors[i].name, "", sizeof(m_config.sensors[i].name));
     }
 
-    // Sensor slot 0: Default PIR sensor
+    // Sensor slot 0: Near PIR (GPIO1)
     m_config.sensors[0].active = true;
     m_config.sensors[0].enabled = true;
-    strlcpy(m_config.sensors[0].name, "PIR Motion", sizeof(m_config.sensors[0].name));
+    strlcpy(m_config.sensors[0].name, "PIR Near", sizeof(m_config.sensors[0].name));
     m_config.sensors[0].type = SENSOR_TYPE_PIR;
-    m_config.sensors[0].primaryPin = PIN_PIR_SENSOR;
+    m_config.sensors[0].primaryPin = PIN_PIR_NEAR;  // GPIO1
     m_config.sensors[0].secondaryPin = 0;
     m_config.sensors[0].isPrimary = true;
     m_config.sensors[0].detectionThreshold = 0;  // N/A for PIR
@@ -1052,6 +1225,30 @@ void ConfigManager::loadDefaults() {
     m_config.sensors[0].directionSensitivity = 0;  // 0 = auto (adaptive threshold)
     m_config.sensors[0].sampleWindowSize = 3;   // Global default window size
     m_config.sensors[0].sampleRateMs = 75;      // Global default sample interval (adaptive threshold)
+    m_config.sensors[0].distanceZone = 1;            // Near zone (0.5-4m)
+    m_config.sensors[0].sensorStatusDisplay = true;  // Enable LED matrix display
+    m_config.sensors[0].pinMode = 1;                 // INPUT_PULLUP (default for SR602)
+
+    // Sensor slot 1: Far PIR (GPIO4)
+    m_config.sensors[1].active = true;
+    m_config.sensors[1].enabled = true;
+    strlcpy(m_config.sensors[1].name, "PIR Far", sizeof(m_config.sensors[1].name));
+    m_config.sensors[1].type = SENSOR_TYPE_PIR;
+    m_config.sensors[1].primaryPin = PIN_PIR_FAR;   // GPIO4
+    m_config.sensors[1].secondaryPin = 0;
+    m_config.sensors[1].isPrimary = false;
+    m_config.sensors[1].detectionThreshold = 0;  // N/A for PIR
+    m_config.sensors[1].maxDetectionDistance = 0;  // N/A for PIR
+    m_config.sensors[1].debounceMs = 0;  // Not used by PIR sensors
+    m_config.sensors[1].warmupMs = PIR_WARMUP_TIME_MS;
+    m_config.sensors[1].enableDirectionDetection = false;
+    m_config.sensors[1].directionTriggerMode = 0;  // Approaching
+    m_config.sensors[1].directionSensitivity = 0;  // 0 = auto (adaptive threshold)
+    m_config.sensors[1].sampleWindowSize = 3;   // Global default window size
+    m_config.sensors[1].sampleRateMs = 75;      // Global default sample interval (adaptive threshold)
+    m_config.sensors[1].distanceZone = 2;            // Far zone (3-12m)
+    m_config.sensors[1].sensorStatusDisplay = true;  // Enable LED matrix display
+    m_config.sensors[1].pinMode = 1;                 // INPUT_PULLUP (default for SR602)
 
     m_config.fusionMode = 0;  // FUSION_MODE_ANY
 
@@ -1065,18 +1262,29 @@ void ConfigManager::loadDefaults() {
     m_config.directionDetector.triggerOnApproaching = true;  // Only trigger on approaching
 
     // Multi-Display Configuration - No displays by default
-    for (int i = 0; i < 2; i++) {
-        m_config.displays[i].active = false;
-        m_config.displays[i].enabled = false;
-        strlcpy(m_config.displays[i].name, "", sizeof(m_config.displays[i].name));
-        m_config.displays[i].type = DISPLAY_TYPE_NONE;
-        m_config.displays[i].i2cAddress = MATRIX_I2C_ADDRESS;
-        m_config.displays[i].sdaPin = I2C_SDA_PIN;
-        m_config.displays[i].sclPin = I2C_SCL_PIN;
-        m_config.displays[i].brightness = MATRIX_BRIGHTNESS_DEFAULT;
-        m_config.displays[i].rotation = MATRIX_ROTATION;
-        m_config.displays[i].useForStatus = true;
-    }
+    // Display Slot 0: Available for Hazard LED or 8x8 Matrix
+    m_config.displays[0].active = false;           // NOT active by default
+    m_config.displays[0].enabled = false;          // NOT enabled by default
+    strlcpy(m_config.displays[0].name, "Display 0", sizeof(m_config.displays[0].name));
+    m_config.displays[0].type = DISPLAY_TYPE_SINGLE_LED;
+    m_config.displays[0].i2cAddress = MATRIX_I2C_ADDRESS;
+    m_config.displays[0].sdaPin = 0;               // No default GPIO
+    m_config.displays[0].sclPin = 0;               // No default PWM channel
+    m_config.displays[0].brightness = 255;         // Full brightness when configured
+    m_config.displays[0].rotation = MATRIX_ROTATION;
+    m_config.displays[0].useForStatus = false;     // Hazard by default
+
+    // Display Slot 1: Available for Status LED
+    m_config.displays[1].active = false;           // NOT active by default
+    m_config.displays[1].enabled = false;          // NOT enabled by default
+    strlcpy(m_config.displays[1].name, "Display 1", sizeof(m_config.displays[1].name));
+    m_config.displays[1].type = DISPLAY_TYPE_SINGLE_LED;
+    m_config.displays[1].i2cAddress = MATRIX_I2C_ADDRESS;
+    m_config.displays[1].sdaPin = 0;               // No default GPIO
+    m_config.displays[1].sclPin = 0;               // No default PWM channel
+    m_config.displays[1].brightness = 255;         // Full brightness when configured
+    m_config.displays[1].rotation = MATRIX_ROTATION;
+    m_config.displays[1].useForStatus = true;      // Status by default
 
     m_config.primaryDisplaySlot = 0;
 
