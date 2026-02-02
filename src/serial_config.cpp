@@ -786,7 +786,7 @@ void SerialConfigUI::printValue(const char* key) {
         Serial.printf("%s = %u\n", key, cfg.defaultMode);
     }
     else if (strcmp(key, "power.saving") == 0) {
-        Serial.printf("%s = %s\n", key, cfg.powerSavingEnabled ? "1" : "0");
+        Serial.printf("%s = %u\n", key, cfg.powerSavingMode);
     }
     else if (strcmp(key, "power.sleep") == 0) {
         Serial.printf("%s = %u\n", key, cfg.deepSleepAfterMs);
@@ -873,7 +873,8 @@ bool SerialConfigUI::setValue(const char* key, const char* value) {
         changed = true;
     }
     else if (strcmp(key, "power.saving") == 0) {
-        cfg.powerSavingEnabled = (atoi(value) != 0);
+        uint8_t mode = atoi(value);
+        cfg.powerSavingMode = (mode <= 2) ? mode : 0;
         changed = true;
     }
     else if (strcmp(key, "power.sleep") == 0) {

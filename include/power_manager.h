@@ -200,6 +200,41 @@ public:
     bool isBatteryMonitoringEnabled() const { return m_batteryMonitoringEnabled; }
 
     /**
+     * @brief Set power saving mode at runtime
+     *
+     * Mode 0 = Disabled (no auto-sleep)
+     * Mode 1 = Light Sleep only (auto-sleep, no deep sleep)
+     * Mode 2 = Deep Sleep + ULP (auto-sleep, deep sleep with ULP PIR monitor)
+     *
+     * @param mode Power saving mode (0, 1, or 2; values > 2 are clamped to 0)
+     */
+    void setPowerSavingMode(uint8_t mode);
+
+    /**
+     * @brief Get current power saving mode
+     *
+     * @return Power saving mode (0, 1, or 2)
+     */
+    uint8_t getPowerSavingMode() const { return m_powerSavingMode; }
+
+    /**
+     * @brief Enable power saving even when on USB power (for debugging)
+     *
+     * When enabled, power saving modes work normally even when USB is connected.
+     * IMPORTANT: Always resets to false on boot for safety.
+     *
+     * @param enable True to allow power saving on USB, false to disable (default)
+     */
+    void setEnablePowerSavingOnUSB(bool enable);
+
+    /**
+     * @brief Get USB power override status
+     *
+     * @return True if power saving is allowed on USB, false otherwise
+     */
+    bool getEnablePowerSavingOnUSB() const { return m_enablePowerSavingOnUSB; }
+
+    /**
      * @brief Enter light sleep mode
      *
      * WiFi off, CPU 80MHz, wake on motion/button/timer.
@@ -229,8 +264,9 @@ public:
      * @brief Record activity (resets idle timer)
      *
      * Call when system is actively used to prevent sleep.
+     * @param source Optional description of what triggered the activity
      */
-    void recordActivity();
+    void recordActivity(const char* source = nullptr);
 
     /**
      * @brief Set CPU frequency
@@ -313,6 +349,8 @@ private:
     PowerStats m_stats;                 ///< Power statistics
     bool m_initialized;                 ///< Initialization flag
     bool m_batteryMonitoringEnabled;    ///< Battery monitoring enabled (runtime)
+    uint8_t m_powerSavingMode;          ///< Power saving mode (0=off, 1=light sleep, 2=deep+ULP)
+    bool m_enablePowerSavingOnUSB;      ///< Enable power saving even on USB (debug only, resets to false on boot)
 
     uint32_t m_lastActivity;            ///< Last activity timestamp
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
@@ -335,6 +373,13 @@ private:
      * @brief Handle power state machine
      */
     void handlePowerState();
+
+    /**
+     * @brief Log periodic power state summary
+     *
+     * Logs comprehensive state info every 5 minutes for diagnostics
+     */
+    void logStateSummary();
 
     /**
      * @brief Transition to new power state
@@ -391,6 +436,12 @@ private:
      * @return True if idle timeout reached
      */
     bool shouldEnterSleep();
+
+    /**
+     * @brief Load and start the ULP RISC-V program for PIR monitoring in deep sleep.
+     * Only called when m_powerSavingMode == 2, immediately before esp_deep_sleep_start().
+     */
+    void startULPPirMonitor();
 
     /**
      * @brief Save state to RTC memory

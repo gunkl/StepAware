@@ -41,7 +41,8 @@ enum WakeSource {
     WAKE_UNKNOWN = 0,
     WAKE_TIMER = 1,
     WAKE_PIR = 2,
-    WAKE_BUTTON = 3
+    WAKE_BUTTON = 3,
+    WAKE_ULP = 4
 };
 
 #define POWER_BOOT_GRACE_PERIOD_MS    60000
@@ -64,6 +65,10 @@ private:
     float lowBatteryThreshold;
     float criticalBatteryThreshold;
     WakeSource m_wakeSource;
+    uint8_t m_powerSavingMode;
+    bool enableAutoSleep;
+    bool enableDeepSleep;
+    uint32_t stateEnterTime;
 
     // Voltage filter
     static const uint8_t VOLTAGE_SAMPLES = 10;
@@ -90,6 +95,10 @@ public:
         , voltageSampleIndex(0)
         , voltageSamplesFilled(false)
         , m_wakeSource(WAKE_UNKNOWN)
+        , m_powerSavingMode(0)
+        , enableAutoSleep(false)
+        , enableDeepSleep(false)
+        , stateEnterTime(0)
     {
         for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
             voltageSamples[i] = 0.0f;
@@ -200,18 +209,28 @@ public:
                 }
                 break;
 
+            case STATE_LIGHT_SLEEP:
+                if (enableDeepSleep && deepSleepTimeout > 0) {
+                    if (millis() - stateEnterTime >= deepSleepTimeout) {
+                        enterDeepSleep();
+                    }
+                }
+                break;
+
             default:
                 break;
         }
     }
 
     bool shouldEnterSleep() {
+        if (!enableAutoSleep) return false;
         uint32_t idleTime = millis() - lastActivity;
         return idleTime >= lightSleepTimeout;
     }
 
     void enterLightSleep() {
         state = STATE_LIGHT_SLEEP;
+        stateEnterTime = millis();
     }
 
     void enterDeepSleep() {
@@ -223,7 +242,7 @@ public:
         wakeCount++;
         lastActivity = millis();
         // Route wake source: PIR → MOTION_ALERT, everything else → ACTIVE
-        if (m_wakeSource == WAKE_PIR) {
+        if (m_wakeSource == WAKE_PIR || m_wakeSource == WAKE_ULP) {
             state = STATE_MOTION_ALERT;
         } else {
             state = STATE_ACTIVE;
@@ -274,6 +293,15 @@ public:
         m_wakeSource = source;
     }
 
+    void setPowerSavingMode(uint8_t mode) {
+        if (mode > 2) mode = 0;
+        m_powerSavingMode = mode;
+        enableAutoSleep  = (mode >= 1);
+        enableDeepSleep  = (mode == 2);
+    }
+
+    uint8_t getPowerSavingMode() const { return m_powerSavingMode; }
+
     void reset() {
         state = STATE_ACTIVE;
         batteryVoltage = 3.8f;
@@ -288,6 +316,10 @@ public:
         voltageSampleIndex = 0;
         voltageSamplesFilled = false;
         m_wakeSource = WAKE_UNKNOWN;
+        m_powerSavingMode = 0;
+        enableAutoSleep = false;
+        enableDeepSleep = false;
+        stateEnterTime = 0;
         for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
             voltageSamples[i] = 0.0f;
         }
@@ -462,6 +494,7 @@ void test_idle_timeout_light_sleep(void) {
     power.begin();
     advance_time(60001);  // Move past boot grace period
     power.recordActivity();  // Reset idle timer baseline after grace jump
+    power.setPowerSavingMode(1);  // Enable auto-sleep (light sleep mode)
 
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
 
@@ -479,6 +512,7 @@ void test_activity_resets_idle_timer(void) {
     power.begin();
     advance_time(60001);  // Move past boot grace period
     power.recordActivity();  // Reset idle timer baseline after grace jump
+    power.setPowerSavingMode(1);  // Enable auto-sleep so the test is meaningful
 
     // Advance time but keep recording activity
     advance_time(15000); // 15 seconds
@@ -497,6 +531,7 @@ void test_wake_from_sleep(void) {
     power.begin();
     advance_time(60001);  // Move past boot grace period
     power.recordActivity();  // Reset idle timer baseline after grace jump
+    power.setPowerSavingMode(1);  // Enable auto-sleep so idle timeout triggers
 
     // Enter sleep
     advance_time(31000);
@@ -651,6 +686,7 @@ void test_grace_period_suppresses_low_battery(void) {
  */
 void test_grace_period_suppresses_auto_sleep(void) {
     power.begin();
+    power.setPowerSavingMode(1);  // Enable auto-sleep so the grace-period guard is the only thing blocking sleep
 
     // Advance past the 30s light sleep timeout but still within 60s grace period
     advance_time(45000);
@@ -738,6 +774,7 @@ void test_ota_upload_activity_prevents_sleep(void) {
     power.begin();
     advance_time(60001);  // Move past boot grace period
     power.recordActivity();  // Reset idle timer baseline after grace jump
+    power.setPowerSavingMode(1);  // Enable auto-sleep so periodic activity is the only thing preventing sleep
 
     TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
 
@@ -749,6 +786,110 @@ void test_ota_upload_activity_prevents_sleep(void) {
         power.update();
         TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
     }
+}
+
+/**
+ * @brief Test mode 0: no auto-sleep regardless of idle time
+ */
+void test_mode0_no_sleep(void) {
+    power.reset();
+    power.begin();
+    advance_time(60001);  // Past boot grace period
+    power.recordActivity();
+
+    power.setPowerSavingMode(0);
+    TEST_ASSERT_EQUAL(0, power.getPowerSavingMode());
+
+    advance_time(31000);  // Past lightSleepTimeout (30000ms)
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, power.getState());
+}
+
+/**
+ * @brief Test mode 1: idle triggers light sleep, stays in light sleep (no deep sleep)
+ */
+void test_mode1_light_sleep_only(void) {
+    power.reset();
+    power.begin();
+    advance_time(60001);
+    power.recordActivity();
+
+    power.setPowerSavingMode(1);
+    TEST_ASSERT_EQUAL(1, power.getPowerSavingMode());
+
+    // Trigger light sleep
+    advance_time(31000);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+
+    // Wait well past deepSleepTimeout — must NOT transition to deep sleep
+    advance_time(400000);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+}
+
+/**
+ * @brief Test mode 2: idle triggers light sleep, then transitions to deep sleep
+ */
+void test_mode2_light_to_deep_sleep(void) {
+    power.reset();
+    power.begin();
+    advance_time(60001);
+    power.recordActivity();
+
+    power.setPowerSavingMode(2);
+    TEST_ASSERT_EQUAL(2, power.getPowerSavingMode());
+
+    // Trigger light sleep
+    advance_time(31000);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+
+    // Wait past deepSleepTimeout (300000ms in TestPowerManager)
+    advance_time(300001);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_DEEP_SLEEP, power.getState());
+    TEST_ASSERT_EQUAL(1, power.getDeepSleepCount());
+}
+
+/**
+ * @brief Test runtime mode switch from 2 to 1 while active prevents deep sleep
+ */
+void test_mode_switch_2_to_1_while_active(void) {
+    power.reset();
+    power.begin();
+    advance_time(60001);
+    power.recordActivity();
+
+    power.setPowerSavingMode(2);
+    // Switch to mode 1 before any sleep happens
+    power.setPowerSavingMode(1);
+    TEST_ASSERT_EQUAL(1, power.getPowerSavingMode());
+
+    // Trigger light sleep
+    advance_time(31000);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+
+    // Wait — must stay in light sleep (mode 1 disables deep sleep)
+    advance_time(400000);
+    power.update();
+    TEST_ASSERT_EQUAL(STATE_LIGHT_SLEEP, power.getState());
+}
+
+/**
+ * @brief Test ULP wake source routes to MOTION_ALERT
+ */
+void test_wake_ulp_routes_to_motion_alert(void) {
+    power.reset();
+    power.begin();
+
+    power.enterDeepSleep();
+    TEST_ASSERT_EQUAL(STATE_DEEP_SLEEP, power.getState());
+
+    power.setWakeSource(WAKE_ULP);
+    power.wakeUp();
+    TEST_ASSERT_EQUAL(STATE_MOTION_ALERT, power.getState());
 }
 
 // ============================================================================
@@ -802,6 +943,13 @@ int main(int argc, char **argv) {
 
     // OTA upload sleep protection
     RUN_TEST(test_ota_upload_activity_prevents_sleep);
+
+    // Tri-state power saving mode tests
+    RUN_TEST(test_mode0_no_sleep);
+    RUN_TEST(test_mode1_light_sleep_only);
+    RUN_TEST(test_mode2_light_to_deep_sleep);
+    RUN_TEST(test_mode_switch_2_to_1_while_active);
+    RUN_TEST(test_wake_ulp_routes_to_motion_alert);
 
     return UNITY_END();
 }

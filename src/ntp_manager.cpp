@@ -19,6 +19,13 @@ void NTPManager::begin(bool enabled, const char* server, int8_t tzOffsetHours) {
     strlcpy(m_server, server, sizeof(m_server));
     m_tzOffsetHours = tzOffsetHours;
 
+    // Configure timezone immediately so localtime() works if RTC has valid time,
+    // even before configTime()/SNTP runs.  POSIX TZ sign is inverted vs UTC offset.
+    char tz[16];
+    snprintf(tz, sizeof(tz), "UTC%d", -m_tzOffsetHours);
+    setenv("TZ", tz, 1);
+    tzset();
+
     Serial.printf("[NTP] Initialized: %s, server=%s, tz=%+d\n",
                   m_enabled ? "enabled" : "disabled",
                   m_server,

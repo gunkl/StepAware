@@ -19,6 +19,7 @@ const SensorCapabilities HAL_PIR::s_capabilities = {
 
 HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     : m_pin(pin)
+    , m_pinMode(1)  // Default to INPUT_PULLUP
     , m_mockMode(mock_mode)
     , m_initialized(false)
     , m_motionDetected(false)
@@ -31,6 +32,9 @@ HAL_PIR::HAL_PIR(uint8_t pin, bool mock_mode)
     , m_motionEventCount(0)
     , m_lastRisingEdgeMicros(0)
     , m_mockMotionEndTime(0)
+    , m_powerPin(PIN_PIR_POWER_NONE)
+    , m_recalibrating(false)
+    , m_recalStartTime(0)
 {
 }
 
@@ -46,9 +50,16 @@ bool HAL_PIR::begin() {
     DEBUG_LOG_SENSOR("HAL_PIR: Initializing PIR sensor...");
 
     if (!m_mockMode) {
-        // Configure GPIO pin as input
-        pinMode(m_pin, INPUT);
-        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured as INPUT", m_pin);
+        // Configure GPIO pin mode (0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN)
+        pinMode(m_pin, m_pinMode);
+        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured with mode %d", m_pin, m_pinMode);
+
+        // Configure power pin if assigned (drives PIR VCC directly)
+        if (m_powerPin != PIN_PIR_POWER_NONE) {
+            pinMode(m_powerPin, OUTPUT);
+            digitalWrite(m_powerPin, HIGH);  // HIGH = PIR powered
+            DEBUG_LOG_SENSOR("HAL_PIR: Power pin GPIO%d configured (PIR powered)", m_powerPin);
+        }
     } else {
         DEBUG_LOG_SENSOR("HAL_PIR: MOCK MODE - Simulating sensor");
     }
@@ -65,6 +76,25 @@ bool HAL_PIR::begin() {
 
 void HAL_PIR::update() {
     if (!m_initialized) {
+        return;
+    }
+
+    // Recalibration state machine: power-off phase then warm-up restart
+    if (m_recalibrating) {
+        if (millis() - m_recalStartTime < PIR_RECAL_POWER_OFF_MS) {
+            return;  // Still in power-off phase — skip all sensor reads
+        }
+        // Power-off duration elapsed. Restore power and restart warm-up.
+        if (!m_mockMode && m_powerPin != PIN_PIR_POWER_NONE) {
+            digitalWrite(m_powerPin, HIGH);  // PIR powered
+            DEBUG_LOG_SENSOR("HAL_PIR: Recal power restored on GPIO%d", m_powerPin);
+        }
+        m_sensorReady = false;
+        m_startTime = millis();       // Restart warm-up timer
+        m_motionDetected = false;
+        m_lastState = false;          // Reset edge detection
+        m_recalibrating = false;
+        DEBUG_LOG_SENSOR("HAL_PIR: Recalibration complete, warm-up restarted (%u ms)", m_warmupDuration);
         return;
     }
 
@@ -154,7 +184,8 @@ void HAL_PIR::mockSetMotion(bool detected) {
 
     m_motionDetected = detected;
     m_mockMotionEndTime = 0;
-    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion set to %s", detected ? "TRUE" : "FALSE");
+    const char* detectedStr = detected ? "TRUE" : "FALSE";
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Motion set to %s", detectedStr);
 }
 
 void HAL_PIR::mockSetReady() {
@@ -202,5 +233,46 @@ void HAL_PIR::mockSetReady(bool ready) {
     }
 
     m_sensorReady = ready;
-    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor ready state set to %s", ready ? "TRUE" : "FALSE");
+    const char* readyStr = ready ? "TRUE" : "FALSE";
+    DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Sensor ready state set to %s", readyStr);
+}
+
+// =========================================================================
+// Power-Cycle Recalibration Methods
+// =========================================================================
+
+void HAL_PIR::setPinMode(uint8_t mode) {
+    if (mode <= 2) {
+        m_pinMode = mode;
+    }
+}
+
+void HAL_PIR::setPowerPin(uint8_t pin) {
+    m_powerPin = pin;
+    DEBUG_LOG_SENSOR("HAL_PIR: Power pin set to GPIO%d", pin);
+}
+
+bool HAL_PIR::recalibrate() {
+    if (m_powerPin == PIN_PIR_POWER_NONE) {
+        DEBUG_LOG_SENSOR("HAL_PIR: recalibrate() called but no power pin assigned");
+        return false;
+    }
+    if (m_recalibrating) {
+        DEBUG_LOG_SENSOR("HAL_PIR: recalibrate() called but already recalibrating");
+        return true;  // Already in progress — not an error
+    }
+    if (!m_mockMode) {
+        digitalWrite(m_powerPin, LOW);  // Cut PIR power
+        DEBUG_LOG_SENSOR("HAL_PIR: Recalibration started - power cut on GPIO%d", m_powerPin);
+    } else {
+        DEBUG_LOG_SENSOR("HAL_PIR: MOCK - Recalibration started (no GPIO toggle)");
+    }
+    m_recalibrating = true;
+    m_recalStartTime = millis();
+    m_sensorReady = false;
+    return true;
+}
+
+bool HAL_PIR::isRecalibrating() const {
+    return m_recalibrating;
 }
