@@ -567,7 +567,7 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
     // Power
     JsonObject power = doc.createNestedObject("power");
     power["batteryMonitoringEnabled"] = m_config.batteryMonitoringEnabled;
-    power["savingEnabled"] = m_config.powerSavingEnabled;
+    power["savingMode"] = m_config.powerSavingMode;
     power["deepSleepAfterMs"] = m_config.deepSleepAfterMs;
 
     // Logging
@@ -730,11 +730,28 @@ bool ConfigManager::fromJSON(const char* json) {
     // Power
     if (doc.containsKey("power")) {
         m_config.batteryMonitoringEnabled = doc["power"]["batteryMonitoringEnabled"] | false;
-        m_config.powerSavingEnabled = doc["power"]["savingEnabled"] | false;
         m_config.deepSleepAfterMs = doc["power"]["deepSleepAfterMs"] | 3600000;  // 1 hour
+
+        // Migration: savingMode (new) takes priority over savingEnabled (legacy bool).
+        // Legacy true -> 2 because the old bool always ran the full light->deep cascade.
+        if (doc["power"].containsKey("savingMode")) {
+            m_config.powerSavingMode = doc["power"]["savingMode"] | 0;
+        } else if (doc["power"].containsKey("savingEnabled")) {
+            bool legacyEnabled = doc["power"]["savingEnabled"] | false;
+            m_config.powerSavingMode = legacyEnabled ? 2 : 0;
+            DEBUG_LOG_CONFIG("Config migration: savingEnabled(%s) -> savingMode(%u)",
+                legacyEnabled ? "true" : "false", m_config.powerSavingMode);
+        } else {
+            m_config.powerSavingMode = 0;
+        }
+
+        if (m_config.powerSavingMode > 2) {
+            m_config.powerSavingMode = 0;
+        }
+
         // If battery monitoring is off, power saving must be disabled
         if (!m_config.batteryMonitoringEnabled) {
-            m_config.powerSavingEnabled = false;
+            m_config.powerSavingMode = 0;
         }
     }
 
@@ -952,7 +969,10 @@ void ConfigManager::print() {
 
     Serial.println("Power:");
     Serial.printf("  Battery Monitoring: %s\n", m_config.batteryMonitoringEnabled ? "YES" : "NO");
-    Serial.printf("  Saving Enabled: %s\n", m_config.powerSavingEnabled ? "YES" : "NO");
+    static const char* powerSavingModeNames[] = {"Disabled", "Light Sleep", "Deep Sleep+ULP"};
+    Serial.printf("  Saving Mode: %s (%u)\n",
+        m_config.powerSavingMode <= 2 ? powerSavingModeNames[m_config.powerSavingMode] : "INVALID",
+        m_config.powerSavingMode);
     Serial.printf("  Deep Sleep After: %u ms\n", m_config.deepSleepAfterMs);
     Serial.println();
 
@@ -1015,7 +1035,7 @@ void ConfigManager::loadDefaults() {
 
     // Power
     m_config.batteryMonitoringEnabled = false;
-    m_config.powerSavingEnabled = false;
+    m_config.powerSavingMode = 0;  // Disabled
     m_config.deepSleepAfterMs = 3600000;  // 1 hour
 
     // Logging

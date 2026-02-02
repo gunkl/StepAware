@@ -190,20 +190,22 @@ public:
     bool isBatteryMonitoringEnabled() const { return m_batteryMonitoringEnabled; }
 
     /**
-     * @brief Enable or disable automatic sleep at runtime
+     * @brief Set power saving mode at runtime
      *
-     * When disabled, the idle timeout will not trigger light or deep sleep transitions.
+     * Mode 0 = Disabled (no auto-sleep)
+     * Mode 1 = Light Sleep only (auto-sleep, no deep sleep)
+     * Mode 2 = Deep Sleep + ULP (auto-sleep, deep sleep with ULP PIR monitor)
      *
-     * @param enabled True to enable auto-sleep
+     * @param mode Power saving mode (0, 1, or 2; values > 2 are clamped to 0)
      */
-    void setAutoSleepEnabled(bool enabled);
+    void setPowerSavingMode(uint8_t mode);
 
     /**
-     * @brief Check if automatic sleep is enabled
+     * @brief Get current power saving mode
      *
-     * @return True if auto-sleep is active
+     * @return Power saving mode (0, 1, or 2)
      */
-    bool isAutoSleepEnabled() const { return m_config.enableAutoSleep; }
+    uint8_t getPowerSavingMode() const { return m_powerSavingMode; }
 
     /**
      * @brief Enter light sleep mode
@@ -319,6 +321,7 @@ private:
     PowerStats m_stats;                 ///< Power statistics
     bool m_initialized;                 ///< Initialization flag
     bool m_batteryMonitoringEnabled;    ///< Battery monitoring enabled (runtime)
+    uint8_t m_powerSavingMode;          ///< Power saving mode (0=off, 1=light sleep, 2=deep+ULP)
 
     uint32_t m_lastActivity;            ///< Last activity timestamp
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
@@ -397,6 +400,12 @@ private:
      * @return True if idle timeout reached
      */
     bool shouldEnterSleep();
+
+    /**
+     * @brief Load and start the ULP RISC-V program for PIR monitoring in deep sleep.
+     * Only called when m_powerSavingMode == 2, immediately before esp_deep_sleep_start().
+     */
+    void startULPPirMonitor();
 
     /**
      * @brief Save state to RTC memory
