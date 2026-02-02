@@ -32,6 +32,23 @@ Claude is a development assistant that helps with:
 
 See [WEB_UI_ARCHITECTURE_DECISION.md](WEB_UI_ARCHITECTURE_DECISION.md) for full rationale.
 
+### Project Memory: memory.md
+
+**[memory.md](memory.md)** stores tooling locations, environment quirks,
+and hard-won facts about the build system so they don't have to be
+re-discovered every session.
+
+**Claude must:**
+1. Read [memory.md](memory.md) at the start of any session before searching
+   for executables, headers, or library paths.
+2. If a task required several search cycles to locate a tool, executable,
+   library, or header path that is not already in [memory.md](memory.md),
+   **prompt the user**: *"I spent several cycles finding `<what>` at
+   `<path>`. Want me to add it to memory.md?"*  Only add it if the user
+   says yes.
+
+---
+
 ## Git Workflow
 
 ### Commits

@@ -4,6 +4,60 @@
 #include "logger.h"
 #include "debug_logger.h"
 
+// ─── Mode-indicator bitmaps (8×8, MSB = leftmost pixel) ───
+
+// OFF: bold X — clearly distinct from the circle-based MOTION eye
+static const uint8_t MODE_INDICATOR_OFF[] = {
+    0b10000001,  // #      #
+    0b01000010,  //  #    #
+    0b00100100,  //   #  #
+    0b00011000,  //    ##
+    0b00011000,  //    ##
+    0b00100100,  //   #  #
+    0b01000010,  //  #    #
+    0b10000001   // #      #
+};
+
+// CONTINUOUS_ON: filled circle — always-on beacon
+static const uint8_t MODE_INDICATOR_CONTINUOUS[] = {
+    0b00011000,  //    ##
+    0b01111110,  //  ######
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b11111111,  // ########
+    0b01111110,  //  ######
+    0b00011000   //    ##
+};
+
+// MOTION_DETECT: eye with pupil — sensing/watching
+static const uint8_t MODE_INDICATOR_MOTION[] = {
+    0b00000000,  //
+    0b00111100,  //   ####
+    0b01000010,  //  #    #
+    0b10011001,  // #  ##  #
+    0b10011001,  // #  ##  #
+    0b01000010,  //  #    #
+    0b00111100,  //   ####
+    0b00000000   //
+};
+
+// REBOOT: open circle with arrowhead pointing up into gap (refresh symbol)
+// Gap at top, arrow at left end points up-right toward the opening
+static const uint8_t MODE_INDICATOR_REBOOT[] = {
+    0b00000000,  //
+    0b00010000,  //    #           arrow tip
+    0b00110000,  //   ##           arrowhead
+    0b01110010,  //  ###  #        arrow base + right arc (2-px gap)
+    0b01000010,  //  #    #        circle sides
+    0b01000010,  //  #    #        circle sides
+    0b00100100,  //   #  #         circle narrows
+    0b00011000   //    ##          circle bottom
+};
+
+#define MODE_INDICATOR_DURATION_MS   2000  // How long indicator bitmap stays on-screen
+#define REBOOT_FEEDBACK_DURATION_MS  2000  // How long reboot bitmap shows before restart
+
 StateMachine::StateMachine(SensorManager* sensorManager,
                            HAL_LED* hazardLED,
                            HAL_LED* statusLED,
@@ -28,6 +82,10 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_lastMotionState(false)
     , m_sensorReady(false)
     , m_lastApproachingState(false)
+    , m_modeIndicatorActive(false)
+    , m_modeIndicatorEndTime(0)
+    , m_rebootPending(false)
+    , m_rebootTime(0)
 {
 }
 
