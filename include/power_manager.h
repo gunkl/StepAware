@@ -225,6 +225,19 @@ public:
     bool getEnablePowerSavingOnUSB() const { return m_enablePowerSavingOnUSB; }
 
     /**
+     * @brief Register GPIO pins that should wake the device from sleep.
+     *
+     * Must be called once during setup after sensors are loaded from
+     * config.  Only PIR-type sensor pins (active-HIGH output) should be
+     * passed.  The array is copied; the caller does not need to keep it
+     * alive.
+     *
+     * @param pins  Array of GPIO pin numbers
+     * @param count Number of entries (clamped to MAX_MOTION_WAKE_PINS)
+     */
+    void setMotionWakePins(const uint8_t* pins, uint8_t count);
+
+    /**
      * @brief Enter light sleep mode
      *
      * WiFi off, CPU 80MHz, wake on motion/button/timer.
@@ -358,6 +371,13 @@ private:
     CriticalBatteryCallback m_onCriticalBattery;
     UsbPowerCallback m_onUsbPower;
     WakeCallback m_onWake;
+
+    // Motion wake-pin list — populated at boot from sensor config via
+    // setMotionWakePins().  enterLightSleep/enterDeepSleep iterate this
+    // array instead of using a hardcoded single pin.
+    static const uint8_t MAX_MOTION_WAKE_PINS = 4;
+    uint8_t m_motionWakePins[MAX_MOTION_WAKE_PINS];
+    uint8_t m_motionWakePinCount;
 
     /**
      * @brief Handle power state machine

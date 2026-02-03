@@ -992,6 +992,25 @@ void setup() {
     Serial.println("[Setup] Sensor configuration:");
     sensorManager.printStatus();
 
+    // Collect active PIR pins for sleep wake-source registration.
+    // Mirrors the sensor-loading loop above; if no sensors were loaded
+    // from config the fallback default pin is used.
+    {
+        uint8_t wakePins[4];
+        uint8_t wakeCount = 0;
+        for (uint8_t i = 0; i < 4 && wakeCount < 4; i++) {
+            const ConfigManager::SensorSlotConfig& sc = cfg.sensors[i];
+            if (sc.active && sc.enabled && sc.type == SENSOR_TYPE_PIR) {
+                wakePins[wakeCount++] = sc.primaryPin;
+            }
+        }
+        if (wakeCount == 0) {
+            wakePins[wakeCount++] = PIN_PIR_SENSOR;  // fallback default
+        }
+        g_power.setMotionWakePins(wakePins, wakeCount);
+        Serial.printf("[Setup] Motion wake pins: %u configured\n", wakeCount);
+    }
+
     // Assign PIR power pin and create recalibration scheduler.
     // Both PIR sensors share one power wire on GPIO20; bind to the near
     // sensor (slot 0 by convention). One recalibrate() call handles both.
@@ -1218,6 +1237,19 @@ void setup() {
         Serial.println("[Setup] Power manager initialized");
         g_power.onLowBattery(onBatteryLowCallback);
         g_power.onCriticalBattery(onBatteryLowCallback);
+    }
+
+    // Deep sleep reboots the CPU; light sleep can crash-reboot on ESP32-C3
+    // if USB-JTAG-Serial is not re-initialised in time.  In either case the
+    // motion event that triggered the wake is lost (sensors are in warmup).
+    // Fire the warning directly from the power manager's wake-source decision.
+    if (g_power.getState() == PowerManager::STATE_MOTION_ALERT) {
+        if (stateMachine->getMode() == StateMachine::MOTION_DETECT) {
+            uint32_t warnDuration = configManager.getConfig().motionWarningDuration;
+            stateMachine->triggerWarning(warnDuration);
+            Serial.println("[Setup] Motion alert fired from sleep-wake reboot");
+        }
+        g_power.recordActivity("sleep-wake motion");
     }
 
     // ALWAYS reset USB power override to false on boot (for safety/debugging)
