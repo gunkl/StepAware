@@ -8,12 +8,21 @@ Supports an optional `clear` argument: if the user invoked this as `/coredump cl
 
 ## Step 1: Confirm device-specific inputs
 
-Before downloading anything, ask the user to confirm or override these two values. Show the defaults so a simple confirm is enough for the common case:
+Before downloading anything, read `secrets.env` in the project root to obtain
+defaults.  The file uses simple `KEY=VALUE` format (one per line); parse it
+with a plain text read — no special tooling needed.
 
-- **Device IP** — default: `10.123.0.98`
+- **Device IP** — read from `DEVICE_IP` in `secrets.env`.
+  - If `secrets.env` exists and contains `DEVICE_IP`, use that value as the default.
+  - If the file does not exist or `DEVICE_IP` is not set, show **no default**
+    for this field and require the user to supply the IP explicitly before
+    continuing.
 - **Firmware ELF** — default: `.pio/build/esp32c3/firmware.elf` (relative to project root)
 
-These are the only inputs that change between sessions. Everything else (chip type, partition offset, toolchain paths) is constant for this project.
+Show both values to the user (with `[no default — required]` in place of a
+missing IP) and ask for confirmation or override.  A simple confirm is enough
+when both defaults are present.  Do not proceed to Step 2 until a valid IP is
+confirmed.
 
 ---
 

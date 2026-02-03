@@ -53,3 +53,9 @@ pio
 
 # Test artifacts
 test/reports/
+
+# Secrets — device-specific values (never commit)
+secrets.env
+
+# Claude Code local settings (user-specific permission allowlist)
+.claude/settings.local.json
