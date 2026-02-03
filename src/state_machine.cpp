@@ -230,8 +230,11 @@ void StateMachine::handleEvent(SystemEvent event) {
             break;
 
         case EVENT_MOTION_DETECTED:
+        {
             DEBUG_LOG_STATE("StateMachine: Event MOTION_DETECTED");
-            DEBUG_LOG_STATE("Motion detected - event count: %u", m_motionEvents + 1);
+            // Pre-compute to avoid va_list stack corruption
+            uint32_t eventCount = m_motionEvents + 1;
+            DEBUG_LOG_STATE("Motion detected - event count: %u", eventCount);
             m_motionEvents++;
 
             // Trigger warning in appropriate modes
@@ -245,6 +248,7 @@ void StateMachine::handleEvent(SystemEvent event) {
                 triggerWarning(duration);
             }
             break;
+        }
 
         case EVENT_MOTION_CLEARED:
             DEBUG_LOG_STATE("StateMachine: Event MOTION_CLEARED");

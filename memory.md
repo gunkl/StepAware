@@ -81,6 +81,12 @@ hardware limitation — it is a framework packaging gap.
 - GPIO4: Far PIR sensor
 - GPIO5: Battery voltage divider (RESERVED)
 
+**`pinMode` constants are bitmasks, not 0/1/2/3.**
+`INPUT=0x01, INPUT_PULLUP=0x05, INPUT_PULLDOWN=0x09`.
+Never pass a raw enum value to `pinMode()`.  See "GPIO / pinMode Best Practices"
+in `CLAUDE.md` for the full explanation and the switch-case pattern to use.
+(Issue #37)
+
 ---
 
 ## Web UI Buffer Constraints

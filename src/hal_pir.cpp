@@ -50,9 +50,20 @@ bool HAL_PIR::begin() {
     DEBUG_LOG_SENSOR("HAL_PIR: Initializing PIR sensor...");
 
     if (!m_mockMode) {
-        // Configure GPIO pin mode (0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN)
-        pinMode(m_pin, m_pinMode);
-        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured with mode %d", m_pin, m_pinMode);
+        // Map internal pin-mode enum (0/1/2) to the ESP32 Arduino framework
+        // bitmask constants.  These are NOT sequential integers:
+        //   INPUT = 0x01, OUTPUT = 0x03, INPUT_PULLUP = 0x05, INPUT_PULLDOWN = 0x09
+        // Passing the raw enum value to pinMode() would mis-configure the pin
+        // (e.g. enum 1 → 0x01 = INPUT with no pull; enum 2 → 0x02 = OUTPUT).
+        uint8_t ardMode;
+        switch (m_pinMode) {
+            case 0:  ardMode = INPUT;          break;  // 0x01
+            case 1:  ardMode = INPUT_PULLUP;   break;  // 0x05
+            case 2:  ardMode = INPUT_PULLDOWN; break;  // 0x09
+            default: ardMode = INPUT_PULLUP;   break;  // safe default
+        }
+        pinMode(m_pin, ardMode);
+        DEBUG_LOG_SENSOR("HAL_PIR: Pin %d configured with mode %d (arduino 0x%02x)", m_pin, m_pinMode, ardMode);
 
         // Configure power pin if assigned (drives PIR VCC directly)
         if (m_powerPin != PIN_PIR_POWER_NONE) {

@@ -619,6 +619,58 @@ DEBUG_LOG_SYSTEM("Time: %lu.%lu", seconds, deciseconds);  // ✅ Simple variable
 - Serial.printf(), logger.log(), etc.
 - Any function using variadic arguments (...) or va_list
 
+### GPIO / pinMode Best Practices
+
+**CRITICAL: ESP32 Arduino framework `pinMode` constants are bitmasks, NOT sequential integers**
+
+The `framework-arduinoespressif32` used by this project defines `pinMode` constants
+as bit flags.  They do NOT follow the standard-Arduino 0/1/2/3 convention.  Passing
+a raw integer to `pinMode()` will silently mis-configure the pin.
+
+```cpp
+// ACTUAL framework constants (esp32-hal-gpio.h):
+INPUT             = 0x01
+OUTPUT            = 0x03   // Actually INPUT_OUTPUT — pin is readable even as output
+INPUT_PULLUP      = 0x05   // INPUT (0x01) | PULLUP (0x04)
+INPUT_PULLDOWN    = 0x09   // INPUT (0x01) | PULLDOWN (0x08)
+OPEN_DRAIN        = 0x10
+OUTPUT_OPEN_DRAIN = 0x13
+```
+
+The underlying `__pinMode()` implementation extracts direction via
+`mode & (INPUT | OUTPUT)` and pull flags via `mode & PULLUP` / `mode & PULLDOWN`.
+
+**BAD — will silently mis-configure:**
+```cpp
+uint8_t myMode = 1;          // Looks like INPUT_PULLUP in a 0/1/2 scheme
+pinMode(pin, myMode);        // ❌ 0x01 = INPUT with NO pull
+```
+
+**GOOD — always use the named constants:**
+```cpp
+uint8_t myMode = 1;          // Internal enum: 0=INPUT, 1=INPUT_PULLUP, 2=INPUT_PULLDOWN
+uint8_t ardMode;
+switch (myMode) {
+    case 0:  ardMode = INPUT;          break;  // 0x01
+    case 1:  ardMode = INPUT_PULLUP;   break;  // 0x05
+    case 2:  ardMode = INPUT_PULLDOWN; break;  // 0x09
+    default: ardMode = INPUT_PULLUP;   break;
+}
+pinMode(pin, ardMode);       // ✅ Correct constant passed
+```
+
+**Where this was caught in StepAware:**
+The `m_pinMode` field in `HAL_PIR` used a 0/1/2 enum but passed it raw to
+`pinMode()`.  Custom value 1 mapped to `0x01` = bare INPUT instead of
+`INPUT_PULLUP` = `0x05`.  Both PIR sensors (GPIO1 near, GPIO4 far) were
+silently configured without pullups.  The bug was intermittently masked because
+`enterLightSleep()` re-configured GPIO1 via IDF-level `gpio_pullup_en()`
+before each sleep cycle.  See [Issue #37](https://github.com/gunkl/StepAware/issues/37).
+
+**General rule:** If you define your own enum or config value for pin modes,
+always map through a switch or table to the framework constants before calling
+`pinMode()`.  Do not assume the constant values.
+
 ## Limitations of AI Assistance
 
 ### Claude Cannot:

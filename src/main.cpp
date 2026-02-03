@@ -220,7 +220,9 @@ void printStatus() {
         Serial.printf("  SSID: %s\n", wifiStatus.ssid);
         Serial.printf("  IP Address: %s\n", wifiStatus.ip.toString().c_str());
         Serial.printf("  Signal: %d dBm\n", wifiStatus.rssi);
-        Serial.printf("  Uptime: %u seconds\n", wifiStatus.connectionUptime / 1000);
+        // Pre-compute arithmetic to avoid va_list stack corruption
+        uint32_t uptimeSeconds = wifiStatus.connectionUptime / 1000;
+        Serial.printf("  Uptime: %u seconds\n", uptimeSeconds);
     } else if (wifiStatus.state == WiFiManager::STATE_AP_MODE) {
         Serial.printf("  AP SSID: %s\n", wifiStatus.apSSID);
         Serial.printf("  AP IP: %s\n", wifiStatus.ip.toString().c_str());
@@ -1117,7 +1119,9 @@ void setup() {
         Serial.printf("[Setup]   SDA Pin: GPIO %d\n", displayCfg.sdaPin);
         Serial.printf("[Setup]   SCL Pin: GPIO %d\n", displayCfg.sclPin);
         Serial.printf("[Setup]   Brightness: %d/15\n", displayCfg.brightness);
-        Serial.printf("[Setup]   Rotation: %d°\n", displayCfg.rotation * 90);
+        // Pre-compute arithmetic to avoid va_list stack corruption
+        int rotationDegrees = displayCfg.rotation * 90;
+        Serial.printf("[Setup]   Rotation: %d°\n", rotationDegrees);
 
         // Create LED matrix instance
         ledMatrix = new HAL_LEDMatrix_8x8(
