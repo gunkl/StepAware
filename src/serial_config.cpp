@@ -436,7 +436,9 @@ void SerialConfigUI::cmdWifi(size_t argc, char** argv) {
             Serial.printf("  Connected to: %s\n", status.ssid);
             Serial.printf("  IP Address: %s\n", status.ip.toString().c_str());
             Serial.printf("  Signal Strength: %d dBm\n", status.rssi);
-            Serial.printf("  Connection Uptime: %u seconds\n", status.connectionUptime / 1000);
+            // Pre-compute arithmetic to avoid va_list stack corruption
+            uint32_t connectionSeconds = status.connectionUptime / 1000;
+            Serial.printf("  Connection Uptime: %u seconds\n", connectionSeconds);
             Serial.printf("  Reconnect Count: %u\n", status.reconnectCount);
         } else if (status.state == WiFiManager::STATE_AP_MODE) {
             Serial.printf("  AP SSID: %s\n", status.apSSID);

@@ -205,6 +205,17 @@ bool PowerManager::begin(const Config* config) {
 
     // Try to restore state from RTC memory
     if (restoreStateFromRTC()) {
+        // Release any GPIO holds that were latched before deep sleep.
+        // gpio_hold_en() persists across deep-sleep reboot; without this,
+        // any post-wake write to the held pin (e.g. recalibrate toggling
+        // PIN_PIR_POWER LOW) is silently ignored.
+#ifndef MOCK_MODE
+        if (PIN_PIR_POWER != PIN_PIR_POWER_NONE) {
+            gpio_hold_dis((gpio_num_t)PIN_PIR_POWER);
+            DEBUG_LOG_SYSTEM("Power: gpio_hold released on PIR power pin GPIO%d", PIN_PIR_POWER);
+        }
+#endif
+
         // Deep sleep reboots the CPU — wakeCount was already incremented by
         // restoreStateFromRTC(), so go straight to source detection without
         // calling wakeUp() (which would double-increment).
@@ -458,19 +469,23 @@ void PowerManager::handlePowerState() {
                     DEBUG_LOG_SYSTEM("Boot grace period: %lums remaining - sleep blocked", remaining);
                     lastGraceLog = millis();
                 }
-                if (m_batteryStatus.usbPower) {
+                if (m_batteryStatus.usbPower && !m_enablePowerSavingOnUSB) {
                     setState(STATE_USB_POWER);
                 }
                 break;
             }
             // Check for battery issues
             if (m_batteryStatus.critical && !m_batteryStatus.usbPower) {
+                // Cast uint8_t to float to avoid va_list type mismatch
+                float criticalPercent = (float)m_batteryStatus.percentage;
                 DEBUG_LOG_SYSTEM("Critical battery: %.2fV (%.0f%%) - entering CRITICAL_BATTERY state",
-                                 m_batteryStatus.voltage, m_batteryStatus.percentage);
+                                 m_batteryStatus.voltage, criticalPercent);
                 setState(STATE_CRITICAL_BATTERY);
             } else if (m_batteryStatus.low && !m_batteryStatus.usbPower) {
+                // Cast uint8_t to float to avoid va_list type mismatch
+                float lowPercent = (float)m_batteryStatus.percentage;
                 DEBUG_LOG_SYSTEM("Low battery: %.2fV (%.0f%%) - entering LOW_BATTERY state",
-                                 m_batteryStatus.voltage, m_batteryStatus.percentage);
+                                 m_batteryStatus.voltage, lowPercent);
                 setState(STATE_LOW_BATTERY);
             } else if (m_batteryStatus.usbPower && !m_enablePowerSavingOnUSB) {
                 DEBUG_LOG_SYSTEM("USB power detected - transitioning to USB_POWER state (sleep disabled)");
@@ -532,8 +547,12 @@ void PowerManager::handlePowerState() {
                     lastUSBLog = millis();
                 }
             }
+            // If override was enabled at runtime, return to ACTIVE
+            if (m_enablePowerSavingOnUSB) {
+                setState(STATE_ACTIVE, "USB override enabled");
+            }
             // Return to active when unplugged
-            if (!m_batteryStatus.usbPower) {
+            else if (!m_batteryStatus.usbPower) {
                 if (m_batteryStatus.critical) {
                     setState(STATE_CRITICAL_BATTERY);
                 } else if (m_batteryStatus.low) {
@@ -575,9 +594,11 @@ void PowerManager::logStateSummary() {
     DEBUG_LOG_SYSTEM("=== Power State Summary ===");
     DEBUG_LOG_SYSTEM("State: %s (for %lu.%lum)",
                      getStateName(m_state), stateMinutes, stateSeconds);
+    // Cast uint8_t to float to avoid va_list type mismatch
+    float summaryPercent = (float)m_batteryStatus.percentage;
     DEBUG_LOG_SYSTEM("Battery: %.2fV (%.0f%%) %s",
                      m_batteryStatus.voltage,
-                     m_batteryStatus.percentage,
+                     summaryPercent,
                      batterySource);
     DEBUG_LOG_SYSTEM("Power Mode: %d (autoSleep=%s, deepSleep=%s)",
                      m_powerSavingMode, autoSleepStr, deepSleepStr);
@@ -642,9 +663,12 @@ bool PowerManager::shouldEnterSleep() {
     static uint32_t lastIdleLog = 0;
     if (millis() - lastIdleLog >= 60000) {
         uint32_t remaining = m_config.idleToLightSleepMs - idleTime;
+        // Pre-compute arithmetic to avoid va_list stack corruption
+        uint32_t remainingSeconds = remaining / 1000;
+        uint32_t remainingDeciseconds = (remaining % 1000) / 100;
         DEBUG_LOG_SYSTEM("Sleep check: NOT READY - idle=%lums < timeout=%lums (need %lu.%lus more)",
                          idleTime, m_config.idleToLightSleepMs,
-                         remaining / 1000, (remaining % 1000) / 100);
+                         remainingSeconds, remainingDeciseconds);
         lastIdleLog = millis();
     }
 
@@ -668,8 +692,16 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Enable GPIO wakeup source first
     esp_sleep_enable_gpio_wakeup();
 
+    // Configure PIR sensor GPIO for wake-up
+    gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en((gpio_num_t)PIR_SENSOR_PIN);  // PIR sensors use pull-up (active HIGH)
+
     // Wake on PIR motion (HIGH level)
     gpio_wakeup_enable((gpio_num_t)PIR_SENSOR_PIN, GPIO_INTR_HIGH_LEVEL);
+
+    // Configure button GPIO for wake-up
+    gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en((gpio_num_t)BUTTON_PIN);  // Button is active-LOW with pull-up
 
     // Wake on button press (LOW level since button is active-low with pull-up)
     gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
@@ -681,12 +713,25 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
 
+    // Log GPIO levels before entering sleep (for diagnostics)
+    int pirLevel = gpio_get_level((gpio_num_t)PIR_SENSOR_PIN);
+    int buttonLevel = gpio_get_level((gpio_num_t)BUTTON_PIN);
+    DEBUG_LOG_SYSTEM("Light sleep GPIO config: PIR=%d (level=%d), Button=%d (level=%d)",
+                     PIR_SENSOR_PIN, pirLevel, BUTTON_PIN, buttonLevel);
+
     // Enter light sleep
     DEBUG_LOG_SYSTEM("Light sleep: entering now...");
     esp_light_sleep_start();
 
     // Restore after wake (ESP32-C3 max is 160MHz, not 240MHz)
     setCPUFrequency(160);
+
+    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable() persists across
+    // the sleep boundary; leaving it armed means any re-entry to light sleep
+    // with the pin already at the trigger level wakes immediately.
+    gpio_wakeup_disable((gpio_num_t)PIR_SENSOR_PIN);
+    gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
+
     DEBUG_LOG_SYSTEM("Light sleep: woke up, CPU restored to 160MHz");
 #endif
 
@@ -796,10 +841,15 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
     // Format sleep duration
     char durationBuf[32];
     if (sleepDurationMs >= 60000) {
+        // Pre-compute arithmetic to avoid va_list stack corruption
+        uint32_t durationMinutes = sleepDurationMs / 60000;
+        uint32_t durationSeconds = (sleepDurationMs % 60000) / 1000;
         snprintf(durationBuf, sizeof(durationBuf), "%um %us",
-            sleepDurationMs / 60000, (sleepDurationMs % 60000) / 1000);
+            durationMinutes, durationSeconds);
     } else if (sleepDurationMs >= 1000) {
-        snprintf(durationBuf, sizeof(durationBuf), "%us", sleepDurationMs / 1000);
+        // Pre-compute arithmetic to avoid va_list stack corruption
+        uint32_t durationSeconds = sleepDurationMs / 1000;
+        snprintf(durationBuf, sizeof(durationBuf), "%us", durationSeconds);
     } else {
         snprintf(durationBuf, sizeof(durationBuf), "%ums", sleepDurationMs);
     }

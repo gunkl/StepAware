@@ -898,6 +898,7 @@ void WebAPI::handlePostSensors(AsyncWebServerRequest* request, uint8_t* data, si
         currentConfig.sensors[slot].maxDetectionDistance = sensorObj["maxDetectionDistance"] | 3000;
         currentConfig.sensors[slot].distanceZone = sensorObj["distanceZone"] | 0;
         currentConfig.sensors[slot].sensorStatusDisplay = sensorObj["sensorStatusDisplay"] | false;
+        currentConfig.sensors[slot].pinMode = sensorObj["pinMode"] | 1;  // 1 = INPUT_PULLUP (default for SR602)
     }
 
     freeRequestBuffer(request);
