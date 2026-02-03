@@ -16,7 +16,7 @@ configuration, or wake-source routing must be reflected here before merging.
 | Pin   | Function                                                                 |
 |-------|--------------------------------------------------------------------------|
 | GPIO0 | Mode button (active-low, internal pull-up) — wake source in all sleep modes |
-| GPIO1 | Near-zone PIR sensor (active-HIGH) — registered as a motion wake pin    |
+| GPIO1 | Near-zone PIR sensor (active-HIGH) — registered as a motion wake pin; also UART0 RXD in default IO_MUX (see Decision 9) |
 | GPIO4 | Far-zone PIR sensor (active-HIGH) — registered as a motion wake pin     |
 | GPIO5 | Battery ADC (reserved, not used for wakeup)                             |
 | GPIO6 | VBUS detect                                                             |
@@ -74,6 +74,13 @@ hardware wakes the CPU; the post-wake code reads `esp_sleep_get_wakeup_cause()`
 and, if the cause is `ESP_SLEEP_WAKEUP_TIMER`, calls `enterDeepSleep()` to
 complete the transition.
 
+**Timer compensation:** the actual value passed to
+`esp_sleep_enable_timer_wakeup()` is `duration_ms` minus the real-time setup
+overhead (`millis() - m_stateEnterTime`).  `millis()` on ESP32 is compensated
+for time spent inside `esp_light_sleep_start()`, but the GPIO-configuration
+code that runs *before* the call executes in wall-clock time and must be
+subtracted explicitly.
+
 ### 4. Crash-recovery fallback
 
 If the USB-JTAG-Serial re-initialisation (Decision 2) does not fully prevent a
@@ -88,6 +95,11 @@ When both conditions are true the code scans every pin in `m_motionWakePins[]`.
 Any pin that reads HIGH indicates that a PIR sensor fired while the system was
 sleeping or crashing; the wake source is routed to `STATE_MOTION_ALERT` so the
 warning plays despite the unclean wake.
+
+**Ordering requirement (Issue #39):** `saveStateToRTC()` must execute *after*
+`setState(STATE_LIGHT_SLEEP)`.  If it runs first it persists the previous state
+and the `lastState == STATE_LIGHT_SLEEP` check here never matches.  See
+Decision 10.
 
 ### 5. Motion alert injection after reboot
 
@@ -131,6 +143,50 @@ registered motion pins, not only GPIO1.  The ULP source is retained in
 `ulp/ulp_pir_monitor.c` and is ready to activate when the framework gap is
 closed.
 
+### 9. UART0 must be torn down at boot
+
+GPIO1 (the near-zone PIR pin) is mapped to UART0 RXD in the ESP32-C3 default
+IO_MUX.  The bootloader initialises UART0.  If it remains installed, residual
+peripheral state during the light-sleep clock transition causes GPIO1 to read
+HIGH spuriously for 2–3 seconds every time the device enters light sleep —
+indistinguishable from a real AM312 detection pulse by level or duration alone.
+GPIO4 is unaffected because its IO_MUX function-select was never set to a UART
+by the bootloader.
+
+`setup()` calls `uart_driver_delete(UART_NUM_0)` immediately after
+`Serial.begin()`.  This is safe: `Serial` on ESP32-C3 with `ARDUINO_USB_MODE=1`
+routes through the USB-JTAG-Serial peripheral, which is entirely independent of
+UART0.  A self-test `Serial.println` fires right after the delete to confirm
+USB-JTAG-Serial is still alive.
+
+**Diagnostic outcomes after flashing:**
+
+| Serial log / behaviour                                   | Conclusion |
+|----------------------------------------------------------|------------|
+| GPIO1 no longer fires spuriously                         | UART0 was the cause.  Done. |
+| GPIO1 still fires; log shows `UART0 teardown: OK`       | UART0 removed but something else drives GPIO1.  Next step: log GPIO1 at µs granularity around `esp_light_sleep_start()` and read `IO_MUX_GPIO1_REG` directly. |
+| Log shows `UART0 teardown: not installed`                | Bootloader did not initialise UART0.  Investigate PCB trace coupling or framework GPIO driver behaviour. |
+
+**SDK gap:** `gpio_set_glitch_filter()` was investigated as an alternative
+mitigation but does **not exist** in the esp32c3 SDK headers shipped with
+`framework-arduinoespressif32@3.0.0` / `espressif32@6.5.0`.  The only
+`glitch_filter` symbols in the package are PCNT-related and only present for
+esp32 / esp32s2 / esp32s3.  A future framework upgrade or a manual HAL register
+write would be required to enable per-pin digital glitch filtering.
+
+### 10. saveStateToRTC must run after setState
+
+`saveStateToRTC()` writes `m_state` into RTC-backed memory.  It must be called
+**after** `setState()` so the value persisted is the *new* state.  The
+crash-recovery path (Decision 4) gates on `rtcMemory.lastState ==
+STATE_LIGHT_SLEEP`; if `saveStateToRTC()` runs first it writes the previous
+state and crash recovery silently fails.
+
+This ordering bug was present in both `enterLightSleep` and `enterDeepSleep`
+from the original implementation.  Fixed in Issue #39.  Every future
+sleep-entry function must maintain: `setState()` first, `saveStateToRTC()`
+second.
+
 ---
 
 ## Flow Diagrams
@@ -142,9 +198,11 @@ Idle for 3 minutes
         │
         ▼
 enterLightSleep(0)                  ← duration 0 = wake only on GPIO
-  ├── Serial.flush()                ← drain output buffer
+  ├── setState(STATE_LIGHT_SLEEP)   ← update in-RAM state first
+  ├── saveStateToRTC()              ← persist to RTC (MUST follow setState — see Decision 10)
   ├── configure motion pins         ← all pins in m_motionWakePins[], HIGH polarity
   ├── configure button pin          ← GPIO0, LOW polarity
+  ├── Serial.flush() / end()        ← drain + shut down USB-JTAG-Serial cleanly
   └── esp_light_sleep_start()       ← CPU blocks here until a wake event
               │
               ▼  [wake event]
@@ -166,8 +224,11 @@ Idle for 3 minutes
         │
         ▼
 enterLightSleep(lightSleepToDeepSleepMs)   ← timer added alongside GPIO wakeup
-  ├── Serial.flush()
+  ├── setState(STATE_LIGHT_SLEEP)
+  ├── saveStateToRTC()                      ← persists STATE_LIGHT_SLEEP to RTC
   ├── configure motion pins + button
+  ├── enable timer wakeup                   ← duration minus setup overhead
+  ├── Serial.flush() / end()
   └── esp_light_sleep_start()               ← blocks
 
   ──── if GPIO wake fires first ────────────────────────────────
@@ -182,6 +243,8 @@ enterLightSleep(lightSleepToDeepSleepMs)   ← timer added alongside GPIO wakeup
         │
         ▼
   enterDeepSleep(0, "light sleep timeout")
+    ├── setState(STATE_DEEP_SLEEP)
+    ├── saveStateToRTC()                  ← persists STATE_DEEP_SLEEP to RTC
     ├── configure motion pins for deep-sleep GPIO wakeup (bitmask, HIGH polarity)
     ├── configure button for deep-sleep GPIO wakeup (GPIO0, LOW polarity)
     ├── gpio_hold_en(GPIO20)              ← hold PIR power rail HIGH
@@ -211,7 +274,7 @@ enterLightSleep() → esp_light_sleep_start()
         │
         ▼
   restoreStateFromRTC()
-    lastState == STATE_LIGHT_SLEEP          ← persisted in RTC memory before sleep
+    lastState == STATE_LIGHT_SLEEP          ← persisted after setState() (see Decision 10; was broken before Issue #39)
         │
         ▼
   esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED   ← crash signature
@@ -255,6 +318,31 @@ configuration, or wake-source routing.
    - Confirm: serial resumes, state returns to ACTIVE, no alert plays.
    - Let the device enter deep sleep (mode 2, either direct or staged). Press the mode button.
    - Confirm: device reboots, state is ACTIVE, no alert plays.
+
+6. **UART0 teardown confirmed — GPIO1 spurious wake regression (Issue #39)**
+   - At boot, confirm serial log shows both `[Setup] UART0 teardown: OK` and
+     `[Setup] USB-JTAG-Serial self-test: OK`.
+   - Let the device idle for 3 minutes until light-sleep entry is logged.
+   - Do **not** move near the device or trigger any sensor.
+   - **Pass:** device stays asleep.  No alert plays.  Serial produces no further
+     output until real motion or a button press.
+   - **Fail:** serial shows a spurious PIR-motion wake within seconds of sleep
+     entry.  See the diagnostic table in Decision 9 for next steps.
+
+7. **Crash-recovery saveStateToRTC ordering (Issue #39)**
+   - Let the device enter light sleep.
+   - Force a hard reset while it is sleeping (USB power-cycle or reset button).
+   - If a PIR pin is HIGH at the moment the device reboots, serial must log
+     "PIR motion (crash recovery)" and the alert must play via the injection
+     path.  This confirms `lastState == STATE_LIGHT_SLEEP` is now correctly
+     persisted by `saveStateToRTC()`.
+
+8. **Light→deep timer fires at the expected time (Issue #39)**
+   - Set `lightSleepToDeepSleepMs` to a known value (e.g. 10 s).
+   - Let the device idle into light sleep.
+   - Confirm: serial shows the timer-wakeup log after approximately 10 s, then
+     the transition to deep sleep.  The timer must not fire early (over-
+     subtraction) or be skipped.
 
 ---
 
