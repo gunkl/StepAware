@@ -126,3 +126,15 @@ into TWO parts to stay within this limit:
   - 4 new global LED settings (brightnessMedium, 3 blink rates) (~1KB HTML + JavaScript)
   - Total additions: ~3.5KB to Part 2
   - New Part 2 headroom: ~3-4KB at 48KB reservation
+
+---
+
+## Sleep / Wake System
+
+Any changes to sleep entry, wake sources, or GPIO wakeup MUST be
+vetted against `docs/SLEEP_WAKE.md` before merging.  The ESP32-C3
+USB-JTAG-Serial peripheral requires explicit re-init after light
+sleep — see that doc for the full picture.
+
+Wake-source pins are NOT hardcoded.  They are populated at boot from
+the sensor configuration via `PowerManager::setMotionWakePins()`.

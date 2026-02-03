@@ -68,6 +68,7 @@ PowerManager::PowerManager()
     , m_onCriticalBattery(nullptr)
     , m_onUsbPower(nullptr)
     , m_onWake(nullptr)
+    , m_motionWakePinCount(0)
 {
     // Initialize default configuration
     m_config.idleToLightSleepMs = 180000;       // 3 minutes (user configurable: 1-10 min)
@@ -99,6 +100,8 @@ PowerManager::PowerManager()
     for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
         m_voltageSamples[i] = 0.0f;
     }
+
+    memset(m_motionWakePins, 0xFF, sizeof(m_motionWakePins));
 }
 
 PowerManager::~PowerManager() {
@@ -144,6 +147,13 @@ void PowerManager::setEnablePowerSavingOnUSB(bool enable) {
             setState(STATE_ACTIVE, "USB override enabled");
         }
     }
+}
+
+void PowerManager::setMotionWakePins(const uint8_t* pins, uint8_t count) {
+    if (count > MAX_MOTION_WAKE_PINS) count = MAX_MOTION_WAKE_PINS;
+    m_motionWakePinCount = count;
+    memcpy(m_motionWakePins, pins, count);
+    DEBUG_LOG_SYSTEM("Power: setMotionWakePins — %u pin(s) registered", count);
 }
 
 bool PowerManager::begin(const Config* config) {
@@ -496,21 +506,19 @@ void PowerManager::handlePowerState() {
                 if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs == 0) {
                     enterDeepSleep(0, reason);
                 } else {
-                    enterLightSleep(0, reason);
+                    uint32_t sleepDuration = 0;
+                    if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs > 0) {
+                        sleepDuration = m_config.lightSleepToDeepSleepMs;
+                    }
+                    enterLightSleep(sleepDuration, reason);
                 }
             }
             break;
 
         case STATE_LIGHT_SLEEP:
-            // Check if should transition to deep sleep
-            if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs > 0) {
-                uint32_t timeInLightSleep = millis() - m_stateEnterTime;
-                if (timeInLightSleep >= m_config.lightSleepToDeepSleepMs) {
-                    char reason[64];
-                    snprintf(reason, sizeof(reason), "light sleep timeout %ums", timeInLightSleep);
-                    enterDeepSleep(0, reason);
-                }
-            }
+            // Transition to deep sleep is handled inside enterLightSleep()
+            // via a timer wakeup — this state is only held during the
+            // blocking esp_light_sleep_start() call.
             break;
 
         case STATE_DEEP_SLEEP:
@@ -692,12 +700,13 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Enable GPIO wakeup source first
     esp_sleep_enable_gpio_wakeup();
 
-    // Configure PIR sensor GPIO for wake-up
-    gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
-    gpio_pullup_en((gpio_num_t)PIR_SENSOR_PIN);  // PIR sensors use pull-up (active HIGH)
-
-    // Wake on PIR motion (HIGH level)
-    gpio_wakeup_enable((gpio_num_t)PIR_SENSOR_PIN, GPIO_INTR_HIGH_LEVEL);
+    // Configure all registered motion-sensor GPIOs for wake-up
+    for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+        gpio_num_t pin = (gpio_num_t)m_motionWakePins[i];
+        gpio_set_direction(pin, GPIO_MODE_INPUT);
+        gpio_pullup_en(pin);
+        gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
+    }
 
     // Configure button GPIO for wake-up
     gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
@@ -706,33 +715,68 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Wake on button press (LOW level since button is active-low with pull-up)
     gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
 
-    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (PIR pin=%d, BUTTON pin=%d)",
-                     PIR_SENSOR_PIN, BUTTON_PIN);
+    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (%u motion pins, BUTTON pin=%d)",
+                     m_motionWakePinCount, BUTTON_PIN);
 
     // Reduce CPU frequency (ESP32-C3 max is 160MHz)
     DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
 
     // Log GPIO levels before entering sleep (for diagnostics)
-    int pirLevel = gpio_get_level((gpio_num_t)PIR_SENSOR_PIN);
-    int buttonLevel = gpio_get_level((gpio_num_t)BUTTON_PIN);
-    DEBUG_LOG_SYSTEM("Light sleep GPIO config: PIR=%d (level=%d), Button=%d (level=%d)",
-                     PIR_SENSOR_PIN, pirLevel, BUTTON_PIN, buttonLevel);
+    {
+        char pinLog[64];
+        int pos = snprintf(pinLog, sizeof(pinLog), "Light sleep GPIO: ");
+        for (uint8_t i = 0; i < m_motionWakePinCount && pos < 60; i++) {
+            int lvl = gpio_get_level((gpio_num_t)m_motionWakePins[i]);
+            pos += snprintf(pinLog + pos, sizeof(pinLog) - pos,
+                           "GPIO%d=%d ", m_motionWakePins[i], lvl);
+        }
+        {
+            int btnLvl = gpio_get_level((gpio_num_t)BUTTON_PIN);
+            snprintf(pinLog + pos, sizeof(pinLog) - pos, "Button=%d", btnLvl);
+        }
+        DEBUG_LOG_SYSTEM("%s", pinLog);
+    }
 
     // Enter light sleep
     DEBUG_LOG_SYSTEM("Light sleep: entering now...");
+    Serial.flush();  // Drain USB-JTAG-Serial buffer before peripheral goes dormant
     esp_light_sleep_start();
+#endif
 
+    // Re-initialise USB-JTAG-Serial peripheral.  ESP32-C3 gates the
+    // UJTAG clock during light sleep; without this the first serial
+    // write triggers an assertion / watchdog reset.
+    Serial.begin(SERIAL_BAUD_RATE);
+
+#ifndef MOCK_MODE
     // Restore after wake (ESP32-C3 max is 160MHz, not 240MHz)
     setCPUFrequency(160);
 
-    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable() persists across
-    // the sleep boundary; leaving it armed means any re-entry to light sleep
-    // with the pin already at the trigger level wakes immediately.
-    gpio_wakeup_disable((gpio_num_t)PIR_SENSOR_PIN);
+    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable()
+    // persists across the sleep boundary; leaving it armed means any
+    // re-entry to light sleep with the pin already at the trigger
+    // level wakes immediately.
+    for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+        gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
+    }
     gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
+#endif
 
     DEBUG_LOG_SYSTEM("Light sleep: woke up, CPU restored to 160MHz");
+
+#ifndef MOCK_MODE
+    // If the wake was a timer and deep sleep is configured, this was the
+    // light-sleep to deep-sleep transition timer.  Enter deep sleep now
+    // (never returns; system reboots on the next wake).
+    {
+        esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+        if (cause == ESP_SLEEP_WAKEUP_TIMER && m_config.enableDeepSleep) {
+            DEBUG_LOG_SYSTEM("Light sleep: timer expired, entering deep sleep");
+            enterDeepSleep(0, "light sleep timeout");
+            // Never reaches here
+        }
+    }
 #endif
 
     // millis() on ESP32 is compensated for light sleep time
@@ -757,10 +801,17 @@ void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
 
     // PIR: mode 2 uses ULP coprocessor instead of GPIO wakeup for detection.
     // Modes 0/1 should not normally reach enterDeepSleep(), but configure GPIO
-    // wakeup as a safety fallback if they do.
+    // wakeup as a safety fallback if they do.  All registered motion pins
+    // share HIGH polarity so they can be combined into a single bitmask call.
     if (m_powerSavingMode != 2) {
-        gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
-        esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_SENSOR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+        uint64_t pirMask = 0;
+        for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+            gpio_set_direction((gpio_num_t)m_motionWakePins[i], GPIO_MODE_INPUT);
+            pirMask |= (1ULL << m_motionWakePins[i]);
+        }
+        if (pirMask) {
+            esp_deep_sleep_enable_gpio_wakeup(pirMask, ESP_GPIO_WAKEUP_GPIO_HIGH);
+        }
     }
 
     // Hold PIR power GPIO HIGH so sensors stay powered during deep sleep.
@@ -820,8 +871,30 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
             break;
 
         case ESP_SLEEP_WAKEUP_UNDEFINED:
-            wakeSource = "Normal boot";
-            newState = STATE_ACTIVE;
+            // If RTC indicates we were in light sleep, a crash/watchdog
+            // reset occurred rather than a clean boot.  Scan motion-wake
+            // pins: if any is HIGH the motion event that triggered the
+            // original wake is still active — route to MOTION_ALERT so
+            // the alert injection in main.cpp setup can fire.
+            if (rtcMemory.lastState == STATE_LIGHT_SLEEP) {
+                bool motionActive = false;
+                for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+                    if (gpio_get_level((gpio_num_t)m_motionWakePins[i]) == 1) {
+                        motionActive = true;
+                        break;
+                    }
+                }
+                if (motionActive) {
+                    wakeSource = "PIR motion (crash recovery)";
+                    newState = STATE_MOTION_ALERT;
+                } else {
+                    wakeSource = "Light sleep crash (no motion)";
+                    newState = STATE_ACTIVE;
+                }
+            } else {
+                wakeSource = "Normal boot";
+                newState = STATE_ACTIVE;
+            }
             break;
 
         case ESP_SLEEP_WAKEUP_ULP:
@@ -986,7 +1059,15 @@ void PowerManager::startULPPirMonitor() {
     if (err != ESP_OK) {
         DEBUG_LOG_SYSTEM("Power: ULP load failed: %s. Falling back to GPIO wakeup.",
                          esp_err_to_string(err));
-        esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_SENSOR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+        {
+            uint64_t pirMask = 0;
+            for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+                pirMask |= (1ULL << m_motionWakePins[i]);
+            }
+            if (pirMask) {
+                esp_deep_sleep_enable_gpio_wakeup(pirMask, ESP_GPIO_WAKEUP_GPIO_HIGH);
+            }
+        }
         return;
     }
 
@@ -994,7 +1075,15 @@ void PowerManager::startULPPirMonitor() {
     if (err != ESP_OK) {
         DEBUG_LOG_SYSTEM("Power: ULP start failed: %s. Falling back to GPIO wakeup.",
                          esp_err_to_string(err));
-        esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_SENSOR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+        {
+            uint64_t pirMask = 0;
+            for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+                pirMask |= (1ULL << m_motionWakePins[i]);
+            }
+            if (pirMask) {
+                esp_deep_sleep_enable_gpio_wakeup(pirMask, ESP_GPIO_WAKEUP_GPIO_HIGH);
+            }
+        }
         return;
     }
 
@@ -1005,8 +1094,16 @@ void PowerManager::startULPPirMonitor() {
     // deep-sleep wakeup.  Motion detection still works; wakeup cause will be GPIO
     // rather than ESP_SLEEP_WAKEUP_ULP.
     DEBUG_LOG_SYSTEM("Power: ULP not available (build env). Using GPIO wakeup for PIR.");
-    gpio_set_direction((gpio_num_t)PIR_SENSOR_PIN, GPIO_MODE_INPUT);
-    esp_deep_sleep_enable_gpio_wakeup(1ULL << PIR_SENSOR_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+    {
+        uint64_t pirMask = 0;
+        for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+            gpio_set_direction((gpio_num_t)m_motionWakePins[i], GPIO_MODE_INPUT);
+            pirMask |= (1ULL << m_motionWakePins[i]);
+        }
+        if (pirMask) {
+            esp_deep_sleep_enable_gpio_wakeup(pirMask, ESP_GPIO_WAKEUP_GPIO_HIGH);
+        }
+    }
 #endif
 #endif
 }
