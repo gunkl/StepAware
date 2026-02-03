@@ -16,6 +16,9 @@
 #if !MOCK_HARDWARE
 #include <LittleFS.h>  // For animation uploads and user content, NOT for web UI
 #endif
+#if !MOCK_HARDWARE
+#include <driver/uart.h>   // uart_driver_delete — see GPIO1 / UART0 note in setup()
+#endif
 #include "config.h"
 #include "state_machine.h"
 #include "sensor_factory.h"
@@ -803,6 +806,20 @@ void setup() {
     // Initialize serial communication
     Serial.begin(SERIAL_BAUD_RATE);
     delay(1000);  // Allow serial to stabilize
+
+#if !MOCK_HARDWARE
+    // GPIO1 (PIN_PIR_NEAR) is UART0 RXD in the ESP32-C3 default IO_MUX.
+    // The bootloader initialises UART0; leaving it installed can cause GPIO1
+    // to read HIGH during light-sleep transitions.  USB-JTAG-Serial (used by
+    // Serial when ARDUINO_USB_MODE=1) is a completely separate peripheral and
+    // is unaffected by this call.
+    esp_err_t uartErr = uart_driver_delete(UART_NUM_0);
+    const char* uartStatus = (uartErr == ESP_OK) ? "OK" : "not installed";
+    Serial.printf("[Setup] UART0 teardown: %s\n", uartStatus);
+    // Self-test: if this line appears in the serial log, USB-JTAG-Serial is
+    // confirmed alive after the UART0 delete.
+    Serial.println("[Setup] USB-JTAG-Serial self-test: OK");
+#endif
 
     Serial.println("[Setup] Initializing StepAware...");
 

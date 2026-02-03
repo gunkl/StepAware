@@ -684,23 +684,19 @@ bool PowerManager::shouldEnterSleep() {
 }
 
 void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
-    DEBUG_LOG_SYSTEM("Entering light sleep: duration=%lums, wakeup=[GPIO,TIMER]", duration_ms);
+    DEBUG_LOG_SYSTEM("Entering light sleep: duration=%lums", duration_ms);
 
-    saveStateToRTC();
     setState(STATE_LIGHT_SLEEP, reason);
+    saveStateToRTC();
 
 #ifndef MOCK_MODE
-    // Configure wake sources
-    if (duration_ms > 0) {
-        esp_sleep_enable_timer_wakeup(duration_ms * 1000ULL); // Convert to µs
-        DEBUG_LOG_SYSTEM("Light sleep: timer wakeup enabled (%lums)", duration_ms);
-    }
+    // Reduce CPU frequency (ESP32-C3 max is 160MHz, not 240MHz)
+    DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
+    setCPUFrequency(80);
 
-    // ESP32-C3 uses GPIO wakeup for light sleep (gpio_wakeup_enable)
-    // Enable GPIO wakeup source first
+    // Arm GPIO wakeup and enter light sleep.
     esp_sleep_enable_gpio_wakeup();
 
-    // Configure all registered motion-sensor GPIOs for wake-up
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_num_t pin = (gpio_num_t)m_motionWakePins[i];
         gpio_set_direction(pin, GPIO_MODE_INPUT);
@@ -708,21 +704,26 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
     }
 
-    // Configure button GPIO for wake-up
     gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
     gpio_pullup_en((gpio_num_t)BUTTON_PIN);  // Button is active-LOW with pull-up
-
-    // Wake on button press (LOW level since button is active-low with pull-up)
     gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
 
     DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (%u motion pins, BUTTON pin=%d)",
                      m_motionWakePinCount, BUTTON_PIN);
 
-    // Reduce CPU frequency (ESP32-C3 max is 160MHz)
-    DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
-    setCPUFrequency(80);
+    // Timer wakeup for light→deep transition.  Subtract the setup
+    // overhead (millis() - m_stateEnterTime) so the timer covers only
+    // the remaining duration from the caller's perspective.
+    if (duration_ms > 0) {
+        uint32_t elapsedMs = millis() - m_stateEnterTime;
+        if (duration_ms > elapsedMs) {
+            uint32_t remainingMs = duration_ms - elapsedMs;
+            esp_sleep_enable_timer_wakeup((uint64_t)remainingMs * 1000ULL);
+            DEBUG_LOG_SYSTEM("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
+        }
+    }
 
-    // Log GPIO levels before entering sleep (for diagnostics)
+    // Log GPIO levels immediately before sleep entry
     {
         char pinLog[64];
         int pos = snprintf(pinLog, sizeof(pinLog), "Light sleep GPIO: ");
@@ -738,30 +739,24 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM("%s", pinLog);
     }
 
-    // Enter light sleep
     DEBUG_LOG_SYSTEM("Light sleep: entering now...");
-    Serial.flush();  // Drain USB-JTAG-Serial buffer while peripheral is still open
-    Serial.end();    // Cleanly shut down USB-JTAG-Serial before the peripheral clock
-                     // is gated.  flush-only leaves the controller FIFO in a stale
-                     // state; the Windows host driver never sees a disconnect event
-                     // so it never re-syncs.  end() + begin() on wake forces a true
-                     // cold-start that the host can recover from.
+    Serial.flush();  // Drain buffer while peripheral is still open
+    Serial.end();    // Cleanly shut down USB-JTAG-Serial.  end() + begin()
+                     // on wake forces a cold-start the host can recover from.
     esp_light_sleep_start();
 #endif
 
-    // Re-initialise USB-JTAG-Serial.  Serial.end() before sleep shut down the
-    // controller cleanly; begin() here does a full cold-start.  Must remain
-    // outside #ifndef MOCK_MODE so native test builds also call it.
+    // Wake.  Re-initialise USB-JTAG-Serial.  Must remain outside
+    // #ifndef MOCK_MODE so native test builds also exercise this path.
     Serial.begin(SERIAL_BAUD_RATE);
 
 #ifndef MOCK_MODE
-    // Restore after wake (ESP32-C3 max is 160MHz, not 240MHz)
+    // Restore CPU frequency
     setCPUFrequency(160);
 
-    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable()
-    // persists across the sleep boundary; leaving it armed means any
-    // re-entry to light sleep with the pin already at the trigger
-    // level wakes immediately.
+    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable() persists
+    // across the sleep boundary; leaving armed sources means any re-entry
+    // with a pin at the trigger level wakes immediately.
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
     }
@@ -790,8 +785,8 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
-    saveStateToRTC();
     setState(STATE_DEEP_SLEEP, reason);
+    saveStateToRTC();
 
 #ifndef MOCK_MODE
     // Configure wake sources
