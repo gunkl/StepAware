@@ -740,13 +740,18 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
     // Enter light sleep
     DEBUG_LOG_SYSTEM("Light sleep: entering now...");
-    Serial.flush();  // Drain USB-JTAG-Serial buffer before peripheral goes dormant
+    Serial.flush();  // Drain USB-JTAG-Serial buffer while peripheral is still open
+    Serial.end();    // Cleanly shut down USB-JTAG-Serial before the peripheral clock
+                     // is gated.  flush-only leaves the controller FIFO in a stale
+                     // state; the Windows host driver never sees a disconnect event
+                     // so it never re-syncs.  end() + begin() on wake forces a true
+                     // cold-start that the host can recover from.
     esp_light_sleep_start();
 #endif
 
-    // Re-initialise USB-JTAG-Serial peripheral.  ESP32-C3 gates the
-    // UJTAG clock during light sleep; without this the first serial
-    // write triggers an assertion / watchdog reset.
+    // Re-initialise USB-JTAG-Serial.  Serial.end() before sleep shut down the
+    // controller cleanly; begin() here does a full cold-start.  Must remain
+    // outside #ifndef MOCK_MODE so native test builds also call it.
     Serial.begin(SERIAL_BAUD_RATE);
 
 #ifndef MOCK_MODE

@@ -47,12 +47,21 @@ writes to serial, such as a `Serial.print` inside a log macro), the peripheral
 has not yet been re-clocked and the write stalls until the hardware watchdog
 fires — producing what looks like a full boot rather than a resume.
 
-**Fix applied:**
+**Fix applied (three-part sequence):**
 
-1. `Serial.flush()` is called immediately **before** entering light sleep to
-   drain any buffered output.
-2. `Serial.begin(SERIAL_BAUD_RATE)` is called as the **very first** statement
+1. `Serial.flush()` drains any buffered output while the peripheral is still
+   open.
+2. `Serial.end()` cleanly shuts down the USB-JTAG-Serial controller **before**
+   `esp_light_sleep_start()`.  This step is critical: without it the controller
+   FIFO retains stale state across the sleep boundary and the Windows host
+   driver never sees a disconnect event, so it never re-syncs.  `flush()` alone
+   was not sufficient — on-device logs confirmed the wake code path executed
+   correctly but the host-side serial port remained dead until USB was
+   physically disconnected and reconnected.
+3. `Serial.begin(SERIAL_BAUD_RATE)` is called as the **very first** statement
    after `esp_light_sleep_start()` returns, before any other serial activity.
+   Because the peripheral was shut down cleanly, `begin()` performs a true
+   cold-start that the host can recover from.
 
 ### 3. Light-to-deep-sleep transition uses a timer, not a polling loop
 
