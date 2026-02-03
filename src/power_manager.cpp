@@ -7,6 +7,7 @@
 #include <esp_pm.h>
 #include <driver/adc.h>
 #include <driver/gpio.h>
+#include <soc/io_mux_reg.h>   // IO_MUX_GPIO1_REG, MCU_SEL_S, MCU_SEL_V
 // ULP RISC-V support requires esp_ulp_riscv.h + libulp.a from ESP-IDF's ulp component.
 // framework-arduinoespressif32 does not bundle these for ESP32-C3 as of v3.0.0.
 // Define HAS_ULP_RISCV=1 in build_flags when the framework adds them; until then mode 2
@@ -689,6 +690,15 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     setState(STATE_LIGHT_SLEEP, reason);
     saveStateToRTC();
 
+    // Statics for wake snapshot — declared outside MOCK_MODE guard so they are
+    // in scope for the log line after Serial.begin().  Assigned inside the guard;
+    // in MOCK_MODE they stay at 0.
+    static uint8_t s_wakeGPIO1   = 0;
+    static uint8_t s_wakeGPIO4   = 0;
+    static uint8_t s_wakePirPwr  = 0;
+    static uint8_t s_wakeMcuSel  = 0;
+    static int     s_wakeCause   = 0;   // int avoids esp_sleep_wakeup_cause_t in MOCK_MODE
+
 #ifndef MOCK_MODE
     // Reduce CPU frequency (ESP32-C3 max is 160MHz, not 240MHz)
     DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
@@ -697,16 +707,29 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Arm GPIO wakeup and enter light sleep.
     esp_sleep_enable_gpio_wakeup();
 
+    // gpio_config() (not gpio_set_direction) is required here: it reconfigures
+    // the IO_MUX function-select back to GPIO mode.  gpio_set_direction only
+    // touches the GPIO controller direction bit and leaves IO_MUX unchanged.
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_num_t pin = (gpio_num_t)m_motionWakePins[i];
-        gpio_set_direction(pin, GPIO_MODE_INPUT);
-        gpio_pullup_en(pin);
+        gpio_config_t io_conf = {};
+        io_conf.pin_bit_mask = (1ULL << pin);
+        io_conf.mode          = GPIO_MODE_INPUT;
+        io_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+        io_conf.intr_type     = GPIO_INTR_DISABLE;
+        gpio_config(&io_conf);
         gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
     }
 
-    gpio_set_direction((gpio_num_t)BUTTON_PIN, GPIO_MODE_INPUT);
-    gpio_pullup_en((gpio_num_t)BUTTON_PIN);  // Button is active-LOW with pull-up
-    gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+    {
+        gpio_config_t btn_conf = {};
+        btn_conf.pin_bit_mask = (1ULL << BUTTON_PIN);
+        btn_conf.mode          = GPIO_MODE_INPUT;
+        btn_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+        btn_conf.intr_type     = GPIO_INTR_DISABLE;
+        gpio_config(&btn_conf);
+        gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+    }
 
     DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (%u motion pins, BUTTON pin=%d)",
                      m_motionWakePinCount, BUTTON_PIN);
@@ -723,6 +746,15 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         }
     }
 
+    // Diagnostic: verify IO_MUX function-select is GPIO for GPIO1.
+    // FUNC_XTAL_32K_N_GPIO1 == 1.  Any other value means IO_MUX is still
+    // routing a peripheral signal onto the pad.
+    {
+        uint32_t iomuxVal = REG_READ(IO_MUX_GPIO1_REG);
+        uint8_t mcuSel = (iomuxVal >> MCU_SEL_S) & MCU_SEL_V;
+        DEBUG_LOG_SYSTEM("IO_MUX GPIO1: MCU_SEL=%d (1=GPIO)", mcuSel);
+    }
+
     // Log GPIO levels immediately before sleep entry
     {
         char pinLog[64];
@@ -734,7 +766,11 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         }
         {
             int btnLvl = gpio_get_level((gpio_num_t)BUTTON_PIN);
-            snprintf(pinLog + pos, sizeof(pinLog) - pos, "Button=%d", btnLvl);
+            pos += snprintf(pinLog + pos, sizeof(pinLog) - pos, "Btn=%d ", btnLvl);
+        }
+        {
+            int pirPwrLvl = gpio_get_level((gpio_num_t)PIN_PIR_POWER);
+            snprintf(pinLog + pos, sizeof(pinLog) - pos, "PIR_PWR=%d", pirPwrLvl);
         }
         DEBUG_LOG_SYSTEM("%s", pinLog);
     }
@@ -744,11 +780,23 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     Serial.end();    // Cleanly shut down USB-JTAG-Serial.  end() + begin()
                      // on wake forces a cold-start the host can recover from.
     esp_light_sleep_start();
+
+    // Capture pin state at the exact moment of wake.  Serial is not yet
+    // available — store into statics declared above; log after Serial.begin().
+    s_wakeGPIO1  = gpio_get_level((gpio_num_t)PIN_PIR_NEAR);
+    s_wakeGPIO4  = gpio_get_level((gpio_num_t)PIN_PIR_FAR);
+    s_wakePirPwr = gpio_get_level((gpio_num_t)PIN_PIR_POWER);
+    s_wakeCause  = (int)esp_sleep_get_wakeup_cause();
+    s_wakeMcuSel = (REG_READ(IO_MUX_GPIO1_REG) >> MCU_SEL_S) & MCU_SEL_V;
 #endif
 
     // Wake.  Re-initialise USB-JTAG-Serial.  Must remain outside
     // #ifndef MOCK_MODE so native test builds also exercise this path.
     Serial.begin(SERIAL_BAUD_RATE);
+
+    DEBUG_LOG_SYSTEM("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
+                     s_wakeCause, s_wakeGPIO1, s_wakeGPIO4,
+                     s_wakePirPwr, s_wakeMcuSel);
 
 #ifndef MOCK_MODE
     // Restore CPU frequency
@@ -853,15 +901,27 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_GPIO:
             // ESP32-C3 reports a single GPIO wake cause regardless of which pin
-            // triggered it.  Distinguish by reading the button: if it is actively
-            // LOW the user is holding it; otherwise the wake must have come from
-            // the PIR sensor.
+            // triggered it.  Read button first; if not pressed, scan motion pins.
+            // Only route to MOTION_ALERT if a motion pin is actually HIGH now —
+            // a momentary glitch that has already cleared must not trigger an alert.
             if (gpio_get_level((gpio_num_t)BUTTON_PIN) == 0) {
                 wakeSource = "Button";
                 newState = STATE_ACTIVE;
             } else {
-                wakeSource = "PIR motion";
-                newState = STATE_MOTION_ALERT;
+                bool motionHigh = false;
+                for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+                    if (gpio_get_level((gpio_num_t)m_motionWakePins[i]) == 1) {
+                        motionHigh = true;
+                        break;
+                    }
+                }
+                if (motionHigh) {
+                    wakeSource = "PIR motion";
+                    newState = STATE_MOTION_ALERT;
+                } else {
+                    wakeSource = "Spurious GPIO wake (no pin HIGH)";
+                    newState = STATE_ACTIVE;
+                }
             }
             break;
 

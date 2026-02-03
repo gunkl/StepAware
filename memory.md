@@ -36,6 +36,22 @@ Key paths inside the container:
 
 ---
 
+## Device Secrets
+
+Device-specific values (IP address, etc.) are stored in `secrets.env` in the
+project root.  That file is gitignored — only `secrets.env.example` is in the
+repo.
+
+When a task needs the device IP (skills like `/coredump`, ad-hoc curl calls,
+log downloads, or any other interaction with the live device), **read
+`secrets.env` first** and extract `DEVICE_IP`.  Do not hardcode or assume an
+IP address.
+
+If `secrets.env` does not exist, tell the user to copy `secrets.env.example`
+to `secrets.env` and fill in their values before proceeding.
+
+---
+
 ## Python
 
 Use `python3`, not `python`.  The container does not symlink a bare

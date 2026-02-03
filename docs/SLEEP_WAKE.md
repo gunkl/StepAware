@@ -164,7 +164,7 @@ USB-JTAG-Serial is still alive.
 | Serial log / behaviour                                   | Conclusion |
 |----------------------------------------------------------|------------|
 | GPIO1 no longer fires spuriously                         | UART0 was the cause.  Done. |
-| GPIO1 still fires; log shows `UART0 teardown: OK`       | UART0 removed but something else drives GPIO1.  Next step: log GPIO1 at µs granularity around `esp_light_sleep_start()` and read `IO_MUX_GPIO1_REG` directly. |
+| GPIO1 still fires; log shows `UART0 teardown: OK`       | UART0 removed but IO_MUX function-select was not reset.  See Decision 11 — `gpio_config()` is now called before each sleep entry to force MCU_SEL back to GPIO mode.  If GPIO1 is still HIGH *before* sleep (visible in `Light sleep GPIO:` log), the sensor itself is driving it — see Issue #40 diagnostic table. |
 | Log shows `UART0 teardown: not installed`                | Bootloader did not initialise UART0.  Investigate PCB trace coupling or framework GPIO driver behaviour. |
 
 **SDK gap:** `gpio_set_glitch_filter()` was investigated as an alternative
@@ -187,6 +187,60 @@ from the original implementation.  Fixed in Issue #39.  Every future
 sleep-entry function must maintain: `setState()` first, `saveStateToRTC()`
 second.
 
+### 11. Wake-pin configuration must use gpio_config(), not gpio_set_direction()
+
+On ESP32-C3 there are two layers between a GPIO pad and the GPIO controller:
+the **IO_MUX** (selects which peripheral or GPIO function drives/reads the pad)
+and the **GPIO controller** (sets direction, pull, interrupt).
+
+| Function | Reconfigures IO_MUX MCU_SEL? | Sets direction/pull? |
+|---|---|---|
+| `gpio_config()` | **Yes** | Yes |
+| `gpio_set_direction()` | No | Yes (direction only) |
+| `gpio_pullup_en()` | No | Yes (pull only) |
+| Arduino `pinMode()` | **Yes** (calls `gpio_config` internally) | Yes |
+
+GPIO1's IO_MUX defaults to UART0 RXD.  `uart_driver_delete` (Decision 9)
+removes the software driver but does **not** reset MCU_SEL.  `HAL_PIR::begin()`
+calls `pinMode` at boot, which does reset MCU_SEL.  But `enterLightSleep`
+previously used `gpio_set_direction` + `gpio_pullup_en`, which left MCU_SEL
+untouched.  If MCU_SEL was ever wrong — e.g. because `gpio_config` did not
+fully override UART0's claim in this SDK version, or because a peripheral
+driver transiently reclaimed the pin — it stayed wrong through every
+subsequent sleep cycle.
+
+**Fix (Issue #40):** `enterLightSleep` now calls `gpio_config()` for every
+motion-wake pin and the button pin before arming wakeup.  This guarantees
+MCU_SEL is GPIO mode immediately before `esp_light_sleep_start()`.
+
+**Rule:** Any future code that configures a pin for sleep wakeup must use
+`gpio_config()`, never `gpio_set_direction()` alone.
+
+### 12. GPIO wake routing must verify pin levels before alerting
+
+`esp_sleep_get_wakeup_cause()` returns `ESP_SLEEP_WAKEUP_GPIO` regardless of
+which pin triggered the wake.  The previous routing logic checked only whether
+the button was pressed; if it was not, the wake was assumed to be PIR motion and
+routed to `STATE_MOTION_ALERT` unconditionally.
+
+A momentary glitch — pad noise, a brief peripheral signal, or a sub-ms
+transition during the sleep boundary — can trigger the level-sensitive wakeup
+but be gone by the time the post-wake code reads the pin.  The old logic would
+fire the alert anyway.
+
+**Fix (Issue #40):** The `ESP_SLEEP_WAKEUP_GPIO` case now scans every pin in
+`m_motionWakePins[]`.  Only if at least one reads HIGH is the wake routed to
+`STATE_MOTION_ALERT`.  If none is HIGH (and the button is not pressed) the wake
+is logged as `"Spurious GPIO wake (no pin HIGH)"` and routed to `STATE_ACTIVE`.
+This is the same scan pattern already used in the crash-recovery path (Decision
+4).
+
+**Note:** A genuine AM312 pulse lasts 2–3 seconds.  If a real motion event
+triggered the wake but the pulse expires before the scan runs (unlikely given
+the sub-ms Serial.begin + scan latency), the alert will be missed.  The wake
+snapshot log (see below) records pin levels at the exact moment of wake for
+post-hoc analysis.
+
 ---
 
 ## Flow Diagrams
@@ -200,18 +254,23 @@ Idle for 3 minutes
 enterLightSleep(0)                  ← duration 0 = wake only on GPIO
   ├── setState(STATE_LIGHT_SLEEP)   ← update in-RAM state first
   ├── saveStateToRTC()              ← persist to RTC (MUST follow setState — see Decision 10)
-  ├── configure motion pins         ← all pins in m_motionWakePins[], HIGH polarity
-  ├── configure button pin          ← GPIO0, LOW polarity
+  ├── gpio_config() motion pins     ← all pins in m_motionWakePins[]; gpio_config resets IO_MUX (see Decision 11)
+  ├── gpio_config() button pin      ← GPIO0, LOW polarity
+  ├── log IO_MUX MCU_SEL            ← diagnostic: confirms GPIO1 IO_MUX is GPIO mode
+  ├── log GPIO levels + PIR power   ← snapshot before sleep; GPIO1=1 here means sensor is driving HIGH
   ├── Serial.flush() / end()        ← drain + shut down USB-JTAG-Serial cleanly
   └── esp_light_sleep_start()       ← CPU blocks here until a wake event
               │
               ▼  [wake event]
+  ├── wake snapshot capture         ← GPIO1/4, PIR_PWR, MCU_SEL, cause stored in statics (Serial not yet up)
   ├── Serial.begin(SERIAL_BAUD_RATE)  ← MUST execute before any serial output
+  ├── log wake snapshot             ← pin levels at exact moment of wake
   ├── restore CPU frequency
   ├── disable GPIO wakeup sources
-  └── detect wake cause
+  └── detect wake cause             ← see Decision 12: scans pins, not just button
             ├── motion pin HIGH  →  STATE_MOTION_ALERT  →  alert plays via edge detection
-            └── button pressed   →  STATE_ACTIVE         →  resume normal operation
+            ├── button pressed   →  STATE_ACTIVE         →  resume normal operation
+            └── no pin HIGH      →  STATE_ACTIVE         →  "Spurious GPIO wake" logged
         │
         ▼
   return to main loop               ← normal resume; no reboot
@@ -319,15 +378,25 @@ configuration, or wake-source routing.
    - Let the device enter deep sleep (mode 2, either direct or staged). Press the mode button.
    - Confirm: device reboots, state is ACTIVE, no alert plays.
 
-6. **UART0 teardown confirmed — GPIO1 spurious wake regression (Issue #39)**
-   - At boot, confirm serial log shows both `[Setup] UART0 teardown: OK` and
+6. **GPIO1 spurious wake regression (Issues #39, #40)**
+   - At boot, confirm serial log shows `[Setup] UART0 teardown: OK` and
      `[Setup] USB-JTAG-Serial self-test: OK`.
    - Let the device idle for 3 minutes until light-sleep entry is logged.
    - Do **not** move near the device or trigger any sensor.
    - **Pass:** device stays asleep.  No alert plays.  Serial produces no further
      output until real motion or a button press.
-   - **Fail:** serial shows a spurious PIR-motion wake within seconds of sleep
-     entry.  See the diagnostic table in Decision 9 for next steps.
+   - **Fail:** serial shows a wake within seconds of sleep entry.  Pull the log
+     (`/device-logs`) and record these four lines:
+     - `IO_MUX GPIO1: MCU_SEL=` — must be `1` (GPIO).  Any other value means
+       IO_MUX is still corrupted despite `gpio_config()`.
+     - `Light sleep GPIO: GPIO1=` — if `1`, the AM312 sensor is driving HIGH
+       *before* sleep; the problem is the sensor or its power rail, not IO_MUX.
+     - `Wake snapshot: … GPIO1= … MCU_SEL=` — pin state at the exact moment of
+       wake.  Compare with pre-sleep GPIO1 to determine if the transition itself
+       caused the HIGH.
+     - `Power: … (wake: …)` — if it says `Spurious GPIO wake (no pin HIGH)` the
+       glitch cleared before the scan; the alert was correctly suppressed.
+   - See the diagnostic table in Issue #40 for next-step mapping.
 
 7. **Crash-recovery saveStateToRTC ordering (Issue #39)**
    - Let the device enter light sleep.
@@ -343,6 +412,15 @@ configuration, or wake-source routing.
    - Confirm: serial shows the timer-wakeup log after approximately 10 s, then
      the transition to deep sleep.  The timer must not fire early (over-
      subtraction) or be skipped.
+
+9. **Spurious GPIO wake is suppressed, not alerted (Issue #40)**
+   - Confirm the routing fix is active: after any GPIO wake from light sleep
+     where the log shows `Spurious GPIO wake (no pin HIGH)`, verify that no
+     alert sound plays and the state returns to ACTIVE (not MOTION_ALERT).
+   - This scenario is triggered automatically whenever a momentary glitch wakes
+     the device but clears before the post-wake pin scan.  It may also be
+     triggered by temporarily shorting a motion pin HIGH for < 1 ms with a
+     scope probe while the device is in light sleep.
 
 ---
 
