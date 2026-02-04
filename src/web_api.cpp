@@ -585,6 +585,8 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
         powerObj["activeTime"] = powerStats.activeTime;
         powerObj["sleepTime"] = powerStats.sleepTime;
         powerObj["wakeCount"] = powerStats.wakeCount;
+        powerObj["lightSleepTime"] = powerStats.lightSleepTime;
+        powerObj["deepSleepTime"]  = powerStats.deepSleepTime;
     }
 
     // Watchdog Manager (if available)
@@ -2698,6 +2700,8 @@ void WebAPI::buildDashboardHTML() {
     html += "<tr style=\"border-top:1px solid #e2e8f0;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Battery</td><td style=\"padding:6px 10px;\" id=\"sys-battery\">--</td></tr>";
     html += "<tr style=\"background:#f8fafc;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Voltage</td><td style=\"padding:6px 10px;\" id=\"sys-voltage\">--</td></tr>";
     html += "<tr><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Power State</td><td style=\"padding:6px 10px;\" id=\"sys-power-state\">--</td></tr>";
+    html += "<tr style=\"background:#f8fafc;\"><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Light Sleep</td><td style=\"padding:6px 10px;\" id=\"sys-light-sleep\">--</td></tr>";
+    html += "<tr><td style=\"padding:6px 10px;font-weight:600;color:#64748b;\">Deep Sleep</td><td style=\"padding:6px 10px;\" id=\"sys-deep-sleep\">--</td></tr>";
     html += "</table></div>";
 
     // Logs card — file download management
@@ -3111,7 +3115,12 @@ void WebAPI::buildDashboardHTML() {
     html2 += "else{battText=data.power.batteryPercent+'%';}";
     html2 += "document.getElementById('sys-battery').textContent=battText;";
     html2 += "document.getElementById('sys-voltage').textContent=data.power.batteryVoltage.toFixed(2)+' V';";
-    html2 += "document.getElementById('sys-power-state').textContent=data.power.stateName;}}";
+    html2 += "document.getElementById('sys-power-state').textContent=data.power.stateName;}";
+    html2 += "const lsT=data.power.lightSleepTime||0;";
+    html2 += "document.getElementById('sys-light-sleep').textContent=Math.floor(lsT/3600)+'h '+Math.floor((lsT%3600)/60)+'m';";
+    html2 += "const dsT=data.power.deepSleepTime||0;";
+    html2 += "document.getElementById('sys-deep-sleep').textContent=Math.floor(dsT/3600)+'h '+Math.floor((dsT%3600)/60)+'m';";
+    html2 += "}";
 
     // Update mode buttons
     html2 += "for(let i=0;i<=2;i++){const btn=document.getElementById('btn-'+i);";
