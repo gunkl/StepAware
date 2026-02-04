@@ -8,6 +8,7 @@
 #include <driver/adc.h>
 #include <driver/gpio.h>
 #include <soc/io_mux_reg.h>   // IO_MUX_GPIO1_REG, MCU_SEL_S, MCU_SEL_V
+#include <soc/gpio_reg.h>    // GPIO_PIN4_REG, GPIO_PIN_INT_TYPE_GET, GPIO_PIN_WAKEUP_ENABLE_GET
 // ULP RISC-V support requires esp_ulp_riscv.h + libulp.a from ESP-IDF's ulp component.
 // framework-arduinoespressif32 does not bundle these for ESP32-C3 as of v3.0.0.
 // Define HAS_ULP_RISCV=1 in build_flags when the framework adds them; until then mode 2
@@ -72,7 +73,7 @@ PowerManager::PowerManager()
     , m_motionWakePinCount(0)
 {
     // Initialize default configuration
-    m_config.idleToLightSleepMs = 180000;       // 3 minutes (user configurable: 1-10 min)
+    m_config.idleToLightSleepMs = 180000;       // 3 minutes
     m_config.lightSleepToDeepSleepMs = 60000;   // 1 minute from light sleep (0 = skip light sleep)
     m_config.lowBatteryThreshold = 3.4f;        // 3.4V (~20%)
     m_config.criticalBatteryThreshold = 3.2f;   // 3.2V (~5%)
@@ -704,9 +705,6 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
 
-    // Arm GPIO wakeup and enter light sleep.
-    esp_sleep_enable_gpio_wakeup();
-
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
     // the IO_MUX function-select back to GPIO mode.  gpio_set_direction only
     // touches the GPIO controller direction bit and leaves IO_MUX unchanged.
@@ -715,10 +713,30 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         gpio_config_t io_conf = {};
         io_conf.pin_bit_mask = (1ULL << pin);
         io_conf.mode          = GPIO_MODE_INPUT;
-        io_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
         io_conf.intr_type     = GPIO_INTR_DISABLE;
-        gpio_config(&io_conf);
-        gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
+
+        if (pin == (gpio_num_t)PIN_PIR_NEAR) {
+            // GPIO1 pad is XTAL_32K_N on ESP32-C3.  The clock-gate
+            // transition inside esp_light_sleep_start() produces a
+            // momentary HIGH glitch on this pad every time, regardless
+            // of IO_MUX, pull, or UART0 state.  Arming it as a HIGH-level
+            // wakeup source causes an immediate spurious wake on every
+            // sleep entry.  Confirmed via bisection (Issue #38).
+            // Mitigation: leave as bare INPUT (no pull) during sleep so
+            // the glitch cannot latch the wakeup controller.  Pull-up is
+            // restored after wake (see gpio_wakeup_disable block).
+            // Near-PIR motion is still readable in ACTIVE/MOTION_ALERT;
+            // only the sleep wake-up path is affected.
+            io_conf.pull_up_en    = GPIO_PULLUP_DISABLE;
+            io_conf.pull_down_en  = GPIO_PULLDOWN_DISABLE;
+            gpio_config(&io_conf);
+            // intentionally not armed as a wakeup source
+        } else {
+            io_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+            gpio_config(&io_conf);
+            esp_err_t wakeErr = gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
+            DEBUG_LOG_SYSTEM("Light sleep: GPIO%d armed HIGH-level wakeup (rc=%d)", (int)pin, (int)wakeErr);
+        }
     }
 
     {
@@ -728,11 +746,9 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         btn_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
         btn_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&btn_conf);
-        gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+        esp_err_t btnWakeErr = gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+        DEBUG_LOG_SYSTEM("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
     }
-
-    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup enabled (%u motion pins, BUTTON pin=%d)",
-                     m_motionWakePinCount, BUTTON_PIN);
 
     // Timer wakeup for light→deep transition.  Subtract the setup
     // overhead (millis() - m_stateEnterTime) so the timer covers only
@@ -755,6 +771,17 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM("IO_MUX GPIO1: MCU_SEL=%d (1=GPIO)", mcuSel);
     }
 
+    // Diagnostic: read GPIO4 pin register to verify wakeup_enable and
+    // int_type were actually written by gpio_wakeup_enable().
+    // Expected: int_type=4 (HIGH_LEVEL), wakeup_en=1.
+    {
+        uint32_t pin4Val     = REG_READ(GPIO_PIN4_REG);
+        uint8_t  pin4IntType  = GPIO_PIN_INT_TYPE_GET(pin4Val);
+        uint8_t  pin4WakeupEn = GPIO_PIN_WAKEUP_ENABLE_GET(pin4Val);
+        DEBUG_LOG_SYSTEM("GPIO4 reg: int_type=%d (4=HIGH) wakeup_en=%d",
+                         pin4IntType, pin4WakeupEn);
+    }
+
     // Log GPIO levels immediately before sleep entry
     {
         char pinLog[64];
@@ -774,6 +801,17 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         }
         DEBUG_LOG_SYSTEM("%s", pinLog);
     }
+
+    // Hold GPIO20 (PIR sensor power rail) OUTPUT HIGH during light sleep.
+    // ESP32-C3 does not automatically retain GPIO output values through the
+    // light-sleep clock-gate transition — without gpio_hold_en the output
+    // reverts to 0, cutting power to both AM312 sensors.  gpio_hold_dis()
+    // is called after wake before any sensor reads.
+    gpio_hold_en((gpio_num_t)PIN_PIR_POWER);
+
+    // Global GPIO wakeup enable — must come AFTER all gpio_wakeup_enable()
+    // calls per ESP-IDF documented order (esp_sleep.h §287).
+    esp_sleep_enable_gpio_wakeup();
 
     DEBUG_LOG_SYSTEM("Light sleep: entering now...");
     Serial.flush();  // Drain buffer while peripheral is still open
@@ -809,6 +847,23 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
     }
     gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
+
+    // Release the output hold on the PIR sensor power rail.  During light
+    // sleep gpio_hold_en() kept GPIO20 HIGH so the AM312 sensors stayed
+    // powered; releasing it now lets normal GPIO driver control resume.
+    gpio_hold_dis((gpio_num_t)PIN_PIR_POWER);
+
+    // Restore GPIO1 (near PIR) pull-up stripped before sleep to avoid the
+    // XTAL_32K_N pad-glitch spurious wake.  gpio_config() also re-confirms
+    // IO_MUX GPIO mode on the pad.
+    {
+        gpio_config_t restore_conf = {};
+        restore_conf.pin_bit_mask = (1ULL << PIN_PIR_NEAR);
+        restore_conf.mode          = GPIO_MODE_INPUT;
+        restore_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+        restore_conf.intr_type     = GPIO_INTR_DISABLE;
+        gpio_config(&restore_conf);
+    }
 #endif
 
     DEBUG_LOG_SYSTEM("Light sleep: woke up, CPU restored to 160MHz");

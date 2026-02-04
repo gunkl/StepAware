@@ -194,6 +194,13 @@ private:
     size_t m_writesSinceFlush;
     SensorState m_sensorStates[8];  // Track state for up to 8 sensors
 
+    // Last rotation outcome — written into the new current log header so the
+    // result is visible via /api/debug/logs/current (Serial.printf output is
+    // lost before the file is opened).
+    bool m_rotCurrentExisted;       ///< current log existed when rotateLogs ran
+    bool m_rotCurrentToBootOk;      ///< rename current → boot_1 succeeded
+    bool m_rotBootToBoot2Ok;        ///< rename boot_1 → boot_2 succeeded
+
     // Constants
     static constexpr const char* LOG_DIR = "/logs";
     static constexpr const char* CURRENT_LOG = "/logs/boot_current.log";

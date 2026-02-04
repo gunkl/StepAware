@@ -20,7 +20,7 @@ configuration, or wake-source routing must be reflected here before merging.
 | GPIO4 | Far-zone PIR sensor (active-HIGH) — registered as a motion wake pin     |
 | GPIO5 | Battery ADC (reserved, not used for wakeup)                             |
 | GPIO6 | VBUS detect                                                             |
-| GPIO20| PIR power rail (shared); held HIGH via `gpio_hold_en` during deep sleep |
+| GPIO20| PIR power rail (shared); held HIGH via `gpio_hold_en` during light and deep sleep (see Decision 14) |
 
 ---
 
@@ -241,6 +241,63 @@ the sub-ms Serial.begin + scan latency), the alert will be missed.  The wake
 snapshot log (see below) records pin levels at the exact moment of wake for
 post-hoc analysis.
 
+### 13. GPIO1 (XTAL\_32K\_N pad) excluded from light-sleep wakeup sources
+
+**Symptom:** Every entry into `esp_light_sleep_start()` produced an immediate
+GPIO wake on GPIO1, regardless of sensor state, IO_MUX value, UART0 driver
+state, or pull-up configuration.
+
+**Root-cause isolation (Issue #38, Phase 2):**
+
+| Test | Result | Conclusion |
+|---|---|---|
+| Halt before `esp_light_sleep_start()` | GPIO1 stays 0 | Glitch is not in firmware setup |
+| Full path (sleep entered) | GPIO1 = 1 at wake snapshot | Glitch fires inside the IDF call |
+| IO_MUX MCU_SEL at wake | 1 (GPIO) | IO_MUX is not corrupted |
+| GPIO4 (plain pad, same sensor model, same power rail) | Never glitches | Pad-specific, not sensor or power-rail |
+| GPIO1 removed from wakeup sources | Device sleeps indefinitely | Glitch still occurs but can no longer latch the wake controller |
+
+The glitch is a pad-level artefact of the ESP32-C3 clock-gate transition on the
+XTAL\_32K\_N pad.  It is not caused by any software-visible register and cannot be
+masked by pull configuration or IO_MUX settings.
+
+**Mitigation:** `enterLightSleep` treats `PIN_PIR_NEAR` (GPIO1) specially:
+
+1. Configured as bare INPUT — pulls disabled — so the glitch pulse cannot be
+   reinforced by an on-chip pull.
+2. **Not** armed via `gpio_wakeup_enable`.  The sleep controller never sees it.
+3. Pull-up is restored via `gpio_config()` immediately after wake, before any
+   sensor reads.
+
+**Trade-off:** The near PIR sensor cannot trigger a wake from light sleep.
+Wake-from-motion relies on the far PIR (GPIO4) alone.  Both sensors remain
+fully readable once the device is in ACTIVE or MOTION\_ALERT.
+
+### 14. GPIO20 (PIR power rail) must be held during light sleep
+
+**Symptom:** GPIO4 (far PIR) was armed for HIGH-level wakeup and
+`gpio_wakeup_enable()` returned ESP\_OK, but the device never woke on motion.
+Pre-sleep log showed `PIR_PWR=1`; wake snapshot showed `PIR_PWR=0`.
+
+**Root cause:** On ESP32-C3 GPIO output values are **not** retained through
+the `esp_light_sleep_start()` clock-gate transition without an explicit
+`gpio_hold_en()` call.  GPIO20 reverted to 0, cutting power to both AM312
+sensors.  Without power the sensors cannot detect motion and GPIO4 never
+transitions to HIGH.
+
+This contradicts the general ESP-IDF documentation that states outputs are
+retained during light sleep.  The behaviour is specific to ESP32-C3 and was
+confirmed empirically: `PIR_PWR` dropped from 1 to 0 in consecutive
+pre-sleep / wake-snapshot pairs with no `gpio_hold_en`.
+
+**Mitigation:** `enterLightSleep()` calls `gpio_hold_en(GPIO20)` after all
+per-pin wakeup configuration and before `esp_light_sleep_start()`.
+`gpio_hold_dis(GPIO20)` is called in the post-wake cleanup block, after
+`gpio_wakeup_disable()` and before the GPIO1 pull-up restore.
+
+**Verified:** Wake snapshot `PIR_PWR=1` confirmed on the first test cycle
+after the fix.  GPIO4 HIGH-level wake fires correctly.
+
 ---
 
 ## Flow Diagrams
@@ -254,7 +311,7 @@ Idle for 3 minutes
 enterLightSleep(0)                  ← duration 0 = wake only on GPIO
   ├── setState(STATE_LIGHT_SLEEP)   ← update in-RAM state first
   ├── saveStateToRTC()              ← persist to RTC (MUST follow setState — see Decision 10)
-  ├── gpio_config() motion pins     ← all pins in m_motionWakePins[]; gpio_config resets IO_MUX (see Decision 11)
+  ├── gpio_config() motion pins     ← GPIO1 bare INPUT + excluded; GPIO4 armed (see Decisions 11, 13)
   ├── gpio_config() button pin      ← GPIO0, LOW polarity
   ├── log IO_MUX MCU_SEL            ← diagnostic: confirms GPIO1 IO_MUX is GPIO mode
   ├── log GPIO levels + PIR power   ← snapshot before sleep; GPIO1=1 here means sensor is driving HIGH
@@ -275,6 +332,229 @@ enterLightSleep(0)                  ← duration 0 = wake only on GPIO
         ▼
   return to main loop               ← normal resume; no reboot
 ```
+
+### Light sleep — detailed GPIO and register state trace
+
+The flow diagram above shows the code path.  This section walks through
+every step with the actual GPIO levels and IO_MUX register state at each
+point.  All line numbers refer to `src/power_manager.cpp`.
+
+**Pin map (see also the table at the top of this document):**
+
+| Pin | Role | Active | Wakeup polarity |
+|---|---|---|---|
+| GPIO0 | Mode button | LOW (pull-up) | LOW-level |
+| GPIO1 | PIR Near (AM312); IO_MUX pad = XTAL\_32K\_N | HIGH | **EXCLUDED** — pad glitch (see Decision 13) |
+| GPIO4 | PIR Far (AM312); plain GPIO pad | HIGH | HIGH-level (sole motion wake source) |
+| GPIO20 | PIR power rail (shared OUTPUT) | HIGH | not a wake source |
+
+GPIO1's IO_MUX MCU_SEL must be **1** for GPIO mode.  Any other value
+means a peripheral (e.g. UART0 RXD) is still driving the pad.
+
+---
+
+**Step 1 — Idle timeout fires**
+
+`shouldEnterSleep()` returns true when `millis() - m_lastActivity >=
+idleToLightSleepMs` (default 180 000 ms).  The main loop calls
+`enterLightSleep(0)`.
+
+Typical GPIO state entering the call: GPIO1=0, GPIO4=0, GPIO0=1
+(pulled up, button not pressed), GPIO20=1 (sensor power OUTPUT HIGH).
+
+**Step 2 — State persist (lines 690–691)**
+
+`setState(STATE_LIGHT_SLEEP)` updates in-RAM state; `saveStateToRTC()`
+writes it to RTC-backed memory.  Order is critical — see Decision 10.
+No GPIO change.
+
+**Step 3 — CPU 160 → 80 MHz (line 705)**
+
+`setCPUFrequency(80)` reconfigures the PLL.  No GPIO registers are
+touched.  GPIO states unchanged.
+
+**Step 4 — Arm GPIO wakeup controller (line 708)**
+
+`esp_sleep_enable_gpio_wakeup()` sets a single enable bit in the sleep
+controller.  No per-pin configuration yet.
+
+**Step 5 — Configure motion pins via `gpio_config()` (lines 713–734)**
+
+Loops over `m_motionWakePins[]` — GPIO1, then GPIO4 in the default
+two-sensor layout.  `gpio_config()` is used instead of
+`gpio_set_direction()` because it reconfigures **both** layers (see
+Decision 11).
+
+GPIO1 is handled differently from all other motion pins because of the
+XTAL\_32K\_N pad glitch (Decision 13):
+
+| Pin | Pull | Armed as wakeup? | Why |
+|---|---|---|---|
+| GPIO1 (near PIR) | **NONE** (both disabled) | **No** | Pad glitch would cause immediate spurious wake |
+| GPIO4 (far PIR) | UP | Yes — HIGH-level | Plain pad, no glitch |
+
+For armed pins, `gpio_wakeup_enable(pin, HIGH_LEVEL)` latches the sleep
+controller.
+
+State after this block:
+
+| Pin | Dir | Pull | MCU_SEL | Wakeup |
+|---|---|---|---|---|
+| GPIO0 | INPUT (unchanged) | UP | unchanged | not yet |
+| GPIO1 | INPUT | **NONE** | 1 | **not armed** |
+| GPIO4 | INPUT | UP | 1 | HIGH-level |
+| GPIO20 | OUTPUT HIGH | — | unchanged | — |
+
+**Step 6 — Configure button via `gpio_config()` (lines 724–732)**
+
+Same as step 5 but for GPIO0 with **LOW-level** wakeup (button is
+active-low).  After this step GPIO0's wakeup latch is armed.
+
+**Step 7 — Timer wakeup (lines 740–747) — conditional**
+
+Only armed when `duration_ms > 0` (light→deep staged transition).  With
+`duration_ms == 0` (indefinite GPIO-only sleep) this block is skipped.
+The value passed to `esp_sleep_enable_timer_wakeup()` is `duration_ms`
+minus the real-wall-clock setup overhead — see Decision 3.
+
+**Step 8 — IO_MUX diagnostic read (lines 752–756)**
+
+```cpp
+mcuSel = (REG_READ(IO_MUX_GPIO1_REG) >> MCU_SEL_S) & MCU_SEL_V;
+```
+
+Confirms step 5 wrote correctly.  Logged as `IO_MUX GPIO1: MCU_SEL=X`.
+Expected: **1**.  Any other value means something re-claimed the pad
+between step 5 and here.
+
+**Step 9 — Pre-sleep GPIO snapshot (lines 759–776)**
+
+`gpio_get_level()` on every pin.  This is the **last moment all
+peripherals are fully awake and trustworthy.**
+
+```
+Light sleep GPIO: GPIO1=X GPIO4=X Btn=X PIR_PWR=X
+```
+
+If GPIO1 is already 1 here the AM312 is driving it *before* sleep — the
+problem is the sensor or its power rail, not IO_MUX or the transition.
+
+**Step 10 — Serial teardown + sleep entry (lines 778–782)**
+
+```cpp
+Serial.flush();              // drain TX while USB-JTAG-Serial is alive
+Serial.end();                // clean shutdown — see Decision 2
+esp_light_sleep_start();     // ← CPU blocks here until a wake event
+```
+
+**What the hardware does inside `esp_light_sleep_start()`:**
+
+- Main CPU cores are clock-gated; RAM and peripherals stay powered.
+- GPIO controller stays powered, but on ESP32-C3 GPIO outputs are **not**
+  automatically retained through the clock-gate transition.  GPIO20
+  (PIR power rail) must be held via `gpio_hold_en()` before sleep and
+  released via `gpio_hold_dis()` after wake — see Decision 14.
+- The GPIO wakeup sleep controller watches all armed pins.  If any pin
+  hits its trigger level the CPU is woken.
+- If a timer wakeup was armed (step 7) the RTC timer continues counting.
+
+**No log output is possible between here and step 13 — Serial is down.**
+
+**Step 11 — Wake event**
+
+The sleep controller fires.  CPU unblocks out of
+`esp_light_sleep_start()`.  The cause register is latched:
+`ESP_SLEEP_WAKEUP_GPIO` (7) for a pin trigger,
+`ESP_SLEEP_WAKEUP_TIMER` (1) for a timer expiry.
+
+**Step 12 — Wake snapshot capture (lines 786–790)**
+
+Executes in the first microseconds after wake.  Serial is still down so
+values are stored in `static` variables and logged later.
+
+```cpp
+s_wakeGPIO1  = gpio_get_level(GPIO1);          // immediate read
+s_wakeGPIO4  = gpio_get_level(GPIO4);
+s_wakePirPwr = gpio_get_level(GPIO20);
+s_wakeCause  = esp_sleep_get_wakeup_cause();   // 7 = GPIO, 1 = timer
+s_wakeMcuSel = (REG_READ(IO_MUX_GPIO1_REG) >> MCU_SEL_S) & MCU_SEL_V;
+```
+
+**Step 13 — Serial reinit (line 795)**
+
+`Serial.begin(SERIAL_BAUD_RATE)` — cold-start the USB-JTAG-Serial
+peripheral.  First output becomes possible.
+
+**Step 14 — Wake snapshot log (lines 797–799)**
+
+```
+Wake snapshot: cause=X GPIO1=X GPIO4=X PIR_PWR=X MCU_SEL=X
+```
+
+**Step 15 — CPU 80 → 160 MHz (line 803)**
+
+**Step 16 — Disarm wakeup sources + restore GPIO1 pull-up**
+
+`gpio_wakeup_disable()` on all motion pins and the button pin.  Without
+this, re-entering sleep with a pin still at its trigger level causes an
+immediate re-wake.
+
+GPIO1's pull-up (stripped in step 5 to prevent the pad-glitch latch) is
+restored here via `gpio_config()`.  Both sensors are in normal
+INPUT + pull-up state before the main loop resumes.
+
+**Step 17 — Timer→deep-sleep check (lines 821–827)**
+
+If cause is `ESP_SLEEP_WAKEUP_TIMER` and deep sleep is enabled, calls
+`enterDeepSleep()` — never returns (system reboots on next wake).
+Otherwise falls through to step 18.
+
+**Step 18 — Wake routing (lines 893–994)**
+
+`detectAndRouteWakeSource()`:
+
+| Cause | Check | Route | Log |
+|---|---|---|---|
+| GPIO | GPIO0 == 0 | `STATE_ACTIVE` | "Button" |
+| GPIO | any motion pin == 1 | `STATE_MOTION_ALERT` | "PIR motion" |
+| GPIO | no pin HIGH | `STATE_ACTIVE` | "Spurious GPIO wake (no pin HIGH)" |
+| TIMER | — | `STATE_ACTIVE` | "Timer" |
+| UNDEFINED | see Decision 4 | crash-recovery scan | see Decision 4 |
+
+Final log: `Power: LIGHT_SLEEP -> <state> (wake: <source>, slept <dur>)`
+
+---
+
+#### Interpreting the four diagnostic signals
+
+Read steps 8, 9, 12, and 18 together to isolate the cause of any
+spurious GPIO1 wake:
+
+| Pre-sleep GPIO1 (step 9) | Wake GPIO1 (step 12) | Wake MCU_SEL (step 12) | Conclusion |
+|---|---|---|---|
+| 0 | 1 | 1 (GPIO) | GPIO1 goes HIGH **during** `esp_light_sleep_start()`.  IO_MUX is correct at both snapshots.  Root cause is pad-level: investigate XTAL\_32K\_N signal coupling or a clock-transition glitch on this specific pad. |
+| 0 | 1 | ≠ 1 | IO_MUX becomes corrupted **during** sleep despite `gpio_config()`.  Something in the sleep entry path resets MCU_SEL. |
+| 1 | 1 | 1 (GPIO) | GPIO1 is already HIGH **before** sleep.  The AM312 sensor is driving it.  Investigate sensor warmup or power-rail transient during the 160→80 MHz transition window. |
+| 1 | 1 | ≠ 1 | Both IO_MUX corruption and sensor-driven HIGH.  `gpio_config()` addresses the IO_MUX half; the sensor issue is separate. |
+| * | 0 | * | Wake was not caused by GPIO1.  Check GPIO4 and GPIO0 columns for the actual trigger. |
+
+If the routing result (step 18) is `Spurious GPIO wake (no pin HIGH)`
+the glitch cleared before `detectAndRouteWakeSource()` ran.  The alert
+was correctly suppressed; the wake snapshot captured the state at the
+exact moment the glitch was still present for post-hoc analysis.
+
+#### Note: `enterDeepSleep` GPIO configuration
+
+`enterDeepSleep` (lines 846–862) still configures the button and PIR
+fallback pins with `gpio_set_direction` + `gpio_pullup_en` — the pattern
+that was replaced with `gpio_config()` in `enterLightSleep`.  This path
+is not exercised in the current build: mode 2 uses the ULP coprocessor
+route, and the GPIO fallback only fires if ULP fails to load.  If deep
+sleep is ever exercised via the fallback it will hit the same IO_MUX gap
+described in Decision 11.  Apply the same `gpio_config()` treatment
+before enabling that path.
+
+---
 
 ### Light-to-deep-sleep transition (mode 2, lightSleepToDeepSleepMs > 0)
 
