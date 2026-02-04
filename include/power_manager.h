@@ -65,6 +65,8 @@ public:
         uint32_t sleepTime;     ///< Time in sleep states (seconds)
         uint32_t wakeCount;     ///< Total wake-up count
         uint32_t deepSleepCount;///< Deep sleep count
+        uint32_t lightSleepTime;    ///< Time in light sleep this boot cycle (seconds)
+        uint32_t deepSleepTime;     ///< Accumulated deep-sleep time across reboots (seconds)
         float avgCurrent;       ///< Average current consumption (mA)
     };
 

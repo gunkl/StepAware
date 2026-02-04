@@ -704,6 +704,46 @@ configuration, or wake-source routing.
 
 ---
 
+## Sleep Time Counters
+
+Two per-boot-cycle counters track how long the device has spent in each sleep
+mode.  Both are exposed via `/api/status` (`power.lightSleepTime` and
+`power.deepSleepTime`, in seconds) and displayed on the Status dashboard.
+
+### lightSleepTime
+
+Accumulated by `updateStats()` every loop tick while `m_state ==
+STATE_LIGHT_SLEEP`.  Resets to 0 on every reboot (including deep-sleep wake).
+Reflects only the current boot cycle.
+
+### deepSleepTime
+
+Persisted across deep-sleep reboots via `rtcMemory.deepSleepAccumulatedSec`.
+Flow:
+
+1. `saveStateToRTC()` writes the running `m_stats.deepSleepTime` into RTC
+   before each sleep entry.
+2. On deep-sleep wake, `begin()` calculates the episode duration from
+   `rtc_time_get() - sleepEntryRTC` and adds it to the restored accumulator.
+3. On a **fresh** boot (magic mismatch) the counter starts at 0.
+
+Because deep sleep reboots the CPU, `deepSleepTime` cannot be accumulated by
+`updateStats()`.  It is set once in `begin()` and thereafter only read.
+
+### RTC magic
+
+The magic constant was bumped from `0xBADC0FFE` to `0xBADC0FF1` when
+`deepSleepAccumulatedSec` was added to `rtcMemory`.  Any firmware built before
+this change will see a magic mismatch on first boot and reinitialise RTC state
+(both counters start at 0).  This is intentional and safe.
+
+### logStateSummary
+
+The 5-minute periodic power-state summary (serial + debug log) includes both
+counters in `Xh Ym` format alongside the existing uptime and idle-time lines.
+
+---
+
 ## Regression Guard
 
 > Any changes to sleep entry, GPIO wakeup configuration, or wake-source

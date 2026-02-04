@@ -40,6 +40,7 @@ RTC_DATA_ATTR struct {
     uint32_t deepSleepCount;
     float lastBatteryVoltage;
     time_t sleepEntryRTC;
+    uint32_t deepSleepAccumulatedSec;
 } rtcMemory;
 #else
 static struct {
@@ -49,10 +50,11 @@ static struct {
     uint32_t deepSleepCount;
     float lastBatteryVoltage;
     time_t sleepEntryRTC;
+    uint32_t deepSleepAccumulatedSec;
 } rtcMemory;
 #endif
 
-#define RTC_MAGIC 0xBADC0FFE
+#define RTC_MAGIC 0xBADC0FF1
 
 PowerManager::PowerManager()
     : m_state(STATE_ACTIVE)
@@ -236,6 +238,7 @@ bool PowerManager::begin(const Config* config) {
 #ifndef MOCK_MODE
         deepSleepDurationMs = (uint32_t)(rtc_time_get() - rtcMemory.sleepEntryRTC) * 1000;
 #endif
+        m_stats.deepSleepTime = rtcMemory.deepSleepAccumulatedSec + (deepSleepDurationMs / 1000);
         detectAndRouteWakeSource(deepSleepDurationMs);
     } else {
         DEBUG_LOG_SYSTEM("Power: Fresh boot, initializing RTC memory");
@@ -632,6 +635,13 @@ void PowerManager::logStateSummary() {
     } else {
         DEBUG_LOG_SYSTEM("Sleep: READY (conditions met)");
     }
+
+    uint32_t lsHrs = m_stats.lightSleepTime / 3600;
+    uint32_t lsMns = (m_stats.lightSleepTime % 3600) / 60;
+    uint32_t dsHrs = m_stats.deepSleepTime / 3600;
+    uint32_t dsMns = (m_stats.deepSleepTime % 3600) / 60;
+    DEBUG_LOG_SYSTEM("Light sleep: %luh %lum  Deep sleep: %luh %lum",
+                     lsHrs, lsMns, dsHrs, dsMns);
 
     DEBUG_LOG_SYSTEM("==========================");
 }
@@ -1094,6 +1104,7 @@ void PowerManager::saveStateToRTC() {
 #else
     rtcMemory.sleepEntryRTC = 0;
 #endif
+    rtcMemory.deepSleepAccumulatedSec = m_stats.deepSleepTime;
 }
 
 bool PowerManager::restoreStateFromRTC() {
@@ -1118,6 +1129,9 @@ void PowerManager::updateStats() {
         m_stats.activeTime += timeInState;
     } else {
         m_stats.sleepTime += timeInState;
+        if (m_state == STATE_LIGHT_SLEEP) {
+            m_stats.lightSleepTime += timeInState;
+        }
     }
 
     // Reset state enter time for next update
