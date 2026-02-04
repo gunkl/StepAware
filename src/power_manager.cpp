@@ -65,6 +65,7 @@ PowerManager::PowerManager()
     , m_lastActivity(0)
     , m_lastBatteryUpdate(0)
     , m_stateEnterTime(0)
+    , m_lastStatsUpdate(0)
     , m_startTime(0)
     , m_voltageSampleIndex(0)
     , m_voltageSamplesFilled(false)
@@ -1105,8 +1106,8 @@ bool PowerManager::restoreStateFromRTC() {
 void PowerManager::updateStats() {
     m_stats.uptime = (millis() - m_startTime) / 1000;
 
-    // Track time in current state
-    uint32_t timeInState = (millis() - m_stateEnterTime) / 1000;
+    // Accumulate time in current state since last stats tick
+    uint32_t timeInState = (millis() - m_lastStatsUpdate) / 1000;
 
     if (m_state == STATE_ACTIVE || m_state == STATE_USB_POWER) {
         m_stats.activeTime += timeInState;
@@ -1117,8 +1118,7 @@ void PowerManager::updateStats() {
         }
     }
 
-    // Reset state enter time for next update
-    m_stateEnterTime = millis();
+    m_lastStatsUpdate = millis();
 
     // Calculate average current (simplified)
     // This would need actual current measurement in real implementation
@@ -1153,6 +1153,7 @@ void PowerManager::resetStats() {
     m_stats.avgCurrent = 0.0f;
 
     m_startTime = millis();
+    m_lastStatsUpdate = millis();
     DEBUG_LOG_SYSTEM("Power: Statistics reset");
 }
 

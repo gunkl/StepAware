@@ -360,6 +360,7 @@ private:
     uint32_t m_lastActivity;            ///< Last activity timestamp
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
     uint32_t m_stateEnterTime;          ///< Time when current state entered
+    uint32_t m_lastStatsUpdate;         ///< Last stats accumulation timestamp
     uint32_t m_startTime;               ///< System start time
 
     // Voltage filtering
