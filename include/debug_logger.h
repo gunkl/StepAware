@@ -253,6 +253,7 @@ extern DebugLogger g_debugLogger;
 #define DEBUG_LOG_WIFI(...)   g_debugLogger.logWiFi(__VA_ARGS__)
 #define DEBUG_LOG_API(...)    g_debugLogger.logAPI(__VA_ARGS__)
 #define DEBUG_LOG_SYSTEM(...) g_debugLogger.logSystem(__VA_ARGS__)
+#define DEBUG_LOG_SYSTEM_VERBOSE(...) g_debugLogger.log(DebugLogger::LEVEL_VERBOSE, DebugLogger::CAT_SYSTEM, __VA_ARGS__)
 #define DEBUG_LOG_CRASH(...)  g_debugLogger.logCrash(__VA_ARGS__)
 
 #endif // STEPAWARE_DEBUG_LOGGER_H

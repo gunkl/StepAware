@@ -14,6 +14,9 @@
 #ifndef DEBUG_LOG_SYSTEM
 #define DEBUG_LOG_SYSTEM(fmt, ...)
 #endif
+#ifndef DEBUG_LOG_SYSTEM_VERBOSE
+#define DEBUG_LOG_SYSTEM_VERBOSE(fmt, ...)
+#endif
 #ifndef DEBUG_LOG_BOOT
 #define DEBUG_LOG_BOOT(fmt, ...)
 #endif

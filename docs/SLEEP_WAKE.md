@@ -362,11 +362,13 @@ idleToLightSleepMs` (default 180 000 ms).  The main loop calls
 Typical GPIO state entering the call: GPIO1=0, GPIO4=0, GPIO0=1
 (pulled up, button not pressed), GPIO20=1 (sensor power OUTPUT HIGH).
 
-**Step 2 — State persist (lines 690–691)**
+**Step 2 — State persist (lines 690–692)**
 
-`setState(STATE_LIGHT_SLEEP)` updates in-RAM state; `saveStateToRTC()`
-writes it to RTC-backed memory.  Order is critical — see Decision 10.
-No GPIO change.
+State is set directly (`m_state = STATE_LIGHT_SLEEP`; `m_stateEnterTime =
+millis()`) rather than via `setState()` so that the transition log can be
+emitted at VERBOSE level without affecting other state transitions (Issue
+#36).  `saveStateToRTC()` writes the new state to RTC-backed memory on
+the next line.  Order is critical — see Decision 10.  No GPIO change.
 
 **Step 3 — CPU 160 → 80 MHz (line 705)**
 

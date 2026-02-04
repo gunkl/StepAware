@@ -481,7 +481,7 @@ void PowerManager::handlePowerState() {
                 static uint32_t lastGraceLog = 0;
                 if (millis() - lastGraceLog >= 10000) {
                     uint32_t remaining = POWER_BOOT_GRACE_PERIOD_MS - (millis() - m_startTime);
-                    DEBUG_LOG_SYSTEM("Boot grace period: %lums remaining - sleep blocked", remaining);
+                    DEBUG_LOG_SYSTEM_VERBOSE("Boot grace period: %lums remaining - sleep blocked", remaining);
                     lastGraceLog = millis();
                 }
                 if (m_batteryStatus.usbPower && !m_enablePowerSavingOnUSB) {
@@ -555,7 +555,7 @@ void PowerManager::handlePowerState() {
             {
                 static uint32_t lastUSBLog = 0;
                 if (millis() - lastUSBLog >= 300000) {  // Every 5 minutes
-                    DEBUG_LOG_SYSTEM("USB_POWER state: sleep disabled while on USB power (battery: %.2fV)",
+                    DEBUG_LOG_SYSTEM_VERBOSE("USB_POWER state: sleep disabled while on USB power (battery: %.2fV)",
                                      m_batteryStatus.voltage);
                     lastUSBLog = millis();
                 }
@@ -593,57 +593,45 @@ void PowerManager::logStateSummary() {
     // Pre-compute all complex expressions to avoid stack corruption in variadic functions
     uint32_t stateMinutes = timeInState / 60000;
     uint32_t stateSeconds = (timeInState % 60000) / 1000;
-    const char* batterySource = m_batteryStatus.usbPower ? "[USB]" : "[BATTERY]";
+    const char* batterySource = m_batteryStatus.usbPower ? "[USB]" : "[BAT]";
     const char* autoSleepStr = m_config.enableAutoSleep ? "ON" : "OFF";
     const char* deepSleepStr = m_config.enableDeepSleep ? "ON" : "OFF";
-    const char* usbOverrideStr = m_enablePowerSavingOnUSB
-        ? "ENABLED (power saving on USB)"
-        : "DISABLED (default)";
+    const char* usbOverrideStr = m_enablePowerSavingOnUSB ? "ON" : "OFF";
     uint32_t idleSeconds = idleTime / 1000;
     uint32_t idleDecimals = (idleTime % 1000) / 100;
     uint32_t thresholdSeconds = m_config.idleToLightSleepMs / 1000;
     uint32_t thresholdDecimals = (m_config.idleToLightSleepMs % 1000) / 100;
-
-    DEBUG_LOG_SYSTEM("=== Power State Summary ===");
-    DEBUG_LOG_SYSTEM("State: %s (for %lu.%lum)",
-                     getStateName(m_state), stateMinutes, stateSeconds);
     // Cast uint8_t to float to avoid va_list type mismatch
     float summaryPercent = (float)m_batteryStatus.percentage;
-    DEBUG_LOG_SYSTEM("Battery: %.2fV (%.0f%%) %s",
-                     m_batteryStatus.voltage,
-                     summaryPercent,
-                     batterySource);
-    DEBUG_LOG_SYSTEM("Power Mode: %d (autoSleep=%s, deepSleep=%s)",
-                     m_powerSavingMode, autoSleepStr, deepSleepStr);
-    DEBUG_LOG_SYSTEM("USB Override: %s", usbOverrideStr);
-    DEBUG_LOG_SYSTEM("Idle: %lu.%lus / %lu.%lus",
-                     idleSeconds, idleDecimals, thresholdSeconds, thresholdDecimals);
+    const char* stateName = getStateName(m_state);
 
-    // Explain why sleep is blocked (if applicable)
+    // Build sleep status into buffer (safe for va_list — passed as single %s)
+    char sleepStatus[64];
     if (m_state == STATE_USB_POWER) {
-        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (USB power connected)");
+        snprintf(sleepStatus, sizeof(sleepStatus), "BLOCKED (USB)");
     } else if (m_state == STATE_CRITICAL_BATTERY || m_state == STATE_LOW_BATTERY) {
-        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (battery state)");
+        snprintf(sleepStatus, sizeof(sleepStatus), "BLOCKED (battery)");
     } else if (!m_config.enableAutoSleep) {
-        DEBUG_LOG_SYSTEM("Sleep: BLOCKED (autoSleep disabled, mode=%d)", m_powerSavingMode);
+        snprintf(sleepStatus, sizeof(sleepStatus), "BLOCKED (mode=%d)", m_powerSavingMode);
     } else if (idleTime < m_config.idleToLightSleepMs) {
         uint32_t remaining = m_config.idleToLightSleepMs - idleTime;
         uint32_t remainingSeconds = remaining / 1000;
         uint32_t remainingDecimals = (remaining % 1000) / 100;
-        DEBUG_LOG_SYSTEM("Sleep: WAITING (need %lu.%lus more idle time)",
-                         remainingSeconds, remainingDecimals);
+        snprintf(sleepStatus, sizeof(sleepStatus), "WAITING (need %lu.%lus more)",
+                 (unsigned long)remainingSeconds, (unsigned long)remainingDecimals);
     } else {
-        DEBUG_LOG_SYSTEM("Sleep: READY (conditions met)");
+        snprintf(sleepStatus, sizeof(sleepStatus), "READY");
     }
 
-    uint32_t lsHrs = m_stats.lightSleepTime / 3600;
-    uint32_t lsMns = (m_stats.lightSleepTime % 3600) / 60;
-    uint32_t dsHrs = m_stats.deepSleepTime / 3600;
-    uint32_t dsMns = (m_stats.deepSleepTime % 3600) / 60;
-    DEBUG_LOG_SYSTEM("Light sleep: %luh %lum  Deep sleep: %luh %lum",
-                     lsHrs, lsMns, dsHrs, dsMns);
-
-    DEBUG_LOG_SYSTEM("==========================");
+    // Compact 2-line summary (all VERBOSE)
+    DEBUG_LOG_SYSTEM_VERBOSE("Power summary: %s %lum%lus | %.2fV %.0f%% %s | mode=%d autoSleep=%s deepSleep=%s",
+        stateName, (unsigned long)stateMinutes, (unsigned long)stateSeconds,
+        m_batteryStatus.voltage, summaryPercent, batterySource,
+        m_powerSavingMode, autoSleepStr, deepSleepStr);
+    DEBUG_LOG_SYSTEM_VERBOSE("Power summary: idle=%lu.%lus/%lu.%lus usbOverride=%s | sleep=%s",
+        (unsigned long)idleSeconds, (unsigned long)idleDecimals,
+        (unsigned long)thresholdSeconds, (unsigned long)thresholdDecimals,
+        usbOverrideStr, sleepStatus);
 }
 
 void PowerManager::setState(PowerState newState, const char* reason) {
@@ -667,14 +655,14 @@ bool PowerManager::shouldEnterSleep() {
         // Log only every 60 seconds to avoid spam
         static uint32_t lastAutoSleepLog = 0;
         if (millis() - lastAutoSleepLog >= 60000) {
-            DEBUG_LOG_SYSTEM("Sleep check: autoSleep=DISABLED - sleep not allowed");
+            DEBUG_LOG_SYSTEM_VERBOSE("Sleep check: autoSleep=DISABLED - sleep not allowed");
             lastAutoSleepLog = millis();
         }
         return false;
     }
 
     if (idleTime >= m_config.idleToLightSleepMs) {
-        DEBUG_LOG_SYSTEM("Sleep check: READY - idle=%lums >= timeout=%lums",
+        DEBUG_LOG_SYSTEM_VERBOSE("Sleep check: READY - idle=%lums >= timeout=%lums",
                          idleTime, m_config.idleToLightSleepMs);
         return true;
     }
@@ -696,9 +684,16 @@ bool PowerManager::shouldEnterSleep() {
 }
 
 void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
-    DEBUG_LOG_SYSTEM("Entering light sleep: duration=%lums", duration_ms);
+    DEBUG_LOG_SYSTEM_VERBOSE("Entering light sleep: duration=%lums", duration_ms);
 
-    setState(STATE_LIGHT_SLEEP, reason);
+    const char* prevStateName = getStateName(m_state);
+    m_state = STATE_LIGHT_SLEEP;
+    m_stateEnterTime = millis();
+    if (reason) {
+        DEBUG_LOG_SYSTEM_VERBOSE("Power: %s -> LIGHT_SLEEP (%s)", prevStateName, reason);
+    } else {
+        DEBUG_LOG_SYSTEM_VERBOSE("Power: %s -> LIGHT_SLEEP", prevStateName);
+    }
     saveStateToRTC();
 
     // Statics for wake snapshot — declared outside MOCK_MODE guard so they are
@@ -712,7 +707,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
 #ifndef MOCK_MODE
     // Reduce CPU frequency (ESP32-C3 max is 160MHz, not 240MHz)
-    DEBUG_LOG_SYSTEM("Light sleep: reducing CPU 160MHz -> 80MHz");
+    DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
 
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
@@ -745,7 +740,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             io_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
             gpio_config(&io_conf);
             esp_err_t wakeErr = gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
-            DEBUG_LOG_SYSTEM("Light sleep: GPIO%d armed HIGH-level wakeup (rc=%d)", (int)pin, (int)wakeErr);
+            DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed HIGH-level wakeup (rc=%d)", (int)pin, (int)wakeErr);
         }
     }
 
@@ -757,7 +752,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         btn_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&btn_conf);
         esp_err_t btnWakeErr = gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
-        DEBUG_LOG_SYSTEM("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
+        DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
     }
 
     // Timer wakeup for light→deep transition.  Subtract the setup
@@ -768,48 +763,36 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         if (duration_ms > elapsedMs) {
             uint32_t remainingMs = duration_ms - elapsedMs;
             esp_sleep_enable_timer_wakeup((uint64_t)remainingMs * 1000ULL);
-            DEBUG_LOG_SYSTEM("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
+            DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
         }
     }
 
-    // Diagnostic: verify IO_MUX function-select is GPIO for GPIO1.
-    // FUNC_XTAL_32K_N_GPIO1 == 1.  Any other value means IO_MUX is still
-    // routing a peripheral signal onto the pad.
+    // Combined pre-sleep diagnostic: IO_MUX MCU_SEL, GPIO4 wakeup register, live pin levels
     {
         uint32_t iomuxVal = REG_READ(IO_MUX_GPIO1_REG);
         uint8_t mcuSel = (iomuxVal >> MCU_SEL_S) & MCU_SEL_V;
-        DEBUG_LOG_SYSTEM("IO_MUX GPIO1: MCU_SEL=%d (1=GPIO)", mcuSel);
-    }
+        uint32_t pin4Val = REG_READ(GPIO_PIN4_REG);
+        uint8_t pin4IntType = GPIO_PIN_INT_TYPE_GET(pin4Val);
+        uint8_t pin4WakeupEn = GPIO_PIN_WAKEUP_ENABLE_GET(pin4Val);
 
-    // Diagnostic: read GPIO4 pin register to verify wakeup_enable and
-    // int_type were actually written by gpio_wakeup_enable().
-    // Expected: int_type=4 (HIGH_LEVEL), wakeup_en=1.
-    {
-        uint32_t pin4Val     = REG_READ(GPIO_PIN4_REG);
-        uint8_t  pin4IntType  = GPIO_PIN_INT_TYPE_GET(pin4Val);
-        uint8_t  pin4WakeupEn = GPIO_PIN_WAKEUP_ENABLE_GET(pin4Val);
-        DEBUG_LOG_SYSTEM("GPIO4 reg: int_type=%d (4=HIGH) wakeup_en=%d",
-                         pin4IntType, pin4WakeupEn);
-    }
-
-    // Log GPIO levels immediately before sleep entry
-    {
-        char pinLog[64];
-        int pos = snprintf(pinLog, sizeof(pinLog), "Light sleep GPIO: ");
-        for (uint8_t i = 0; i < m_motionWakePinCount && pos < 60; i++) {
+        char diagLog[128];
+        int pos = snprintf(diagLog, sizeof(diagLog),
+            "Sleep diag: MCU_SEL=%d GPIO4[int=%d wake=%d]",
+            mcuSel, pin4IntType, pin4WakeupEn);
+        for (uint8_t i = 0; i < m_motionWakePinCount && pos < 110; i++) {
             int lvl = gpio_get_level((gpio_num_t)m_motionWakePins[i]);
-            pos += snprintf(pinLog + pos, sizeof(pinLog) - pos,
-                           "GPIO%d=%d ", m_motionWakePins[i], lvl);
+            pos += snprintf(diagLog + pos, sizeof(diagLog) - pos,
+                           " GPIO%d=%d", m_motionWakePins[i], lvl);
         }
         {
             int btnLvl = gpio_get_level((gpio_num_t)BUTTON_PIN);
-            pos += snprintf(pinLog + pos, sizeof(pinLog) - pos, "Btn=%d ", btnLvl);
+            pos += snprintf(diagLog + pos, sizeof(diagLog) - pos, " Btn=%d", btnLvl);
         }
         {
             int pirPwrLvl = gpio_get_level((gpio_num_t)PIN_PIR_POWER);
-            snprintf(pinLog + pos, sizeof(pinLog) - pos, "PIR_PWR=%d", pirPwrLvl);
+            snprintf(diagLog + pos, sizeof(diagLog) - pos, " PIR_PWR=%d", pirPwrLvl);
         }
-        DEBUG_LOG_SYSTEM("%s", pinLog);
+        DEBUG_LOG_SYSTEM_VERBOSE("%s", diagLog);
     }
 
     // Hold GPIO20 (PIR sensor power rail) OUTPUT HIGH during light sleep.
@@ -842,7 +825,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // #ifndef MOCK_MODE so native test builds also exercise this path.
     Serial.begin(SERIAL_BAUD_RATE);
 
-    DEBUG_LOG_SYSTEM("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
+    DEBUG_LOG_SYSTEM_VERBOSE("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
                      s_wakeCause, s_wakeGPIO1, s_wakeGPIO4,
                      s_wakePirPwr, s_wakeMcuSel);
 
@@ -876,7 +859,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     }
 #endif
 
-    DEBUG_LOG_SYSTEM("Light sleep: woke up, CPU restored to 160MHz");
+    DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: woke up, CPU restored to 160MHz");
 
 #ifndef MOCK_MODE
     // If the wake was a timer and deep sleep is configured, this was the
@@ -885,7 +868,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     {
         esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
         if (cause == ESP_SLEEP_WAKEUP_TIMER && m_config.enableDeepSleep) {
-            DEBUG_LOG_SYSTEM("Light sleep: timer expired, entering deep sleep");
+            DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: timer expired, entering deep sleep");
             enterDeepSleep(0, "light sleep timeout");
             // Never reaches here
         }
@@ -1084,7 +1067,7 @@ void PowerManager::setCPUFrequency(uint8_t mhz) {
     #endif
 
     setCpuFrequencyMhz(mhz);
-    DEBUG_LOG_SYSTEM("Power: CPU frequency set to %uMHz", mhz);
+    DEBUG_LOG_SYSTEM_VERBOSE("Power: CPU frequency set to %uMHz", mhz);
 #endif
 }
 
