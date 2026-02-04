@@ -94,6 +94,17 @@ bool DebugLogger::begin(LogLevel level, uint16_t categoryMask) {
              getFilesystemUsage());
 
     m_currentFile.print(header);
+
+    // Append rotation status so it survives to the file log
+    if (m_rotCurrentExisted) {
+        char rotLine[96];
+        snprintf(rotLine, sizeof(rotLine),
+                 "Rotation: current->boot_1=%s boot_1->boot_2=%s\n",
+                 m_rotCurrentToBootOk ? "OK" : "FAILED",
+                 m_rotBootToBoot2Ok   ? "OK" : "FAILED");
+        m_currentFile.print(rotLine);
+    }
+
     m_currentFile.flush();
 
     Serial.println("[DebugLogger] ✓ Debug logger initialized");
@@ -558,6 +569,11 @@ void DebugLogger::rotateLogs() {
         m_currentFile.close();
     }
 
+    // Reset rotation status flags
+    m_rotCurrentExisted   = false;
+    m_rotCurrentToBootOk  = false;
+    m_rotBootToBoot2Ok    = false;
+
     // Rotate logs: boot_2.log -> delete, boot_1.log -> boot_2.log, current -> boot_1.log
 
     // Delete oldest log (boot_2.log)
@@ -567,12 +583,17 @@ void DebugLogger::rotateLogs() {
 
     // Rename boot_1.log -> boot_2.log
     if (LittleFS.exists("/logs/boot_1.log")) {
-        LittleFS.rename("/logs/boot_1.log", "/logs/boot_2.log");
+        m_rotBootToBoot2Ok = LittleFS.rename("/logs/boot_1.log", "/logs/boot_2.log");
+        Serial.printf("[DebugLogger] rotateLogs: boot_1 -> boot_2: %s\n", m_rotBootToBoot2Ok ? "OK" : "FAILED");
     }
 
     // Rename current -> boot_1.log
-    if (LittleFS.exists(CURRENT_LOG)) {
-        LittleFS.rename(CURRENT_LOG, "/logs/boot_1.log");
+    m_rotCurrentExisted = LittleFS.exists(CURRENT_LOG);
+    if (m_rotCurrentExisted) {
+        m_rotCurrentToBootOk = LittleFS.rename(CURRENT_LOG, "/logs/boot_1.log");
+        Serial.printf("[DebugLogger] rotateLogs: current -> boot_1: %s\n", m_rotCurrentToBootOk ? "OK" : "FAILED");
+    } else {
+        Serial.println("[DebugLogger] rotateLogs: current log does not exist — nothing to rotate");
     }
 
     // Check if we need to delete more to stay under limit
