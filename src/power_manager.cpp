@@ -878,6 +878,17 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
     // millis() on ESP32 is compensated for light sleep time
     uint32_t sleepDuration = millis() - m_stateEnterTime;
+
+    // Credit sleep-time counters now, while m_state is still LIGHT_SLEEP.
+    // wakeUp() -> detectAndRouteWakeSource() will flip m_state (e.g. to
+    // MOTION_ALERT) before updateStats() next runs, so the compensated
+    // millis() delta would be charged to the wrong state.
+    // Advancing m_lastStatsUpdate prevents updateStats() from double-counting.
+    uint32_t sleepSec = sleepDuration / 1000;
+    m_stats.lightSleepTime += sleepSec;
+    m_stats.sleepTime      += sleepSec;
+    m_lastStatsUpdate       = millis();
+
     wakeUp(sleepDuration);
 }
 
@@ -1148,6 +1159,8 @@ void PowerManager::resetStats() {
     m_stats.uptime = 0;
     m_stats.activeTime = 0;
     m_stats.sleepTime = 0;
+    m_stats.lightSleepTime = 0;
+    m_stats.deepSleepTime = 0;
     m_stats.wakeCount = 0;
     m_stats.deepSleepCount = 0;
     m_stats.avgCurrent = 0.0f;
