@@ -105,6 +105,14 @@ in `CLAUDE.md` for the full explanation and the switch-case pattern to use.
 
 ---
 
+## Voltage Monitoring
+
+All ADC calibration, voltage divider, USB detection, and voltage-
+protection details live in `docs/VOLTAGE_MONITORING.md`.  Read it
+before touching anything in PowerManager's ADC or battery path.
+
+---
+
 ## Web UI Buffer Constraints
 
 **Critical ESP32 Heap Limitation:** Max contiguous heap allocation is ~64KB.

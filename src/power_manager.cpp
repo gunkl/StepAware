@@ -6,6 +6,7 @@
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <driver/adc.h>
+#include "esp_adc_cal.h"
 #include <driver/gpio.h>
 #include <soc/io_mux_reg.h>   // IO_MUX_GPIO1_REG, MCU_SEL_S, MCU_SEL_V
 #include <soc/gpio_reg.h>    // GPIO_PIN4_REG, GPIO_PIN_INT_TYPE_GET, GPIO_PIN_WAKEUP_ENABLE_GET
@@ -69,6 +70,8 @@ PowerManager::PowerManager()
     , m_startTime(0)
     , m_voltageSampleIndex(0)
     , m_voltageSamplesFilled(false)
+    , m_adcCalValid(false)
+    , m_adcCalMethod("none")
     , m_onLowBattery(nullptr)
     , m_onCriticalBattery(nullptr)
     , m_onUsbPower(nullptr)
@@ -205,6 +208,25 @@ bool PowerManager::begin(const Config* config) {
                                                      // sufficient; this bit (default 0) gates
                                                      // the divided clock into the SAR peripheral.
     adc_ll_digi_set_power_manage(ADC_POWER_BY_FSM); // FSM drives XPD for oneshot polling
+
+    // Calibrate ADC from per-chip eFuse coefficients.  characterize()
+    // only reads eFuses — safe alongside adc_ll_* reads.  Falls back
+    // to 3 300 mV default Vref if no calibration data is burned.
+    {
+        esp_adc_cal_value_t calType = esp_adc_cal_characterize(
+            ADC_UNIT_2, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12,
+            3300,                   // default Vref fallback (mV)
+            &m_adcCalChars);
+        m_adcCalValid = true;
+
+        switch (calType) {
+            case ESP_ADC_CAL_VAL_EFUSE_TP_FIT: m_adcCalMethod = "TP+Fit";     break;
+            case ESP_ADC_CAL_VAL_EFUSE_TP:     m_adcCalMethod = "Two-Point";  break;
+            case ESP_ADC_CAL_VAL_EFUSE_VREF:   m_adcCalMethod = "eFuse Vref"; break;
+            default:                           m_adcCalMethod = "default";    break;
+        }
+        DEBUG_LOG_SYSTEM("Power: ADC cal method=%s", m_adcCalMethod);
+    }
 
     // VBUS detection (GPIO6): pull down so it reads LOW when USB is disconnected.
     // Without this the pin floats HIGH on battery-only and isUsbPower() returns true.
@@ -349,6 +371,20 @@ void PowerManager::updateBatteryStatus() {
             m_onLowBattery();
         }
     }
+
+    // Overvoltage warning — fires once per event, resets when voltage
+    // drops back.  Guards against charger malfunction or sensor error.
+    {
+        static bool overvoltageWarned = false;
+        if (m_batteryMonitoringEnabled && voltage > 4.3f) {
+            if (!overvoltageWarned) {
+                DEBUG_LOG_SYSTEM("Power: WARNING overvoltage %.2fV (max expected 4.2V)", voltage);
+                overvoltageWarned = true;
+            }
+        } else {
+            overvoltageWarned = false;
+        }
+    }
 }
 
 float PowerManager::getBatteryVoltage() {
@@ -386,9 +422,15 @@ float PowerManager::readBatteryVoltageRaw() {
     uint16_t raw = analogRead(PIN_BATTERY_ADC);
 #endif
 
-    // Convert to voltage (12-bit ADC, 0-3.3V range)
-    // With voltage divider (2:1 ratio), multiply by 2
-    float voltage = (raw / 4095.0f) * 3.3f * 2.0f;
+    // Convert raw count → voltage.  Calibrated path uses per-chip eFuse
+    // polynomial; fallback is the original linear formula.
+    float voltage;
+    if (m_adcCalValid) {
+        uint32_t adcMv = esp_adc_cal_raw_to_voltage(raw, &m_adcCalChars);
+        voltage = (adcMv / 1000.0f) * BATTERY_DIVIDER_RATIO;
+    } else {
+        voltage = (raw / 4095.0f) * 3.3f * BATTERY_DIVIDER_RATIO;
+    }
 
     // Apply calibration offset
     voltage += m_config.voltageCalibrationOffset;
