@@ -58,6 +58,24 @@ Get current system status.
 | motionEvents | number | Total motion events detected |
 | modeChanges | number | Total mode changes |
 
+**`power` object** (present when PowerManager is initialised)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `batteryVoltage` | number | Battery voltage in volts (e.g. `4.15`) |
+| `batteryPercent` | number | Battery charge level as a percentage (0–100) |
+| `usbPower` | boolean | `true` when USB power is detected |
+| `low` | boolean | `true` when battery is below the low-voltage threshold |
+| `critical` | boolean | `true` when battery is below the critical-voltage threshold |
+| `monitoringEnabled` | boolean | `true` when battery-voltage monitoring is active |
+| `adcCalMethod` | string | ADC calibration method active on this chip: `"TP+Fit"`, `"Two-Point"`, `"eFuse Vref"`, `"default"`, or `"none"` |
+| `stateName` | string | Human-readable power-state name (e.g. `"ACTIVE"`, `"USB_POWER"`) |
+| `activeTime` | number | Cumulative active (awake) time in seconds |
+| `sleepTime` | number | Cumulative total sleep time in seconds |
+| `lightSleepTime` | number | Cumulative light-sleep time in seconds |
+| `deepSleepTime` | number | Cumulative deep-sleep time in seconds |
+| `wakeCount` | number | Number of times the device has woken from sleep |
+
 ---
 
 ### GET /api/config

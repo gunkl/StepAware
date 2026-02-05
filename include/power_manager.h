@@ -4,6 +4,10 @@
 #include <Arduino.h>
 #include "config.h"
 
+#ifndef NATIVE_BUILD
+#include "esp_adc_cal.h"   // eFuse-based ADC calibration (ESP-IDF legacy API)
+#endif
+
 /**
  * @brief Power Manager for Battery Monitoring and Power Optimization
  *
@@ -227,6 +231,12 @@ public:
     bool getEnablePowerSavingOnUSB() const { return m_enablePowerSavingOnUSB; }
 
     /**
+     * @brief Get the active ADC calibration method name.
+     * @return "TP+Fit", "Two-Point", "eFuse Vref", "default", or "none"
+     */
+    const char* getAdcCalMethod() const { return m_adcCalMethod; }
+
+    /**
      * @brief Register GPIO pins that should wake the device from sleep.
      *
      * Must be called once during setup after sensors are loaded from
@@ -368,6 +378,13 @@ private:
     float m_voltageSamples[VOLTAGE_SAMPLES];
     uint8_t m_voltageSampleIndex;
     bool m_voltageSamplesFilled;
+
+    // ADC eFuse calibration (filled once in begin(); read-only thereafter)
+#ifndef NATIVE_BUILD
+    esp_adc_cal_characteristics_t m_adcCalChars;
+#endif
+    bool m_adcCalValid;             ///< true once m_adcCalChars is populated
+    const char* m_adcCalMethod;     ///< human-readable cal method name
 
     // Callbacks
     LowBatteryCallback m_onLowBattery;
