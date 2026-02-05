@@ -3427,7 +3427,9 @@ void WebAPI::buildDashboardHTML() {
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Warmup:</span> <span>'+(sensor.warmupMs/1000)+'s</span></div>';";
     html2 += "const zoneStr=(sensor.distanceZone===1?'Near (0.5-4m)':sensor.distanceZone===2?'Far (3-12m)':'None');";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Distance Zone:</span> <span>'+zoneStr+'</span></div>';";
-    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Sensor Status:</span> <span>'+(sensor.sensorStatusDisplay?'On':'Off')+'</span></div>';}";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Sensor Status:</span> <span>'+(sensor.sensorStatusDisplay?'On':'Off')+'</span></div>';";
+    html2 += "const pinModeStr=(sensor.pinMode===0?'INPUT (AM312)':sensor.pinMode===2?'INPUT_PULLDOWN':'INPUT_PULLUP (SR602)');";
+    html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Pin Mode:</span> <span>'+pinModeStr+'</span></div>';}";
     html2 += "else if(sensor.type===2||sensor.type===4){";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Type:</span> <span>'+(sensor.type===2?'HC-SR04 (4-pin)':'Grove (3-pin)')+'</span></div>';";
     html2 += "html+='<div style=\"font-size:0.85em;\"><span style=\"color:#64748b;\">Max Range:</span> <span>'+(sensor.maxDetectionDistance||3000)+'mm</span></div>';";
