@@ -18,6 +18,9 @@ DebugLogger::DebugLogger()
     , m_bootCycle(0)
     , m_lastFlushTime(0)
     , m_writesSinceFlush(0)
+    , m_rotCurrentExisted(false)
+    , m_rotCurrentToBootOk(false)
+    , m_rotBootToBoot2Ok(false)
 {
     // Initialize sensor state tracking
     for (uint8_t i = 0; i < 8; i++) {

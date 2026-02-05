@@ -35,6 +35,14 @@ void reset_time() {
     mock_micros_value = 0;
 }
 
+// Arduino pin-mode bitmask constants (mirrors esp32-hal-gpio.h)
+#define INPUT           0x01
+#define OUTPUT          0x03
+#define INPUT_PULLUP    0x05
+#define INPUT_PULLDOWN  0x09
+#define HIGH            1
+#define LOW             0
+
 void pinMode(uint8_t pin, uint8_t mode) { (void)pin; (void)mode; }
 
 int digitalRead(uint8_t pin) {
