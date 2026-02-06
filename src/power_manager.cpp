@@ -552,13 +552,28 @@ void PowerManager::handlePowerState() {
             } else if (m_config.enableAutoSleep && shouldEnterSleep()) {
                 char reason[64];
                 snprintf(reason, sizeof(reason), "idle timeout %ums", millis() - m_lastActivity);
+#ifndef MOCK_MODE
+                // Feed watchdog before initiating sleep sequence
+                esp_task_wdt_reset();
+                DEBUG_LOG_SYSTEM("Pre-sleep: watchdog fed, about to call sleep function");
+#endif
                 if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs == 0) {
+#ifndef MOCK_MODE
+                    esp_task_wdt_reset();
+                    DEBUG_LOG_SYSTEM("Pre-sleep: calling enterDeepSleep() - free heap: %d bytes",
+                                     esp_get_free_heap_size());
+#endif
                     enterDeepSleep(0, reason);
                 } else {
                     uint32_t sleepDuration = 0;
                     if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs > 0) {
                         sleepDuration = m_config.lightSleepToDeepSleepMs;
                     }
+#ifndef MOCK_MODE
+                    esp_task_wdt_reset();
+                    DEBUG_LOG_SYSTEM("Pre-sleep: calling enterLightSleep(%lu) - free heap: %d bytes",
+                                     sleepDuration, esp_get_free_heap_size());
+#endif
                     enterLightSleep(sleepDuration, reason);
                 }
             }
@@ -816,7 +831,25 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         uint32_t elapsedMs = millis() - m_stateEnterTime;
         if (duration_ms > elapsedMs) {
             uint32_t remainingMs = duration_ms - elapsedMs;
-            esp_sleep_enable_timer_wakeup((uint64_t)remainingMs * 1000ULL);
+
+            // Bounds checking: ESP32 light sleep timer can overflow with very large values.
+            // Cap at 1 hour per sleep cycle to prevent timer overflow issues.
+            if (remainingMs > 3600000) {  // Max 1 hour per light sleep cycle
+                remainingMs = 3600000;
+                DEBUG_LOG_SYSTEM("Light sleep: duration capped at 1h to prevent timer overflow");
+            }
+
+            // Validate timer value won't overflow uint64_t microseconds
+            uint64_t timerUs = (uint64_t)remainingMs * 1000ULL;
+            if (timerUs > (UINT64_MAX / 2)) {
+                DEBUG_LOG_SYSTEM("ERROR: Timer overflow risk detected (timer=%lluus), aborting sleep",
+                                 timerUs);
+                // Return without entering sleep - device stays active
+                m_state = STATE_ACTIVE;
+                return;
+            }
+
+            esp_sleep_enable_timer_wakeup(timerUs);
             DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
         }
     }
