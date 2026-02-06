@@ -162,3 +162,91 @@ sleep — see that doc for the full picture.
 
 Wake-source pins are NOT hardcoded.  They are populated at boot from
 the sensor configuration via `PowerManager::setMotionWakePins()`.
+
+---
+
+## Device Diagnostics
+
+### General Device Diagnostics: `/diagnose-device`
+
+**Issue**: Any device malfunction (crashes, reboots, connectivity, sensor failures, etc.)
+
+**Skill**: `/diagnose-device [IP_ADDRESS] ["issue description"]`
+
+**Architecture**: Agent-based execution
+- Coordinator Agent (background): Manages workflow, synthesizes results
+- 4 Parallel Data Collectors: Logs, status, core dump, filesystem
+- Analysis Agents: Pattern recognition, timeline reconstruction
+- Verification Agent: Tests fixes, validates success criteria
+
+**What it does:**
+- Parallel data collection (minimize wait time)
+- Comprehensive pattern analysis across all data sources
+- Multi-issue detection and classification
+- Prioritized fix recommendations with file/line numbers
+- Parallel vs sequential fix strategy
+- Automated verification test plan
+
+**When to use:**
+- Device behaving unexpectedly
+- Need systematic root cause analysis
+- Multiple symptoms (may be related issues)
+- Want comprehensive diagnostics without manual iteration
+- First time investigating a device issue
+
+**Skill file**: `.claude/skills/diagnose-device.md`
+
+---
+
+### Sleep/Power Management Diagnostics: `/diagnose-sleep`
+
+**Issue**: Device crashes during sleep entry, fails to wake, or has unexplained reboots related to power management
+
+**Skill**: `/diagnose-sleep [IP_ADDRESS]`
+
+**Extends**: `/diagnose-device` with sleep-specific analysis
+
+**Sleep-Specific Analysis:**
+- Sleep cycle pattern matrix (Ready → Entered → Woke)
+- Wake source analysis (timer, GPIO, button)
+- Duration-dependent failure detection
+- RTC memory persistence tracking
+- Power state transition timing
+
+**Common Sleep Issues & Fixes:**
+
+1. **Pre-Sleep Crash (Type A)**
+   - **Pattern**: "Sleep check: READY" but no enterLightSleep() logs
+   - **Root**: Watchdog timeout in handlePowerState() before sleep call
+   - **Fix**: Add `esp_task_wdt_reset()` in handlePowerState() before enterLightSleep() call
+   - **File**: `src/power_manager.cpp` - handlePowerState()
+
+2. **During-Sleep-Entry Crash (Type B)**
+   - **Pattern**: enterLightSleep() called but device doesn't wake
+   - **Root**: Crash during Serial.end(), GPIO setup, or esp_light_sleep_start()
+   - **Fix**: Add watchdog feeds before Serial.end() and GPIO operations
+   - **File**: `src/power_manager.cpp` - enterLightSleep()
+
+3. **Duration-Dependent Failure (Type D)**
+   - **Pattern**: Short sleeps work, long sleeps fail
+   - **Root**: Timer overflow with large millisecond values
+   - **Fix**: Add bounds checking, cap duration to 1 hour max
+   - **File**: `src/power_manager.cpp` - enterLightSleep() timer setup
+
+4. **RTC Corruption (Type C)**
+   - **Pattern**: Device always does "Fresh boot" instead of RTC restore
+   - **Root**: RTC magic not persisting or wake handler crash
+   - **Fix**: Check deep sleep wake handling, validate RTC magic
+   - **File**: `src/power_manager.cpp` - restoreStateFromRTC()
+
+**Key Files:**
+- `src/power_manager.cpp` - Sleep entry, handlePowerState(), enterLightSleep()
+- `src/crash_handler.cpp` - Boot reason detection, reset tracking
+- `include/config.h` - Sleep timing constants
+
+**Related Skills:**
+- `/device-logs` - Download individual log files
+- `/coredump` - Download and analyze crash dumps
+- `/diagnose-device` - General diagnostic framework (parent skill)
+
+**Skill file**: `.claude/skills/diagnose-sleep.md`
