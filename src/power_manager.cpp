@@ -5,6 +5,7 @@
 #ifndef MOCK_MODE
 #include <esp_sleep.h>
 #include <esp_pm.h>
+#include <esp_task_wdt.h>
 #include <driver/adc.h>
 #include "esp_adc_cal.h"
 #include <driver/gpio.h>
@@ -728,6 +729,7 @@ bool PowerManager::shouldEnterSleep() {
 
 void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     DEBUG_LOG_SYSTEM_VERBOSE("Entering light sleep: duration=%lums", duration_ms);
+    uint32_t entryStartMs = millis();
 
     const char* prevStateName = getStateName(m_state);
     m_state = STATE_LIGHT_SLEEP;
@@ -738,6 +740,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM_VERBOSE("Power: %s -> LIGHT_SLEEP", prevStateName);
     }
     saveStateToRTC();
+    DEBUG_LOG_SYSTEM("Light sleep: RTC state saved (elapsed: %lums)", millis() - entryStartMs);
 
     // Statics for wake snapshot — declared outside MOCK_MODE guard so they are
     // in scope for the log line after Serial.begin().  Assigned inside the guard;
@@ -749,9 +752,14 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     static int     s_wakeCause   = 0;   // int avoids esp_sleep_wakeup_cause_t in MOCK_MODE
 
 #ifndef MOCK_MODE
+    // Feed watchdog before entering sleep sequence
+    DEBUG_LOG_SYSTEM("Light sleep: feeding watchdog before sleep preparation");
+    esp_task_wdt_reset();
+
     // Reduce CPU frequency (ESP32-C3 max is 160MHz, not 240MHz)
     DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: reducing CPU 160MHz -> 80MHz");
     setCPUFrequency(80);
+    DEBUG_LOG_SYSTEM("Light sleep: CPU frequency reduced to 80MHz");
 
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
     // the IO_MUX function-select back to GPIO mode.  gpio_set_direction only
@@ -798,6 +806,9 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
     }
 
+    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup sources configured");
+    esp_task_wdt_reset();
+
     // Timer wakeup for light→deep transition.  Subtract the setup
     // overhead (millis() - m_stateEnterTime) so the timer covers only
     // the remaining duration from the caller's perspective.
@@ -809,6 +820,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
         }
     }
+    DEBUG_LOG_SYSTEM("Light sleep: timer wakeup configured");
 
     // Combined pre-sleep diagnostic: IO_MUX MCU_SEL, GPIO4 wakeup register, live pin levels
     {
@@ -848,11 +860,20 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Global GPIO wakeup enable — must come AFTER all gpio_wakeup_enable()
     // calls per ESP-IDF documented order (esp_sleep.h §287).
     esp_sleep_enable_gpio_wakeup();
+    DEBUG_LOG_SYSTEM("Light sleep: global GPIO wakeup enabled");
 
-    DEBUG_LOG_SYSTEM("Light sleep: entering now...");
+    // Feed watchdog before Serial shutdown (this can take time)
+    esp_task_wdt_reset();
+    DEBUG_LOG_SYSTEM("Light sleep: flushing Serial buffer");
     Serial.flush();  // Drain buffer while peripheral is still open
+
+    DEBUG_LOG_SYSTEM("Light sleep: shutting down Serial (calling Serial.end())");
     Serial.end();    // Cleanly shut down USB-JTAG-Serial.  end() + begin()
                      // on wake forces a cold-start the host can recover from.
+
+    // Final watchdog feed right before sleep entry
+    esp_task_wdt_reset();
+    // NOTE: No Serial logging possible after this point until Serial.begin() on wake
     esp_light_sleep_start();
 
     // Capture pin state at the exact moment of wake.  Serial is not yet
@@ -867,6 +888,10 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Wake.  Re-initialise USB-JTAG-Serial.  Must remain outside
     // #ifndef MOCK_MODE so native test builds also exercise this path.
     Serial.begin(SERIAL_BAUD_RATE);
+
+    // Calculate total time from entry to wake (includes sleep duration)
+    uint32_t totalWakeTime = millis() - entryStartMs;
+    DEBUG_LOG_SYSTEM("Light sleep: WOKE UP successfully! Total time: %lums", totalWakeTime);
 
     DEBUG_LOG_SYSTEM_VERBOSE("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
                      s_wakeCause, s_wakeGPIO1, s_wakeGPIO4,
