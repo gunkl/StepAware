@@ -250,3 +250,25 @@ the sensor configuration via `PowerManager::setMotionWakePins()`.
 - `/diagnose-device` - General diagnostic framework (parent skill)
 
 **Skill file**: `.claude/skills/diagnose-sleep.md`
+
+---
+
+## Sleep Diagnostics - User Assumption Validation
+
+**CRITICAL**: When diagnosing sleep issues, ALWAYS validate assumptions with user before forming hypothesis.
+
+**Why This Matters:**
+- Incorrect assumptions waste investigation time (e.g., assuming USB connected when battery-only)
+- User knows the actual test environment better than logs can reveal
+- Asking prevents debugging the wrong problem
+
+**Validation Questions** (use AskUserQuestion before log analysis):
+1. **Power source** - USB vs battery only
+2. **Sensors triggered** - Near, far, both, or unknown
+3. **Observations** - What was seen before recovery (LEDs, network, etc.)
+4. **Recovery method** - Button press, power cycle, or automatic
+5. **Battery voltage** - Healthy, low, critical, or unknown
+
+**Procedure**: See `.claude/skills/diagnose-sleep.md` Step 1.5 for full validation workflow
+
+**Related Documentation**: `docs/TROUBLESHOOTING.md` - Diagnostic checklist and known limitations

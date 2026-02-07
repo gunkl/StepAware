@@ -33,6 +33,23 @@ Same as `/diagnose-device`:
 
 ---
 
+## Step 1.5: Validate User Environment (CRITICAL)
+
+**Before analyzing logs or forming hypotheses, validate key assumptions with the user using AskUserQuestion.**
+
+This prevents wasted investigation based on incorrect assumptions.
+
+**Questions to Ask:**
+1. Power source during test? (USB vs battery)
+2. Which sensors were triggered? (Near, far, both, unknown)
+3. What was observed when unresponsive? (LEDs, network, etc.)
+4. How was device recovered? (Button, power cycle, automatic)
+5. Battery voltage after recovery? (Healthy, low, critical, unknown)
+
+Use AskUserQuestion tool with these verification questions BEFORE proceeding to log analysis.
+
+---
+
 ## Step 2: Launch Sleep-Specialized Coordinator
 
 Launch coordinator with sleep-specific analysis focus:
