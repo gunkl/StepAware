@@ -36,6 +36,7 @@
 #include "power_manager.h"
 #include "ntp_manager.h"
 #include "recal_scheduler.h"
+#include "watchdog_manager.h"
 
 // ============================================================================
 // Global Hardware Objects
@@ -1349,6 +1350,9 @@ void setup() {
 }
 
 void loop() {
+    // Feed watchdog at start of every loop iteration (critical for long operations)
+    g_watchdog.update();
+
     // Update sensor manager (handles all sensors)
     sensorManager.update();
 

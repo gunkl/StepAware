@@ -821,6 +821,19 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
     }
 
+    // Log which wake sources are armed
+    DEBUG_LOG_SYSTEM("=== LIGHT SLEEP WAKE SOURCES ===");
+    for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
+        gpio_num_t pin = (gpio_num_t)m_motionWakePins[i];
+        if (pin == (gpio_num_t)PIN_PIR_NEAR) {
+            DEBUG_LOG_SYSTEM("GPIO%d (near PIR): configured but NOT armed (Issue #38 workaround)", pin);
+        } else {
+            DEBUG_LOG_SYSTEM("GPIO%d (far PIR): ARMED for HIGH-level wake", pin);
+        }
+    }
+    DEBUG_LOG_SYSTEM("GPIO0 (button): ARMED for LOW-level wake (boot button)");
+    DEBUG_LOG_SYSTEM("================================");
+
     DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup sources configured");
     esp_task_wdt_reset();
 
@@ -904,6 +917,11 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     Serial.end();    // Cleanly shut down USB-JTAG-Serial.  end() + begin()
                      // on wake forces a cold-start the host can recover from.
 
+    // Log battery voltage before sleep
+    float batteryV = m_batteryStatus.voltage;
+    uint8_t batteryPct = m_batteryStatus.percentage;
+    DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
+
     // Final watchdog feed right before sleep entry
     esp_task_wdt_reset();
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
@@ -921,6 +939,24 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Wake.  Re-initialise USB-JTAG-Serial.  Must remain outside
     // #ifndef MOCK_MODE so native test builds also exercise this path.
     Serial.begin(SERIAL_BAUD_RATE);
+
+#ifndef MOCK_MODE
+    // Log wake event immediately after Serial is available
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+
+    DEBUG_LOG_SYSTEM("=== WAKE EVENT ===");
+    DEBUG_LOG_SYSTEM("Wake cause: %d", (int)cause);
+    if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+        DEBUG_LOG_SYSTEM("  EXT0 wake (GPIO0 button)");
+    } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+        DEBUG_LOG_SYSTEM("  Timer wake");
+    } else if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+        DEBUG_LOG_SYSTEM("  GPIO wake (PIR sensor or button)");
+    } else {
+        DEBUG_LOG_SYSTEM("  Other wake cause");
+    }
+    DEBUG_LOG_SYSTEM("==================");
+#endif
 
     // Calculate total time from entry to wake (includes sleep duration)
     uint32_t totalWakeTime = millis() - entryStartMs;
