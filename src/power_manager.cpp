@@ -571,6 +571,9 @@ void PowerManager::handlePowerState() {
                     }
 #ifndef MOCK_MODE
                     esp_task_wdt_reset();
+                    // DIAGNOSTIC LOG: Show how sleep duration was computed to catch underflow bugs
+                    DEBUG_LOG_SYSTEM("Pre-sleep: calculated sleepDuration=%lu (enableDeepSleep=%d, lightSleepToDeepSleepMs=%lu)",
+                                     sleepDuration, m_config.enableDeepSleep, m_config.lightSleepToDeepSleepMs);
                     DEBUG_LOG_SYSTEM("Pre-sleep: calling enterLightSleep(%lu) - free heap: %d bytes",
                                      sleepDuration, esp_get_free_heap_size());
 #endif
@@ -743,6 +746,16 @@ bool PowerManager::shouldEnterSleep() {
 }
 
 void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
+    // CRITICAL VALIDATION: Reject zero or dangerously low sleep durations
+    // Bug fix for Issue #44 - enterLightSleep(0) caused watchdog timeout
+    const uint32_t MIN_SLEEP_MS = 100;
+    if (duration_ms > 0 && duration_ms < MIN_SLEEP_MS) {
+        DEBUG_LOG_SYSTEM("ERROR: enterLightSleep(%lu) below minimum %ums - rejecting sleep request",
+                         duration_ms, MIN_SLEEP_MS);
+        m_state = STATE_ACTIVE;
+        return;
+    }
+
     DEBUG_LOG_SYSTEM_VERBOSE("Entering light sleep: duration=%lums", duration_ms);
     uint32_t entryStartMs = millis();
 
