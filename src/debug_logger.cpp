@@ -567,6 +567,16 @@ bool DebugLogger::needsRotation() {
 
 void DebugLogger::rotateLogs() {
 #if !MOCK_HARDWARE
+    // Enhanced diagnostics for Issue #44 - log rotation failures during crash recovery
+    Serial.println("[DebugLogger] === LOG ROTATION START ===");
+
+    // Filesystem health check before rotation
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t usedBytes = LittleFS.usedBytes();
+    size_t freeBytes = totalBytes - usedBytes;
+    Serial.printf("[DebugLogger] Pre-rotation FS: total=%u used=%u free=%u\n",
+                  totalBytes, usedBytes, freeBytes);
+
     // Close current log if open
     if (m_currentFile) {
         m_currentFile.close();
@@ -577,27 +587,71 @@ void DebugLogger::rotateLogs() {
     m_rotCurrentToBootOk  = false;
     m_rotBootToBoot2Ok    = false;
 
+    // Pre-rotation file state
+    bool boot2Exists = LittleFS.exists("/logs/boot_2.log");
+    bool boot1Exists = LittleFS.exists("/logs/boot_1.log");
+    bool currentExists = LittleFS.exists(CURRENT_LOG);
+
+    Serial.printf("[DebugLogger] Pre-rotation state: boot_2=%s boot_1=%s current=%s\n",
+                  boot2Exists ? "EXISTS" : "MISSING",
+                  boot1Exists ? "EXISTS" : "MISSING",
+                  currentExists ? "EXISTS" : "MISSING");
+
+    if (currentExists) {
+        File currentFile = LittleFS.open(CURRENT_LOG, "r");
+        if (currentFile) {
+            Serial.printf("[DebugLogger] current.log size: %u bytes\n", currentFile.size());
+            currentFile.close();
+        }
+    }
+
     // Rotate logs: boot_2.log -> delete, boot_1.log -> boot_2.log, current -> boot_1.log
 
     // Delete oldest log (boot_2.log)
-    if (LittleFS.exists("/logs/boot_2.log")) {
-        LittleFS.remove("/logs/boot_2.log");
+    if (boot2Exists) {
+        bool removeOk = LittleFS.remove("/logs/boot_2.log");
+        Serial.printf("[DebugLogger] Delete boot_2.log: %s\n", removeOk ? "OK" : "FAILED");
     }
 
     // Rename boot_1.log -> boot_2.log
-    if (LittleFS.exists("/logs/boot_1.log")) {
+    if (boot1Exists) {
         m_rotBootToBoot2Ok = LittleFS.rename("/logs/boot_1.log", "/logs/boot_2.log");
         Serial.printf("[DebugLogger] rotateLogs: boot_1 -> boot_2: %s\n", m_rotBootToBoot2Ok ? "OK" : "FAILED");
+        if (!m_rotBootToBoot2Ok) {
+            // Diagnose failure
+            bool boot2ExistsAfter = LittleFS.exists("/logs/boot_2.log");
+            bool boot1ExistsAfter = LittleFS.exists("/logs/boot_1.log");
+            Serial.printf("[DebugLogger] FAILURE DIAG: boot_1=%s boot_2=%s after rename attempt\n",
+                          boot1ExistsAfter ? "STILL EXISTS" : "MISSING",
+                          boot2ExistsAfter ? "EXISTS" : "MISSING");
+        }
     }
 
     // Rename current -> boot_1.log
-    m_rotCurrentExisted = LittleFS.exists(CURRENT_LOG);
+    m_rotCurrentExisted = currentExists;
     if (m_rotCurrentExisted) {
         m_rotCurrentToBootOk = LittleFS.rename(CURRENT_LOG, "/logs/boot_1.log");
         Serial.printf("[DebugLogger] rotateLogs: current -> boot_1: %s\n", m_rotCurrentToBootOk ? "OK" : "FAILED");
+        if (!m_rotCurrentToBootOk) {
+            // Diagnose failure
+            bool currentExistsAfter = LittleFS.exists(CURRENT_LOG);
+            bool boot1ExistsAfter = LittleFS.exists("/logs/boot_1.log");
+            Serial.printf("[DebugLogger] FAILURE DIAG: current=%s boot_1=%s after rename attempt\n",
+                          currentExistsAfter ? "STILL EXISTS" : "MISSING",
+                          boot1ExistsAfter ? "EXISTS" : "MISSING");
+        }
     } else {
         Serial.println("[DebugLogger] rotateLogs: current log does not exist — nothing to rotate");
     }
+
+    // Post-rotation filesystem state
+    totalBytes = LittleFS.totalBytes();
+    usedBytes = LittleFS.usedBytes();
+    freeBytes = totalBytes - usedBytes;
+    Serial.printf("[DebugLogger] Post-rotation FS: total=%u used=%u free=%u\n",
+                  totalBytes, usedBytes, freeBytes);
+
+    Serial.println("[DebugLogger] === LOG ROTATION COMPLETE ===");
 
     // Check if we need to delete more to stay under limit
     while (needsRotation()) {

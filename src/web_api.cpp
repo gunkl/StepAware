@@ -2225,38 +2225,28 @@ void WebAPI::handleGetCoredump(AsyncWebServerRequest* request) {
         return;
     }
 
-    // Allocate buffer for coredump
-    uint8_t* buffer = (uint8_t*)malloc(coredump_size);
-    if (!buffer) {
-        LOG_ERROR("Failed to allocate %u bytes for coredump", coredump_size);
-        sendError(request, 500, "Insufficient memory");
-        return;
-    }
+    LOG_INFO("Coredump size: %u bytes - streaming from partition without malloc", coredump_size);
 
-    // Read coredump data from partition
-    err = esp_partition_read(coredump_partition, 0, buffer, coredump_size);
-    if (err != ESP_OK) {
-        LOG_ERROR("Failed to read coredump data (error: %d)", err);
-        free(buffer);
-        sendError(request, 500, "Failed to read core dump data");
-        return;
-    }
-
-    LOG_INFO("Coredump read successfully, sending to client...");
-
-    // Send coredump as binary download
+    // Stream coredump directly from partition (no malloc)
+    // Fix for Issue #44: Large coredumps exhausted heap causing crashes
     AsyncWebServerResponse* response = request->beginResponse(
         "application/octet-stream",
         coredump_size,
-        [buffer, coredump_size](uint8_t *dest, size_t maxLen, size_t index) -> size_t {
+        [coredump_partition, coredump_size](uint8_t *dest, size_t maxLen, size_t index) -> size_t {
             if (index >= coredump_size) {
-                free((void*)buffer);  // Free when done
-                return 0;
+                return 0;  // Done
             }
 
             size_t remaining = coredump_size - index;
             size_t toSend = (remaining < maxLen) ? remaining : maxLen;
-            memcpy(dest, buffer + index, toSend);
+
+            // Read directly from partition into response buffer
+            esp_err_t err = esp_partition_read(coredump_partition, index, dest, toSend);
+            if (err != ESP_OK) {
+                LOG_ERROR("Streaming read failed at offset %zu (error: %d)", index, err);
+                return 0;  // Abort transfer
+            }
+
             return toSend;
         }
     );
@@ -2264,7 +2254,7 @@ void WebAPI::handleGetCoredump(AsyncWebServerRequest* request) {
     response->addHeader("Content-Disposition", "attachment; filename=coredump.elf");
     request->send(response);
 
-    LOG_INFO("Coredump download started");
+    LOG_INFO("Coredump streaming started (zero-copy from partition)");
 #else
     sendError(request, 501, "Coredump not available in mock mode");
 #endif
