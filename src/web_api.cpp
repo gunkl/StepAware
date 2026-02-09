@@ -355,6 +355,15 @@ bool WebAPI::begin() {
 #endif
     });
 
+    // NEW (Issue #44 - Second crash): Rotation diagnostics endpoint
+    m_server->on("/api/debug/logs/rotation_debug", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/rotation_debug.txt", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
     // DELETE endpoints for individual log files
     m_server->on("/api/debug/logs/current", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
 #if !MOCK_HARDWARE
