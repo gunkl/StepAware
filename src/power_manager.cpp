@@ -935,8 +935,12 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     uint8_t batteryPct = m_batteryStatus.percentage;
     DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
 
-    // Final watchdog feed right before sleep entry
-    esp_task_wdt_reset();
+    // CRITICAL FIX (Issue #44 - Second crash): Disable watchdog for sleep entry
+    // ESP-IDF esp_light_sleep_start() can take >5s during GPIO/timer configuration
+    // Remove this task from watchdog before sleep, re-add after wake
+    esp_task_wdt_delete(NULL);  // NULL = current task (loopTask)
+    DEBUG_LOG_SYSTEM("Light sleep: Removed task from watchdog for ESP-IDF sleep entry");
+
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
     esp_light_sleep_start();
 
@@ -954,6 +958,10 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     Serial.begin(SERIAL_BAUD_RATE);
 
 #ifndef MOCK_MODE
+    // Re-enable watchdog after wake
+    esp_task_wdt_add(NULL);  // NULL = current task (loopTask)
+    DEBUG_LOG_SYSTEM("Light sleep: Re-added task to watchdog after wake");
+
     // Log wake event immediately after Serial is available
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 

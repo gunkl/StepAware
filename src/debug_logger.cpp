@@ -565,10 +565,47 @@ bool DebugLogger::needsRotation() {
     return usage >= MAX_FILESYSTEM_PERCENT;
 }
 
+void DebugLogger::logRotationAttempt() {
+#if !MOCK_HARDWARE
+    // Write rotation diagnostics to persistent file
+    // This survives reboot even if rotation fails
+    File debugFile = LittleFS.open("/logs/rotation_debug.txt", "w");
+    if (!debugFile) {
+        Serial.println("[DebugLogger] ERROR: Cannot create rotation_debug.txt");
+        return;
+    }
+
+    // Log timestamp using Arduino time functions
+    char timestamp[32];
+    snprintf(timestamp, sizeof(timestamp), "[Boot #%lu]", m_bootCycle);
+    debugFile.printf("%s ROTATION ATTEMPT\n", timestamp);
+
+    // Log filesystem state
+    size_t total = LittleFS.totalBytes();
+    size_t used = LittleFS.usedBytes();
+    size_t available = total - used;
+    float percentUsed = (used * 100.0f) / total;
+    debugFile.printf("  FS: %u/%u bytes (%.1f%% used, %u free)\n",
+                    used, total, percentUsed, available);
+
+    // Log file existence
+    debugFile.printf("  Files: boot_2=%d boot_1=%d current=%d\n",
+                    LittleFS.exists("/logs/boot_2.log"),
+                    LittleFS.exists("/logs/boot_1.log"),
+                    LittleFS.exists(CURRENT_LOG));
+
+    debugFile.close();
+    Serial.println("[DebugLogger] Rotation debug logged to /logs/rotation_debug.txt");
+#endif
+}
+
 void DebugLogger::rotateLogs() {
 #if !MOCK_HARDWARE
     // Enhanced diagnostics for Issue #44 - log rotation failures during crash recovery
     Serial.println("[DebugLogger] === LOG ROTATION START ===");
+
+    // NEW (Issue #44 - Second crash): Log rotation attempt to persistent file
+    logRotationAttempt();
 
     // Filesystem health check before rotation
     size_t totalBytes = LittleFS.totalBytes();

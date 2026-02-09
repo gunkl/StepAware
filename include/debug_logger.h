@@ -239,6 +239,14 @@ private:
      * @brief Delete old log if needed
      */
     void deleteOldestLog();
+
+    /**
+     * @brief Log rotation attempt diagnostics to persistent file
+     *
+     * Writes filesystem state and file existence to /logs/rotation_debug.txt
+     * before rotation attempts. This survives reboot even if rotation fails.
+     */
+    void logRotationAttempt();
 };
 
 // Global debug logger instance
