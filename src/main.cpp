@@ -917,6 +917,8 @@ void setup() {
     const ConfigManager::Config& bootCfg = configManager.getConfig();
     DebugLogger::LogLevel debugLevel = static_cast<DebugLogger::LogLevel>(bootCfg.logLevel);
     g_debugLogger.setLevel(debugLevel);
+    const char* levelName = DebugLogger::getLevelName(debugLevel);
+    DEBUG_LOG_SYSTEM("Runtime log level set to %s (from config, value=%d)", levelName, (int)debugLevel);
 
     // Also set regular Logger level from config
     Logger::LogLevel loggerLevel = static_cast<Logger::LogLevel>(bootCfg.logLevel);
