@@ -4,6 +4,10 @@
 #include "logger.h"
 #include <stdarg.h>
 #include <time.h>
+#if !MOCK_HARDWARE
+#include "esp_system.h"    // For esp_reset_reason()
+#include "esp_task_wdt.h"  // For esp_task_wdt_reset()
+#endif
 
 // Global WebAPI pointer (defined in main.cpp)
 extern WebAPI* g_webAPI;
@@ -19,9 +23,10 @@ DebugLogger::DebugLogger()
     , m_lastFlushTime(0)
     , m_writesSinceFlush(0)
     , m_rotCurrentExisted(false)
-    , m_rotCurrentToBootOk(false)
-    , m_rotBootToBoot2Ok(false)
+    , m_rotCurrentToPrevOk(false)
 {
+    m_crashBackupStatusBuf[0] = '\0';
+
     // Initialize sensor state tracking
     for (uint8_t i = 0; i < 8; i++) {
         m_sensorStates[i].lastDistance = 0;
@@ -63,6 +68,9 @@ bool DebugLogger::begin(LogLevel level, uint16_t categoryMask) {
     // Load boot info (boot cycle count)
     loadBootInfo();
 
+    // Preserve crash log BEFORE rotating (must run while current log still exists)
+    preserveCrashLog();
+
     // Rotate logs from previous boot
     rotateLogs();
 
@@ -100,12 +108,21 @@ bool DebugLogger::begin(LogLevel level, uint16_t categoryMask) {
 
     // Append rotation status so it survives to the file log
     if (m_rotCurrentExisted) {
-        char rotLine[96];
+        char rotLine[64];
         snprintf(rotLine, sizeof(rotLine),
-                 "Rotation: current->boot_1=%s boot_1->boot_2=%s\n",
-                 m_rotCurrentToBootOk ? "OK" : "FAILED",
-                 m_rotBootToBoot2Ok   ? "OK" : "FAILED");
+                 "Rotation: current->prev=%s\n",
+                 m_rotCurrentToPrevOk ? "OK" : "FAILED");
         m_currentFile.print(rotLine);
+    }
+
+    // Append crash backup status
+    {
+        const char* backupStatus = (m_crashBackupStatusBuf[0] != '\0')
+                                   ? m_crashBackupStatusBuf
+                                   : "none";
+        char crashLine[64];
+        snprintf(crashLine, sizeof(crashLine), "Crash backup: %s\n", backupStatus);
+        m_currentFile.print(crashLine);
     }
 
     m_currentFile.flush();
@@ -530,16 +547,21 @@ size_t DebugLogger::getTotalLogsSize() {
     // Current log
     total += getLogSize();
 
-    // Previous boot logs
-    for (uint8_t i = 1; i <= MAX_BOOT_LOGS; i++) {
-        char path[32];
-        snprintf(path, sizeof(path), "/logs/boot_%u.log", i);
-        if (LittleFS.exists(path)) {
-            File f = LittleFS.open(path, "r");
-            if (f) {
-                total += f.size();
-                f.close();
-            }
+    // Previous boot log
+    if (LittleFS.exists(PREV_LOG)) {
+        File f = LittleFS.open(PREV_LOG, "r");
+        if (f) {
+            total += f.size();
+            f.close();
+        }
+    }
+
+    // Overflow log (runtime rotation artifact)
+    if (LittleFS.exists(OVERFLOW_LOG)) {
+        File f = LittleFS.open(OVERFLOW_LOG, "r");
+        if (f) {
+            total += f.size();
+            f.close();
         }
     }
 
@@ -588,11 +610,12 @@ void DebugLogger::logRotationAttempt() {
     debugFile.printf("  FS: %u/%u bytes (%.1f%% used, %u free)\n",
                     used, total, percentUsed, available);
 
-    // Log file existence
-    debugFile.printf("  Files: boot_2=%d boot_1=%d current=%d\n",
-                    LittleFS.exists("/logs/boot_2.log"),
-                    LittleFS.exists("/logs/boot_1.log"),
-                    LittleFS.exists(CURRENT_LOG));
+    // Log file existence (new layout: prev + overflow + current)
+    debugFile.printf("  Files: prev=%d overflow=%d current=%d crash_backup=%d\n",
+                    LittleFS.exists(PREV_LOG),
+                    LittleFS.exists(OVERFLOW_LOG),
+                    LittleFS.exists(CURRENT_LOG),
+                    LittleFS.exists(CRASH_BACKUP_LOG));
 
     debugFile.close();
     Serial.println("[DebugLogger] Rotation debug logged to /logs/rotation_debug.txt");
@@ -601,10 +624,9 @@ void DebugLogger::logRotationAttempt() {
 
 void DebugLogger::rotateLogs() {
 #if !MOCK_HARDWARE
-    // Enhanced diagnostics for Issue #44 - log rotation failures during crash recovery
     Serial.println("[DebugLogger] === LOG ROTATION START ===");
 
-    // NEW (Issue #44 - Second crash): Log rotation attempt to persistent file
+    // Log rotation attempt to persistent file (survives reboot if rotation fails)
     logRotationAttempt();
 
     // Filesystem health check before rotation
@@ -620,19 +642,18 @@ void DebugLogger::rotateLogs() {
     }
 
     // Reset rotation status flags
-    m_rotCurrentExisted   = false;
-    m_rotCurrentToBootOk  = false;
-    m_rotBootToBoot2Ok    = false;
+    m_rotCurrentExisted  = false;
+    m_rotCurrentToPrevOk = false;
 
     // Pre-rotation file state
-    bool boot2Exists = LittleFS.exists("/logs/boot_2.log");
-    bool boot1Exists = LittleFS.exists("/logs/boot_1.log");
-    bool currentExists = LittleFS.exists(CURRENT_LOG);
+    bool prevExists     = LittleFS.exists(PREV_LOG);
+    bool overflowExists = LittleFS.exists(OVERFLOW_LOG);
+    bool currentExists  = LittleFS.exists(CURRENT_LOG);
 
-    Serial.printf("[DebugLogger] Pre-rotation state: boot_2=%s boot_1=%s current=%s\n",
-                  boot2Exists ? "EXISTS" : "MISSING",
-                  boot1Exists ? "EXISTS" : "MISSING",
-                  currentExists ? "EXISTS" : "MISSING");
+    Serial.printf("[DebugLogger] Pre-rotation state: prev=%s overflow=%s current=%s\n",
+                  prevExists     ? "EXISTS" : "MISSING",
+                  overflowExists ? "EXISTS" : "MISSING",
+                  currentExists  ? "EXISTS" : "MISSING");
 
     if (currentExists) {
         File currentFile = LittleFS.open(CURRENT_LOG, "r");
@@ -642,40 +663,30 @@ void DebugLogger::rotateLogs() {
         }
     }
 
-    // Rotate logs: boot_2.log -> delete, boot_1.log -> boot_2.log, current -> boot_1.log
-
-    // Delete oldest log (boot_2.log)
-    if (boot2Exists) {
-        bool removeOk = LittleFS.remove("/logs/boot_2.log");
-        Serial.printf("[DebugLogger] Delete boot_2.log: %s\n", removeOk ? "OK" : "FAILED");
+    // Delete old prev log (it belongs to the boot before last)
+    if (prevExists) {
+        bool removeOk = LittleFS.remove(PREV_LOG);
+        Serial.printf("[DebugLogger] Delete boot_prev.log: %s\n", removeOk ? "OK" : "FAILED");
     }
 
-    // Rename boot_1.log -> boot_2.log
-    if (boot1Exists) {
-        m_rotBootToBoot2Ok = LittleFS.rename("/logs/boot_1.log", "/logs/boot_2.log");
-        Serial.printf("[DebugLogger] rotateLogs: boot_1 -> boot_2: %s\n", m_rotBootToBoot2Ok ? "OK" : "FAILED");
-        if (!m_rotBootToBoot2Ok) {
-            // Diagnose failure
-            bool boot2ExistsAfter = LittleFS.exists("/logs/boot_2.log");
-            bool boot1ExistsAfter = LittleFS.exists("/logs/boot_1.log");
-            Serial.printf("[DebugLogger] FAILURE DIAG: boot_1=%s boot_2=%s after rename attempt\n",
-                          boot1ExistsAfter ? "STILL EXISTS" : "MISSING",
-                          boot2ExistsAfter ? "EXISTS" : "MISSING");
-        }
+    // Delete old overflow log (it belongs to the previous boot's runtime)
+    if (overflowExists) {
+        bool removeOk = LittleFS.remove(OVERFLOW_LOG);
+        Serial.printf("[DebugLogger] Delete boot_overflow.log: %s\n", removeOk ? "OK" : "FAILED");
     }
 
-    // Rename current -> boot_1.log
+    // Rename current -> boot_prev.log
     m_rotCurrentExisted = currentExists;
     if (m_rotCurrentExisted) {
-        m_rotCurrentToBootOk = LittleFS.rename(CURRENT_LOG, "/logs/boot_1.log");
-        Serial.printf("[DebugLogger] rotateLogs: current -> boot_1: %s\n", m_rotCurrentToBootOk ? "OK" : "FAILED");
-        if (!m_rotCurrentToBootOk) {
-            // Diagnose failure
+        m_rotCurrentToPrevOk = LittleFS.rename(CURRENT_LOG, PREV_LOG);
+        Serial.printf("[DebugLogger] rotateLogs: current -> prev: %s\n",
+                      m_rotCurrentToPrevOk ? "OK" : "FAILED");
+        if (!m_rotCurrentToPrevOk) {
             bool currentExistsAfter = LittleFS.exists(CURRENT_LOG);
-            bool boot1ExistsAfter = LittleFS.exists("/logs/boot_1.log");
-            Serial.printf("[DebugLogger] FAILURE DIAG: current=%s boot_1=%s after rename attempt\n",
+            bool prevExistsAfter    = LittleFS.exists(PREV_LOG);
+            Serial.printf("[DebugLogger] FAILURE DIAG: current=%s prev=%s after rename attempt\n",
                           currentExistsAfter ? "STILL EXISTS" : "MISSING",
-                          boot1ExistsAfter ? "EXISTS" : "MISSING");
+                          prevExistsAfter    ? "EXISTS"       : "MISSING");
         }
     } else {
         Serial.println("[DebugLogger] rotateLogs: current log does not exist — nothing to rotate");
@@ -683,17 +694,12 @@ void DebugLogger::rotateLogs() {
 
     // Post-rotation filesystem state
     totalBytes = LittleFS.totalBytes();
-    usedBytes = LittleFS.usedBytes();
-    freeBytes = totalBytes - usedBytes;
+    usedBytes  = LittleFS.usedBytes();
+    freeBytes  = totalBytes - usedBytes;
     Serial.printf("[DebugLogger] Post-rotation FS: total=%u used=%u free=%u\n",
                   totalBytes, usedBytes, freeBytes);
 
     Serial.println("[DebugLogger] === LOG ROTATION COMPLETE ===");
-
-    // Check if we need to delete more to stay under limit
-    while (needsRotation()) {
-        deleteOldestLog();
-    }
 #endif
 }
 
@@ -706,8 +712,9 @@ void DebugLogger::clearAllLogs() {
 
     // Delete all log files
     LittleFS.remove(CURRENT_LOG);
-    LittleFS.remove("/logs/boot_1.log");
-    LittleFS.remove("/logs/boot_2.log");
+    LittleFS.remove(PREV_LOG);
+    LittleFS.remove(OVERFLOW_LOG);
+    LittleFS.remove(CRASH_BACKUP_LOG);
     LittleFS.remove(BOOT_INFO);
 
     // Reset boot cycle
@@ -761,7 +768,9 @@ void DebugLogger::writeToFile(const char* message) {
     uint32_t now = millis();
     if (m_writesSinceFlush >= WRITES_PER_FLUSH ||
         (now - m_lastFlushTime) >= FLUSH_INTERVAL_MS) {
+        esp_task_wdt_reset();  // Feed watchdog before potentially slow flush
         flush();
+        checkAndRotateRunningLogs();  // Check space at flush intervals
     }
 #endif
 }
@@ -797,15 +806,187 @@ bool DebugLogger::checkSpace() {
 
 void DebugLogger::deleteOldestLog() {
 #if !MOCK_HARDWARE
-    // Delete in order: boot_2 -> boot_1 -> current
-    if (LittleFS.exists("/logs/boot_2.log")) {
-        LittleFS.remove("/logs/boot_2.log");
-    } else if (LittleFS.exists("/logs/boot_1.log")) {
-        LittleFS.remove("/logs/boot_1.log");
-    } else if (LittleFS.exists(CURRENT_LOG)) {
-        LittleFS.remove(CURRENT_LOG);
-        // Reopen for writing
+    // Delete in order: prev -> overflow -> truncate current
+    if (LittleFS.exists(PREV_LOG)) {
+        LittleFS.remove(PREV_LOG);
+    } else if (LittleFS.exists(OVERFLOW_LOG)) {
+        LittleFS.remove(OVERFLOW_LOG);
+    } else if (m_currentFile) {
+        // Truncate current log as last resort
+        m_currentFile.close();
         m_currentFile = LittleFS.open(CURRENT_LOG, "w");
+        if (m_currentFile) {
+            m_currentFile.println("[LOG TRUNCATED - emergency space reclaim]");
+        }
     }
+#endif
+}
+
+void DebugLogger::preserveCrashLog() {
+#if !MOCK_HARDWARE
+    // Check if this boot was caused by a crash
+    esp_reset_reason_t reason = esp_reset_reason();
+    bool isCrash = (reason == ESP_RST_PANIC ||
+                    reason == ESP_RST_TASK_WDT ||
+                    reason == ESP_RST_INT_WDT ||
+                    reason == ESP_RST_WDT ||
+                    reason == ESP_RST_BROWNOUT);
+
+    m_crashBackupStatusBuf[0] = '\0';  // empty = "none"
+
+    int reasonInt = (int)reason;
+
+    if (!isCrash) {
+        Serial.printf("[DebugLogger] Reset reason %d - not a crash, skipping backup\n", reasonInt);
+        return;
+    }
+
+    Serial.printf("[DebugLogger] CRASH DETECTED (reset reason %d) - preserving crash log\n", reasonInt);
+
+    if (!LittleFS.exists(CURRENT_LOG)) {
+        Serial.println("[DebugLogger] No current log to preserve");
+        snprintf(m_crashBackupStatusBuf, sizeof(m_crashBackupStatusBuf), "no log found");
+        return;
+    }
+
+    File src = LittleFS.open(CURRENT_LOG, "r");
+    if (!src) {
+        Serial.println("[DebugLogger] ERROR: Cannot open current log for crash backup");
+        snprintf(m_crashBackupStatusBuf, sizeof(m_crashBackupStatusBuf), "open failed");
+        return;
+    }
+
+    size_t fileSize    = src.size();
+    size_t maxBackup   = CRASH_RESERVE_BYTES - 256;  // Leave room for header
+    size_t startOffset = (fileSize > maxBackup) ? (fileSize - maxBackup) : 0;
+    size_t bytesToCopy = fileSize - startOffset;
+
+    File dst = LittleFS.open(CRASH_BACKUP_LOG, "w");
+    if (!dst) {
+        src.close();
+        Serial.println("[DebugLogger] ERROR: Cannot create crash backup file");
+        snprintf(m_crashBackupStatusBuf, sizeof(m_crashBackupStatusBuf), "create failed");
+        return;
+    }
+
+    // Determine reason string
+    const char* reasonStr = "unknown";
+    switch (reason) {
+        case ESP_RST_PANIC:    reasonStr = "PANIC";    break;
+        case ESP_RST_TASK_WDT: reasonStr = "TASK_WDT"; break;
+        case ESP_RST_INT_WDT:  reasonStr = "INT_WDT";  break;
+        case ESP_RST_WDT:      reasonStr = "WDT";      break;
+        case ESP_RST_BROWNOUT: reasonStr = "BROWNOUT"; break;
+        default: break;
+    }
+
+    // Write header
+    dst.printf("=== CRASH BACKUP (Boot #%lu) ===\n", m_bootCycle);
+    dst.printf("Reset reason: %s (%d)\n", reasonStr, reasonInt);
+    dst.printf("Original log size: %u bytes\n", fileSize);
+    dst.printf("Backup offset: %u (last %u bytes)\n", startOffset, bytesToCopy);
+    dst.println("================================\n");
+
+    // Copy log data in chunks
+    src.seek(startOffset);
+    uint8_t buf[512];
+    size_t totalCopied = 0;
+    while (totalCopied < bytesToCopy) {
+        size_t toRead = bytesToCopy - totalCopied;
+        if (toRead > sizeof(buf)) toRead = sizeof(buf);
+        size_t bytesRead = src.read(buf, toRead);
+        if (bytesRead == 0) break;
+        dst.write(buf, bytesRead);
+        totalCopied += bytesRead;
+    }
+
+    dst.close();
+    src.close();
+
+    unsigned int copiedK = (unsigned int)(totalCopied / 1024);
+    snprintf(m_crashBackupStatusBuf, sizeof(m_crashBackupStatusBuf),
+             "saved %uK (%s)", copiedK, reasonStr);
+
+    Serial.printf("[DebugLogger] Crash backup saved: %u bytes from offset %u (%s)\n",
+                  totalCopied, startOffset, reasonStr);
+#endif
+}
+
+void DebugLogger::checkAndRotateRunningLogs() {
+#if !MOCK_HARDWARE
+    if (!m_currentFile) return;
+
+    // Calculate space budget (total minus crash reserve)
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t budget = totalBytes - CRASH_RESERVE_BYTES;
+
+    // Get current log size
+    size_t currentSize = m_currentFile.size();
+
+    // Get overflow log size if it exists
+    size_t overflowSize = 0;
+    if (LittleFS.exists(OVERFLOW_LOG)) {
+        File f = LittleFS.open(OVERFLOW_LOG, "r");
+        if (f) {
+            overflowSize = f.size();
+            f.close();
+        }
+    }
+
+    size_t usedByLogs = currentSize + overflowSize;
+
+    // Only rotate when we've reached 95% of budget
+    if (usedByLogs < (budget * 95 / 100)) return;
+
+    // Pre-compute percentage for safe printf use
+    unsigned int usedPct = (unsigned int)((usedByLogs * 100) / budget);
+    Serial.printf("[DebugLogger] Runtime rotation: logs=%u/%u (%u%%) - rotating\n",
+                  usedByLogs, budget, usedPct);
+
+    // Feed watchdog before potentially slow filesystem operations
+    esp_task_wdt_reset();
+
+    // Save last 25% of current log to overflow
+    size_t tailSize   = currentSize / 4;
+    size_t tailOffset = currentSize - tailSize;
+
+    // Close current file before reading it
+    m_currentFile.flush();
+    m_currentFile.close();
+
+    File src = LittleFS.open(CURRENT_LOG, "r");
+    if (!src) {
+        // Reopen for append and bail out
+        m_currentFile = LittleFS.open(CURRENT_LOG, "a");
+        return;
+    }
+
+    File dst = LittleFS.open(OVERFLOW_LOG, "w");
+    if (dst) {
+        src.seek(tailOffset);
+        uint8_t buf[512];
+        size_t copied = 0;
+        while (copied < tailSize) {
+            size_t toRead = tailSize - copied;
+            if (toRead > sizeof(buf)) toRead = sizeof(buf);
+            size_t bytesRead = src.read(buf, toRead);
+            if (bytesRead == 0) break;
+            dst.write(buf, bytesRead);
+            copied += bytesRead;
+        }
+        dst.close();
+        Serial.printf("[DebugLogger] Saved %u bytes to overflow\n", copied);
+    }
+    src.close();
+
+    // Truncate current log (reopen as write mode)
+    m_currentFile = LittleFS.open(CURRENT_LOG, "w");
+    if (m_currentFile) {
+        m_currentFile.println("[LOG ROTATED - runtime space management]");
+        unsigned int freed = (unsigned int)(currentSize - tailSize);
+        Serial.printf("[DebugLogger] Current log truncated, freed ~%u bytes\n", freed);
+    }
+
+    esp_task_wdt_reset();
 #endif
 }

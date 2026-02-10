@@ -339,23 +339,40 @@ bool WebAPI::begin() {
 #endif
     });
 
+    m_server->on("/api/debug/logs/overflow", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/boot_overflow.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/prev", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/boot_prev.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/crash_backup", HTTP_GET, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        req->send(LittleFS, "/logs/crash_backup.log", "text/plain");
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    // Backward compatibility: boot_1 redirects to boot_prev.log (deprecated)
     m_server->on("/api/debug/logs/boot_1", HTTP_GET, [this](AsyncWebServerRequest* req) {
 #if !MOCK_HARDWARE
-        req->send(LittleFS, "/logs/boot_1.log", "text/plain");
+        req->send(LittleFS, "/logs/boot_prev.log", "text/plain");
 #else
         this->sendError(req, 501, "Not available in mock mode");
 #endif
     });
 
-    m_server->on("/api/debug/logs/boot_2", HTTP_GET, [this](AsyncWebServerRequest* req) {
-#if !MOCK_HARDWARE
-        req->send(LittleFS, "/logs/boot_2.log", "text/plain");
-#else
-        this->sendError(req, 501, "Not available in mock mode");
-#endif
-    });
-
-    // NEW (Issue #44 - Second crash): Rotation diagnostics endpoint
+    // Rotation diagnostics endpoint
     m_server->on("/api/debug/logs/rotation_debug", HTTP_GET, [this](AsyncWebServerRequest* req) {
 #if !MOCK_HARDWARE
         req->send(LittleFS, "/logs/rotation_debug.txt", "text/plain");
@@ -384,10 +401,10 @@ bool WebAPI::begin() {
 #endif
     });
 
-    m_server->on("/api/debug/logs/boot_1", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+    m_server->on("/api/debug/logs/overflow", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
 #if !MOCK_HARDWARE
-        if (LittleFS.exists("/logs/boot_1.log")) {
-            if (LittleFS.remove("/logs/boot_1.log")) {
+        if (LittleFS.exists("/logs/boot_overflow.log")) {
+            if (LittleFS.remove("/logs/boot_overflow.log")) {
                 this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
             } else {
                 this->sendError(req, 500, "Failed to delete log file");
@@ -400,10 +417,43 @@ bool WebAPI::begin() {
 #endif
     });
 
-    m_server->on("/api/debug/logs/boot_2", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+    m_server->on("/api/debug/logs/prev", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
 #if !MOCK_HARDWARE
-        if (LittleFS.exists("/logs/boot_2.log")) {
-            if (LittleFS.remove("/logs/boot_2.log")) {
+        if (LittleFS.exists("/logs/boot_prev.log")) {
+            if (LittleFS.remove("/logs/boot_prev.log")) {
+                this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
+            } else {
+                this->sendError(req, 500, "Failed to delete log file");
+            }
+        } else {
+            this->sendError(req, 404, "Log not found");
+        }
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    m_server->on("/api/debug/logs/crash_backup", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        if (LittleFS.exists("/logs/crash_backup.log")) {
+            if (LittleFS.remove("/logs/crash_backup.log")) {
+                this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
+            } else {
+                this->sendError(req, 500, "Failed to delete log file");
+            }
+        } else {
+            this->sendError(req, 404, "Log not found");
+        }
+#else
+        this->sendError(req, 501, "Not available in mock mode");
+#endif
+    });
+
+    // Backward compatibility: boot_1 DELETE uses boot_prev.log (deprecated)
+    m_server->on("/api/debug/logs/boot_1", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+#if !MOCK_HARDWARE
+        if (LittleFS.exists("/logs/boot_prev.log")) {
+            if (LittleFS.remove("/logs/boot_prev.log")) {
                 this->sendJSON(req, 200, "{\"success\":true,\"message\":\"Log deleted\"}");
             } else {
                 this->sendError(req, 500, "Failed to delete log file");
@@ -4081,7 +4131,7 @@ void WebAPI::handleGetDebugLogs(AsyncWebServerRequest* request) {
     };
 
     // Build JSON response with system info
-    char json[768];
+    char json[1024];
     snprintf(json, sizeof(json),
         "{"
         "\"bootCycle\":%u,"
@@ -4091,8 +4141,10 @@ void WebAPI::handleGetDebugLogs(AsyncWebServerRequest* request) {
         "\"totalLogsSize\":%u,"
         "\"logs\":["
         "{\"name\":\"current\",\"size\":%u,\"path\":\"/logs/boot_current.log\"},"
-        "{\"name\":\"boot_1\",\"size\":%u,\"path\":\"/logs/boot_1.log\"},"
-        "{\"name\":\"boot_2\",\"size\":%u,\"path\":\"/logs/boot_2.log\"}"
+        "{\"name\":\"overflow\",\"size\":%u,\"path\":\"/logs/boot_overflow.log\"},"
+        "{\"name\":\"prev\",\"size\":%u,\"path\":\"/logs/boot_prev.log\"},"
+        "{\"name\":\"crash_backup\",\"size\":%u,\"path\":\"/logs/crash_backup.log\"},"
+        "{\"name\":\"rotation_debug\",\"size\":%u,\"path\":\"/logs/rotation_debug.txt\"}"
         "]"
         "}",
         g_debugLogger.getBootCycle(),
@@ -4101,8 +4153,10 @@ void WebAPI::handleGetDebugLogs(AsyncWebServerRequest* request) {
         g_debugLogger.getFilesystemUsage(),
         g_debugLogger.getTotalLogsSize(),
         getFileSize("/logs/boot_current.log"),
-        getFileSize("/logs/boot_1.log"),
-        getFileSize("/logs/boot_2.log")
+        getFileSize("/logs/boot_overflow.log"),
+        getFileSize("/logs/boot_prev.log"),
+        getFileSize("/logs/crash_backup.log"),
+        getFileSize("/logs/rotation_debug.txt")
     );
     sendJSON(request, 200, json);
 #else

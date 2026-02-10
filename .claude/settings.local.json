@@ -136,7 +136,8 @@
       "Bash(gh issue create --title \"Fix #35: display Pin Mode in PIR sensor configuration card\" --body \"$\\(cat <<''EOF''\nCloses #35.\n\n## What changed\nAdded a \"Pin Mode\" row to the read-only Configuration column of each PIR sensor\ncard on the Hardware tab \\(`createSensorCard` JS in `src/web_api.cpp`\\).\n\nThe row maps the internal 0/1/2 enum to the same labels used in the edit prompt:\n- `INPUT \\(AM312\\)`\n- `INPUT_PULLUP \\(SR602\\)` ← default\n- `INPUT_PULLDOWN`\n\n## Why\nThe `pinMode` field was already stored in config, serialised by the backend, loaded\ninto the frontend `sensorSlots` array, and editable via the PIR edit modal — it was\nsimply never rendered in the card view.\n\n## Scope\nSingle insertion in `src/web_api.cpp` \\(lines 3431-3432\\).  No backend, API, or config\nchanges required.\n\n## Verified\n- `pio run -e esp32c3` — SUCCESS\n- `pio test -e native` — 156/157 pass \\(1 pre-existing error in test_pir_recal / #37\\)\nEOF\n\\)\")",
       "Bash(\"C:\\\\Users\\\\David\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe\" run -e esp32c3)",
       "Bash(mode)",
-      "Bash(C:UsersDavidAppDataLocalMicrosoftWindowsAppsPythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0python.exe -m serial.tools.list_ports)"
+      "Bash(C:UsersDavidAppDataLocalMicrosoftWindowsAppsPythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0python.exe -m serial.tools.list_ports)",
+      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump:*)"
     ]
   }
 }

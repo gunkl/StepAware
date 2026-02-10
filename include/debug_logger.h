@@ -21,9 +21,10 @@
  *
  * Log Structure:
  * - /logs/boot_current.log - Current session
- * - /logs/boot_1.log - Previous session
- * - /logs/boot_2.log - 2 sessions ago
- * - /logs/boot_info.txt - Boot cycle metadata
+ * - /logs/boot_prev.log    - Previous session
+ * - /logs/boot_overflow.log - Runtime overflow (last 25% before truncation)
+ * - /logs/crash_backup.log  - Last crash log (32KB, preserved across reboots)
+ * - /logs/boot_info.txt    - Boot cycle metadata
  */
 class DebugLogger {
 public:
@@ -198,17 +199,23 @@ private:
     // result is visible via /api/debug/logs/current (Serial.printf output is
     // lost before the file is opened).
     bool m_rotCurrentExisted;       ///< current log existed when rotateLogs ran
-    bool m_rotCurrentToBootOk;      ///< rename current → boot_1 succeeded
-    bool m_rotBootToBoot2Ok;        ///< rename boot_1 → boot_2 succeeded
+    bool m_rotCurrentToPrevOk;      ///< rename current → boot_prev succeeded
+
+    // Crash backup status (set by preserveCrashLog, included in boot header)
+    char m_crashBackupStatusBuf[48];
 
     // Constants
     static constexpr const char* LOG_DIR = "/logs";
     static constexpr const char* CURRENT_LOG = "/logs/boot_current.log";
+    static constexpr const char* OVERFLOW_LOG = "/logs/boot_overflow.log";
+    static constexpr const char* PREV_LOG = "/logs/boot_prev.log";
+    static constexpr const char* CRASH_BACKUP_LOG = "/logs/crash_backup.log";
     static constexpr const char* BOOT_INFO = "/logs/boot_info.txt";
     static constexpr size_t FLUSH_INTERVAL_MS = 5000;  // Flush every 5 seconds
     static constexpr size_t WRITES_PER_FLUSH = 20;     // Or every 20 writes
     static constexpr uint8_t MAX_FILESYSTEM_PERCENT = 30;  // Max 30% of filesystem
     static constexpr uint8_t MAX_BOOT_LOGS = 3;        // Keep last 3 boots
+    static constexpr size_t CRASH_RESERVE_BYTES = 32768;  // 32KB reserved for crash backup
 
     // Sensor logging thresholds for change detection
     static constexpr uint32_t DISTANCE_CHANGE_THRESHOLD_MM = 50;      // 50mm change
@@ -247,6 +254,25 @@ private:
      * before rotation attempts. This survives reboot even if rotation fails.
      */
     void logRotationAttempt();
+
+    /**
+     * @brief Preserve the current log as a crash backup before rotating.
+     *
+     * Called at boot before rotateLogs() when a crash reset is detected.
+     * Copies the tail of the previous session log to CRASH_BACKUP_LOG so
+     * it is not lost when the boot rotation renames/deletes files.
+     */
+    void preserveCrashLog();
+
+    /**
+     * @brief Check available space and rotate running logs if needed.
+     *
+     * Called at each flush interval from writeToFile(). If the current log
+     * plus the overflow log together exceed 95% of the non-crash-reserve
+     * budget, the tail of the current log is saved to OVERFLOW_LOG and
+     * the current log is truncated.
+     */
+    void checkAndRotateRunningLogs();
 };
 
 // Global debug logger instance
