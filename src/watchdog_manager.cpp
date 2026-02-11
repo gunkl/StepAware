@@ -69,9 +69,11 @@ bool WatchdogManager::begin(const Config* config) {
     DEBUG_LOG_SYSTEM("Watchdog: Initializing hardware watchdog timer (%ums timeout)", m_config.hardwareTimeoutMs);
 
 #ifndef MOCK_MODE
-    // Configure ESP32 hardware watchdog
-    esp_task_wdt_init(m_config.hardwareTimeoutMs / 1000, true);  // timeout in seconds, panic on timeout
-    esp_task_wdt_add(NULL);  // Add current task to WDT
+    // Configure ESP32 hardware watchdog.
+    // Note: the Arduino framework (via LittleFS.begin()) has already initialized the WDT
+    // and subscribed both loopTask and the IDLE task.  We don't re-init here; IDLE
+    // is removed by disableCore0WDT() at the end of setup() in main.cpp (Issue #44).
+    esp_task_wdt_add(NULL);  // Ensure current task (loopTask) is subscribed
 #endif
 
     m_lastHWFeedTime = millis();
