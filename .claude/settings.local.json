@@ -146,7 +146,9 @@
       "Bash(for name in crash_backup current prev rotation_debug)",
       "Bash(do)",
       "Bash(done)",
-      "Bash(# Look at the task_wdt.c source to understand when it subscribes idle tasks find \"\"C:/Users/David/.platformio/packages/framework-arduinoespressif32/\"\" -name \"\"task_wdt.c\"\")"
+      "Bash(# Look at the task_wdt.c source to understand when it subscribes idle tasks find \"\"C:/Users/David/.platformio/packages/framework-arduinoespressif32/\"\" -name \"\"task_wdt.c\"\")",
+      "Bash(cmd /c \"pio run -e esp32c3 2>&1\")",
+      "Bash(powershell -Command \"cd 'c:\\\\Users\\\\David\\\\Documents\\\\VSCode Projects\\\\ESP32\\\\StepAware'; & 'C:\\\\Users\\\\David\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe' run -e esp32c3 2>&1\":*)"
     ]
   }
 }
