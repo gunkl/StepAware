@@ -6,6 +6,7 @@
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <esp_task_wdt.h>
+#include <freertos/task.h>   // xTaskGetIdleTaskHandleForCPU()
 #include <driver/adc.h>
 #include "esp_adc_cal.h"
 #include <driver/gpio.h>
@@ -935,11 +936,13 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     uint8_t batteryPct = m_batteryStatus.percentage;
     DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
 
-    // CRITICAL FIX (Issue #44 - Second crash): Disable watchdog for sleep entry
-    // ESP-IDF esp_light_sleep_start() can take >5s during GPIO/timer configuration
-    // Remove this task from watchdog before sleep, re-add after wake
-    esp_task_wdt_delete(NULL);  // NULL = current task (loopTask)
-    DEBUG_LOG_SYSTEM("Light sleep: Removed task from watchdog for ESP-IDF sleep entry");
+    // CRITICAL FIX (Issue #44): Remove loopTask + IDLE task from watchdog before sleep.
+    // esp_light_sleep_start() can take >5s (second crash), and after wake the IDLE task
+    // (priority 0) may be starved for >8s by higher-priority tasks resuming (fourth crash).
+    // Removing both gives a fresh timeout window after wake.
+    esp_task_wdt_delete(NULL);                            // loopTask (current task)
+    esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0)); // IDLE task (priority 0)
+    DEBUG_LOG_SYSTEM("Light sleep: Removed loopTask + IDLE from watchdog for sleep entry");
 
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
     esp_light_sleep_start();
@@ -958,9 +961,10 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     Serial.begin(SERIAL_BAUD_RATE);
 
 #ifndef MOCK_MODE
-    // Re-enable watchdog after wake
-    esp_task_wdt_add(NULL);  // NULL = current task (loopTask)
-    DEBUG_LOG_SYSTEM("Light sleep: Re-added task to watchdog after wake");
+    // Re-subscribe both tasks to watchdog after wake (fresh timeout window)
+    esp_task_wdt_add(NULL);                            // loopTask
+    esp_task_wdt_add(xTaskGetIdleTaskHandleForCPU(0)); // IDLE task
+    DEBUG_LOG_SYSTEM("Light sleep: Re-added loopTask + IDLE to watchdog after wake");
 
     // Log wake event immediately after Serial is available
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();

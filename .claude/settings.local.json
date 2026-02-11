@@ -137,7 +137,8 @@
       "Bash(\"C:\\\\Users\\\\David\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe\" run -e esp32c3)",
       "Bash(mode)",
       "Bash(C:UsersDavidAppDataLocalMicrosoftWindowsAppsPythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0python.exe -m serial.tools.list_ports)",
-      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump:*)"
+      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump:*)",
+      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -c:*)"
     ]
   }
 }
