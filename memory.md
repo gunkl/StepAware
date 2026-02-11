@@ -165,6 +165,32 @@ the sensor configuration via `PowerManager::setMotionWakePins()`.
 
 ---
 
+## Two Separate Logging Systems — Crash Diagnostics
+
+The device has two completely different logging systems. Using the wrong one for
+crash/watchdog diagnosis wastes significant time.
+
+### g_debugLogger (DebugLogger) — for crash diagnostics
+- **Format**: Plain text, written to LittleFS files
+- **API base**: `/api/debug/logs/*`
+- **Use for**: Watchdog crashes, boot sequence, state machine, all system diagnostics
+- **Primary crash log**: `GET /api/debug/logs/crash_backup` ← always download this first
+
+### g_logger (Logger) — for application events
+- **Format**: Structured JSON, stored in RAM ring buffer
+- **API base**: `/api/logs`
+- **NOT useful for**: Watchdog crashes, reset reason, boot sequence
+
+**⚠️ CRITICAL:** `DEBUG_LOG_SYSTEM()` writes to `g_debugLogger`, NOT `g_logger`.
+`/api/logs/crash_backup` and `/api/debug/logs/crash_backup` are **different endpoints**
+returning completely different data. Always use `/api/debug/logs/*` for crash analysis.
+(Lesson learned: crashes #6–#8 in Issue #44 were mis-diagnosed because the wrong
+endpoint was used — watchdog messages were invisible across multiple analyses.)
+
+Full endpoint list: `docs/api/API.md` — see sections "GET /api/debug/logs" and "GET /api/ota/coredump".
+
+---
+
 ## Device Diagnostics
 
 ### General Device Diagnostics: `/diagnose-device`
