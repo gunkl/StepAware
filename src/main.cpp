@@ -37,6 +37,10 @@
 #include "ntp_manager.h"
 #include "recal_scheduler.h"
 #include "watchdog_manager.h"
+#ifndef MOCK_MODE
+#include <freertos/task.h>   // xTaskGetIdleTaskHandleForCPU (Issue #44)
+#include <esp_task_wdt.h>    // esp_task_wdt_status (Issue #44)
+#endif
 
 // ============================================================================
 // Global Hardware Objects
@@ -1365,6 +1369,26 @@ void setup() {
 void loop() {
     // Feed watchdog at start of every loop iteration (critical for long operations)
     g_watchdog.update();
+
+    // Issue #44: Periodically re-remove IDLE from the hardware watchdog.
+    // Something in the IDF wake/pm layer re-subscribes IDLE after each wake.
+    // Calling disableCore0WDT() every 2 seconds keeps IDLE subscribed for
+    // at most 2s per cycle — well below the 8-second WDT timeout.
+#ifndef MOCK_MODE
+    {
+        static uint32_t s_lastIdleWdtClean = 0;
+        uint32_t now = millis();
+        if (now - s_lastIdleWdtClean >= 2000) {
+            esp_err_t idleStatus = esp_task_wdt_status(xTaskGetIdleTaskHandleForCPU(0));
+            if (idleStatus != ESP_ERR_NOT_FOUND) {
+                // IDLE is subscribed — log so we know when the re-subscription happens
+                DEBUG_LOG_SYSTEM("Issue #44: IDLE re-subscribed (status=%d) — removing", (int)idleStatus);
+            }
+            disableCore0WDT();
+            s_lastIdleWdtClean = now;
+        }
+    }
+#endif
 
     // Update sensor manager (handles all sensors)
     sensorManager.update();

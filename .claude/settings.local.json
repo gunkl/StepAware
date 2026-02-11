@@ -141,7 +141,12 @@
       "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -c:*)",
       "Bash(\"C:\\\\Users\\\\David\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe\" run:*)",
       "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump --chip esp32c3 info_corefile --gdb \"C:\\\\Users\\\\David\\\\.platformio\\\\packages\\\\toolchain-riscv32-esp\\\\bin\\\\riscv32-esp-elf-gdb.exe\" --core coredump.bin --core-format raw --off 0x310000 \".pio\\\\build\\\\esp32c3\\\\firmware.elf\")",
-      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run -e esp32c3)"
+      "Bash(C:/Users/David/.platformio/penv/Scripts/pio.exe run -e esp32c3)",
+      "Bash(IP=10.123.0.98)",
+      "Bash(for name in crash_backup current prev rotation_debug)",
+      "Bash(do)",
+      "Bash(done)",
+      "Bash(# Look at the task_wdt.c source to understand when it subscribes idle tasks find \"\"C:/Users/David/.platformio/packages/framework-arduinoespressif32/\"\" -name \"\"task_wdt.c\"\")"
     ]
   }
 }
