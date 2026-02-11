@@ -937,7 +937,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
     // CRITICAL FIX (Issue #44): Remove loopTask from watchdog before sleep.
     // esp_light_sleep_start() can take >5s, which would trigger a false-positive TASK_WDT.
-    // IDLE task is permanently excluded from the watchdog at startup (watchdog_manager.cpp).
+    // IDLE task is permanently excluded from the watchdog at startup via disableCore0WDT() in main.cpp.
     esp_task_wdt_delete(NULL);  // loopTask (current task)
     DEBUG_LOG_SYSTEM("Light sleep: Removed loopTask from watchdog for sleep entry");
 
@@ -959,9 +959,11 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
 #ifndef MOCK_MODE
     // Re-subscribe loopTask to watchdog after wake (fresh timeout window).
-    // IDLE task remains permanently excluded (watchdog_manager.cpp, Issue #44).
+    // Then immediately re-remove IDLE — the light sleep wake sequence re-subscribes it,
+    // causing TASK_WDT panics ~8s after wake when higher-priority tasks starve IDLE (Issue #44).
     esp_task_wdt_add(NULL);  // loopTask
-    DEBUG_LOG_SYSTEM("Light sleep: Re-added loopTask to watchdog after wake");
+    disableCore0WDT();       // Re-remove IDLE — wake sequence re-subscribes it (Issue #44)
+    DEBUG_LOG_SYSTEM("Light sleep: Re-added loopTask, re-removed IDLE from watchdog after wake");
 
     // Log wake event immediately after Serial is available
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
