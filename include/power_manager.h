@@ -350,6 +350,11 @@ public:
     void onWake(WakeCallback callback) { m_onWake = callback; }
 
     /**
+     * @brief Check if post-wake forced flush is active (Issue #44 diagnostics)
+     */
+    bool isPostWakeFlushActive() const { return millis() < m_postWakeFlushUntil; }
+
+    /**
      * @brief Get power state name
      *
      * @param state Power state
@@ -371,7 +376,8 @@ private:
     uint32_t m_lastBatteryUpdate;       ///< Last battery update timestamp
     uint32_t m_stateEnterTime;          ///< Time when current state entered
     uint32_t m_lastStatsUpdate;         ///< Last stats accumulation timestamp
-    uint32_t m_startTime;               ///< System start time
+    uint32_t m_startTime;              ///< System start time
+    uint32_t m_postWakeFlushUntil;     ///< Force-flush DebugLogger until this millis() (Issue #44 diag)
 
     // Voltage filtering
     static const uint8_t VOLTAGE_SAMPLES = 10;

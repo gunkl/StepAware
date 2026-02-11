@@ -69,6 +69,7 @@ PowerManager::PowerManager()
     , m_stateEnterTime(0)
     , m_lastStatsUpdate(0)
     , m_startTime(0)
+    , m_postWakeFlushUntil(0)
     , m_voltageSampleIndex(0)
     , m_voltageSamplesFilled(false)
     , m_adcCalValid(false)
@@ -958,58 +959,64 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     Serial.begin(SERIAL_BAUD_RATE);
 
 #ifndef MOCK_MODE
-    // Re-subscribe loopTask to watchdog after wake (fresh timeout window).
-    // Then immediately re-remove IDLE — the light sleep wake sequence re-subscribes it,
-    // causing TASK_WDT panics ~8s after wake when higher-priority tasks starve IDLE (Issue #44).
+    // === Issue #44 DIAGNOSTIC: Force-flush after every log during wake ===
+    // We are completely blind during the 8s crash window after wake.
+    // Each step gets logged + flushed so data survives a crash.
+
+    // Step 1: Serial re-initialized
+    DEBUG_LOG_SYSTEM("Wake step 1/9: Serial re-initialized");
+    g_debugLogger.flush();
+
+    // Step 2: Re-subscribe loopTask to watchdog, remove IDLE
     esp_task_wdt_add(NULL);  // loopTask
-    disableCore0WDT();       // Re-remove IDLE — wake sequence re-subscribes it (Issue #44)
-    DEBUG_LOG_SYSTEM("Light sleep: Re-added loopTask, re-removed IDLE from watchdog after wake");
+    disableCore0WDT();       // Re-remove IDLE (Issue #44)
+    DEBUG_LOG_SYSTEM("Wake step 2/9: WDT reconfigured (loopTask added, IDLE removed)");
+    g_debugLogger.flush();
 
-    // Log wake event immediately after Serial is available
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-
-    DEBUG_LOG_SYSTEM("=== WAKE EVENT ===");
-    DEBUG_LOG_SYSTEM("Wake cause: %d", (int)cause);
-    if (cause == ESP_SLEEP_WAKEUP_EXT0) {
-        DEBUG_LOG_SYSTEM("  EXT0 wake (GPIO0 button)");
-    } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-        DEBUG_LOG_SYSTEM("  Timer wake");
-    } else if (cause == ESP_SLEEP_WAKEUP_GPIO) {
-        DEBUG_LOG_SYSTEM("  GPIO wake (PIR sensor or button)");
-    } else {
-        DEBUG_LOG_SYSTEM("  Other wake cause");
+    // Step 3: Log wake event
+    {
+        esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+        const char* causeStr = "Other";
+        if (cause == ESP_SLEEP_WAKEUP_EXT0) causeStr = "EXT0 (button)";
+        else if (cause == ESP_SLEEP_WAKEUP_TIMER) causeStr = "Timer";
+        else if (cause == ESP_SLEEP_WAKEUP_GPIO) causeStr = "GPIO (PIR/button)";
+        DEBUG_LOG_SYSTEM("Wake step 3/9: Wake cause=%d (%s)", (int)cause, causeStr);
+        g_debugLogger.flush();
     }
-    DEBUG_LOG_SYSTEM("==================");
 #endif
 
     // Calculate total time from entry to wake (includes sleep duration)
     uint32_t totalWakeTime = millis() - entryStartMs;
-    DEBUG_LOG_SYSTEM("Light sleep: WOKE UP successfully! Total time: %lums", totalWakeTime);
+    DEBUG_LOG_SYSTEM("Wake step 4/9: Total sleep time %lums, heap=%lu",
+        totalWakeTime, (unsigned long)ESP.getFreeHeap());
+    g_debugLogger.flush();
 
     DEBUG_LOG_SYSTEM_VERBOSE("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
                      s_wakeCause, s_wakeGPIO1, s_wakeGPIO4,
                      s_wakePirPwr, s_wakeMcuSel);
 
 #ifndef MOCK_MODE
-    // Restore CPU frequency
+    // Step 5: Restore CPU frequency (prime suspect for IDLE re-subscription via APB callbacks)
+    DEBUG_LOG_SYSTEM("Wake step 5/9: About to restore CPU to 160MHz");
+    g_debugLogger.flush();
     setCPUFrequency(160);
+    DEBUG_LOG_SYSTEM("Wake step 5/9: CPU restored to 160MHz — DONE");
+    g_debugLogger.flush();
 
-    // Disable stale GPIO wakeup sources.  gpio_wakeup_enable() persists
-    // across the sleep boundary; leaving armed sources means any re-entry
-    // with a pin at the trigger level wakes immediately.
+    // Step 6: Disable stale GPIO wakeup sources
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
     }
     gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
+    DEBUG_LOG_SYSTEM("Wake step 6/9: GPIO wakeup sources disabled");
+    g_debugLogger.flush();
 
-    // Release the output hold on the PIR sensor power rail.  During light
-    // sleep gpio_hold_en() kept GPIO20 HIGH so the AM312 sensors stayed
-    // powered; releasing it now lets normal GPIO driver control resume.
+    // Step 7: Release PIR power hold
     gpio_hold_dis((gpio_num_t)PIN_PIR_POWER);
+    DEBUG_LOG_SYSTEM("Wake step 7/9: PIR power hold released");
+    g_debugLogger.flush();
 
-    // Restore GPIO1 (near PIR) pull-up stripped before sleep to avoid the
-    // XTAL_32K_N pad-glitch spurious wake.  gpio_config() also re-confirms
-    // IO_MUX GPIO mode on the pad.
+    // Step 8: Restore GPIO1 (near PIR) pull-up
     {
         gpio_config_t restore_conf = {};
         restore_conf.pin_bit_mask = (1ULL << PIN_PIR_NEAR);
@@ -1018,14 +1025,10 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         restore_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&restore_conf);
     }
-#endif
+    DEBUG_LOG_SYSTEM("Wake step 8/9: GPIO1 pullup restored");
+    g_debugLogger.flush();
 
-    DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: woke up, CPU restored to 160MHz");
-
-#ifndef MOCK_MODE
-    // If the wake was a timer and deep sleep is configured, this was the
-    // light-sleep to deep-sleep transition timer.  Enter deep sleep now
-    // (never returns; system reboots on the next wake).
+    // Deep sleep transition check
     {
         esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
         if (cause == ESP_SLEEP_WAKEUP_TIMER && m_config.enableDeepSleep) {
@@ -1040,16 +1043,21 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     uint32_t sleepDuration = millis() - m_stateEnterTime;
 
     // Credit sleep-time counters now, while m_state is still LIGHT_SLEEP.
-    // wakeUp() -> detectAndRouteWakeSource() will flip m_state (e.g. to
-    // MOTION_ALERT) before updateStats() next runs, so the compensated
-    // millis() delta would be charged to the wrong state.
-    // Advancing m_lastStatsUpdate prevents updateStats() from double-counting.
     uint32_t sleepSec = sleepDuration / 1000;
     m_stats.lightSleepTime += sleepSec;
     m_stats.sleepTime      += sleepSec;
     m_lastStatsUpdate       = millis();
 
     wakeUp(sleepDuration);
+
+    // Step 9: Wake sequence complete — back in loop() soon
+    DEBUG_LOG_SYSTEM("Wake step 9/9: wakeUp() complete, state=%s, returning to loop()",
+        getStateName(m_state));
+    g_debugLogger.flush();
+
+    // Enable post-wake forced flush mode for 15 seconds.
+    // Any DebugLogger write during this window will auto-flush to disk.
+    m_postWakeFlushUntil = millis() + 15000;
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
