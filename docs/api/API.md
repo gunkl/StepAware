@@ -271,7 +271,12 @@ Returns the updated mode (same format as GET /api/mode).
 
 ### GET /api/logs
 
-Get recent log entries (last 50 entries by default).
+Get recent application log entries from the in-memory ring buffer (last 50 entries by default).
+
+> **Note:** This endpoint returns the `g_logger` (Logger class) ring buffer — structured JSON
+> entries for application events (motion, mode changes, battery, etc.). It does **not** contain
+> watchdog crash diagnostics, boot-sequence messages, or system events. For crash analysis,
+> use the `/api/debug/logs/*` endpoints instead.
 
 **Request:**
 ```http
@@ -309,6 +314,167 @@ Host: <device-ip>
 | 1 | WARNING | Warning conditions |
 | 2 | INFO | Informational messages |
 | 3 | ERROR | Error conditions |
+
+---
+
+### GET /api/debug/logs
+
+List all DebugLogger log files stored on LittleFS.
+
+> **Note:** These endpoints serve the `g_debugLogger` (DebugLogger class) files from LittleFS.
+> This is the correct system for crash diagnostics — it captures watchdog events, boot
+> sequence, reset reasons, state machine transitions, and all `DEBUG_LOG_*` macro output.
+> Responses are `text/plain` (not JSON) unless noted.
+
+**Request:**
+```http
+GET /api/debug/logs HTTP/1.1
+Host: <device-ip>
+```
+
+**Response (200 OK):** JSON array listing available log files and their sizes.
+
+---
+
+### GET /api/debug/logs/crash_backup
+
+Download the crash backup log — the **primary endpoint for crash diagnostics**.
+
+The DebugLogger preserves the tail of the previous session to `/logs/crash_backup.log`
+at boot when a crash reset reason is detected. This file survives the normal log rotation
+that would otherwise overwrite boot_current.log.
+
+**Response:** `text/plain` — last ~32KB of log from the crashing session, including
+timestamps, log levels, categories, and `[SYSTEM]` messages such as:
+- `"Core 0 IDLE task removed from watchdog (Issue #44 fix)"`
+- `"Light sleep: Re-added loopTask, re-removed IDLE from watchdog after wake"`
+- `"Issue #44: IDLE re-subscribed (status=N) — removing"`
+
+```http
+GET /api/debug/logs/crash_backup HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text log content, or `404` if no crash backup exists.
+
+---
+
+### GET /api/debug/logs/current
+
+Download the current boot session log.
+
+```http
+GET /api/debug/logs/current HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text log content.
+
+---
+
+### GET /api/debug/logs/prev
+
+Download the previous boot session log (the session before the current one).
+
+```http
+GET /api/debug/logs/prev HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text log content, or `404` if not present.
+
+---
+
+### GET /api/debug/logs/overflow
+
+Download the overflow log. Written when the current session log grows too large
+and must be truncated — the tail of the large log is saved here before truncation.
+
+```http
+GET /api/debug/logs/overflow HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text log content, or `404` if not present.
+
+---
+
+### GET /api/debug/logs/rotation_debug
+
+Download the log rotation diagnostic file. Written before each boot rotation attempt,
+captures filesystem state and file existence. Useful for diagnosing rotation failures.
+
+```http
+GET /api/debug/logs/rotation_debug HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text diagnostic content, or `404` if not present.
+
+---
+
+### GET /api/debug/logs/boot_1
+
+Download the first-boot log (earliest recorded session still on device).
+
+```http
+GET /api/debug/logs/boot_1 HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with plain-text log content, or `404` if not present.
+
+---
+
+### DELETE /api/debug/logs/{name}
+
+Clear a specific debug log file from LittleFS.
+
+Valid `{name}` values: `crash_backup`, `current`, `prev`, `overflow`, `rotation_debug`, `boot_1`
+
+```http
+DELETE /api/debug/logs/crash_backup HTTP/1.1
+Host: <device-ip>
+```
+
+**Response (200 OK):**
+```json
+{ "success": true }
+```
+
+---
+
+### GET /api/ota/coredump
+
+Download the raw ESP32 core dump binary from the dedicated coredump flash partition.
+A core dump is recorded automatically by the IDF when a Guru Meditation Error (panic)
+occurs. It contains a snapshot of all task stacks and registers at crash time.
+
+```http
+GET /api/ota/coredump HTTP/1.1
+Host: <device-ip>
+```
+
+**Response:** `200 OK` with `application/octet-stream` binary data (raw core dump).
+Returns `404` if no core dump has been recorded.
+
+To decode: use the `/coredump` skill (runs `esp_coredump info_corefile` or addr2line fallback).
+
+---
+
+### DELETE /api/ota/coredump
+
+Clear the core dump from the flash partition.
+
+```http
+DELETE /api/ota/coredump HTTP/1.1
+Host: <device-ip>
+```
+
+**Response (200 OK):**
+```json
+{ "success": true }
+```
 
 ---
 
