@@ -138,7 +138,9 @@
       "Bash(mode)",
       "Bash(C:UsersDavidAppDataLocalMicrosoftWindowsAppsPythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0python.exe -m serial.tools.list_ports)",
       "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump:*)",
-      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -c:*)"
+      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -c:*)",
+      "Bash(\"C:\\\\Users\\\\David\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe\" run:*)",
+      "Bash(\"C:\\\\Users\\\\David\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\\\\python.exe\" -m esp_coredump --chip esp32c3 info_corefile --gdb \"C:\\\\Users\\\\David\\\\.platformio\\\\packages\\\\toolchain-riscv32-esp\\\\bin\\\\riscv32-esp-elf-gdb.exe\" --core coredump.bin --core-format raw --off 0x310000 \".pio\\\\build\\\\esp32c3\\\\firmware.elf\")"
     ]
   }
 }

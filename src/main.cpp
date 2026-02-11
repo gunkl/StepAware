@@ -1348,6 +1348,17 @@ void setup() {
     Serial.println();
 #endif
 
+    // Issue #44: Permanently remove the IDLE task from the hardware watchdog.
+    // LittleFS.begin() subscribes IDLE via enableCore0WDT().  After light sleep,
+    // higher-priority tasks (WiFi@23, sys_evt@20) starve IDLE (priority 0) and it
+    // fails to feed the WDT, causing false-positive TASK_WDT panics.
+    // disableCore0WDT() is the Arduino framework's own API for this; calling it here
+    // ensures it runs after all filesystem operations that may re-subscribe IDLE.
+#ifndef MOCK_MODE
+    disableCore0WDT();
+    DEBUG_LOG_SYSTEM("Core 0 IDLE task removed from watchdog (Issue #44 fix)");
+#endif
+
     Serial.println("[Main] Entering main loop...\n");
 }
 
