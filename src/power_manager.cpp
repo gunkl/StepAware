@@ -3,6 +3,7 @@
 #include "debug_logger.h"
 
 #ifndef MOCK_MODE
+#include <WiFi.h>          // WiFi.disconnect(), WiFi.mode() — used in enterLightSleep() for Issue #44
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <esp_task_wdt.h>
@@ -942,6 +943,18 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     esp_task_wdt_delete(NULL);  // loopTask (current task)
     DEBUG_LOG_SYSTEM("Light sleep: Removed loopTask from watchdog for sleep entry");
 
+    // Issue #44 test: Stop WiFi before light sleep.
+    // Hypothesis: the WiFi task (priority 23) performs AP rejoin on wake and
+    // starves IDLE (priority 0) for the 8-second TWDT window.
+    // WiFi.mode(WIFI_STA) after wake re-enables the stack; wifiManager.update()
+    // reconnects through its normal state machine.
+    DEBUG_LOG_SYSTEM("Pre-sleep: stopping WiFi (Issue #44 WiFi test)");
+    g_debugLogger.flush();
+    WiFi.disconnect(false);  // false = keep AP credentials in RAM
+    WiFi.mode(WIFI_OFF);     // Power down WiFi radio
+    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi stopped");
+    g_debugLogger.flush();
+
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
     esp_light_sleep_start();
 
@@ -1047,6 +1060,15 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     m_stats.lightSleepTime += sleepSec;
     m_stats.sleepTime      += sleepSec;
     m_lastStatsUpdate       = millis();
+
+    // Issue #44 test: re-enable WiFi after wake so wifiManager.update() can reconnect.
+    // This MUST happen before wakeUp() routes us to a power state, since ACTIVE state
+    // expects WiFi to be available.
+#ifndef MOCK_MODE
+    WiFi.mode(WIFI_STA);
+    DEBUG_LOG_SYSTEM("Post-wake: WiFi mode restored to STA (Issue #44 test)");
+    g_debugLogger.flush();
+#endif
 
     wakeUp(sleepDuration);
 
