@@ -1366,6 +1366,28 @@ void loop() {
     // Feed watchdog at start of every loop iteration (critical for long operations)
     g_watchdog.update();
 
+#ifndef MOCK_MODE
+    // Issue #44 mitigation: re-remove IDLE from TWDT on every iteration post-wake.
+    // disableCore0WDT() is a NOOP if IDLE is already absent. If IDF re-subscribes
+    // IDLE between loop() iterations, this removes it again before the 8s TWDT fires.
+    if (g_power.isPostWakeFlushActive()) {
+        disableCore0WDT();
+    }
+#endif
+
+    // Issue #44 diagnostic: 1-second heartbeat for 15s after light-sleep wake.
+    // Heartbeat stops → loopTask is fully starved by a priority ≥ 2 task.
+    // Heartbeat continues → loopTask IS running, IDLE just gets re-subscribed too fast.
+    if (g_power.isPostWakeFlushActive()) {
+        static uint32_t lastHeartbeat = 0;
+        if (millis() - lastHeartbeat >= 1000) {
+            lastHeartbeat = millis();
+            unsigned long freeHeap = (unsigned long)ESP.getFreeHeap();
+            DEBUG_LOG_SYSTEM("Post-wake heartbeat (heap=%lu)", freeHeap);
+            g_debugLogger.flush();
+        }
+    }
+
     // Update sensor manager (handles all sensors)
     sensorManager.update();
 
