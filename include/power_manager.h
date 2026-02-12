@@ -355,6 +355,11 @@ public:
     bool isPostWakeFlushActive() const { return millis() < m_postWakeFlushUntil; }
 
     /**
+     * @brief Check if WiFi deferred re-enable is pending (Issue #44 diagnostics)
+     */
+    bool isWifiRestorePending() const { return m_wifiRestoreAfter > 0 && millis() < m_wifiRestoreAfter; }
+
+    /**
      * @brief Get power state name
      *
      * @param state Power state
@@ -378,6 +383,7 @@ private:
     uint32_t m_lastStatsUpdate;         ///< Last stats accumulation timestamp
     uint32_t m_startTime;              ///< System start time
     uint32_t m_postWakeFlushUntil;     ///< Force-flush DebugLogger until this millis() (Issue #44 diag)
+    uint32_t m_wifiRestoreAfter;       ///< Deferred WiFi re-enable after this millis() (0=N/A, Issue #44 test)
 
     // Voltage filtering
     static const uint8_t VOLTAGE_SAMPLES = 10;
