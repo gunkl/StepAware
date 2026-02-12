@@ -71,6 +71,7 @@ PowerManager::PowerManager()
     , m_lastStatsUpdate(0)
     , m_startTime(0)
     , m_postWakeFlushUntil(0)
+    , m_wifiRestoreAfter(0)
     , m_voltageSampleIndex(0)
     , m_voltageSamplesFilled(false)
     , m_adcCalValid(false)
@@ -516,6 +517,20 @@ bool PowerManager::isUsbPower() {
 }
 
 void PowerManager::handlePowerState() {
+#ifndef MOCK_MODE
+    // Issue #44 test: deferred WiFi re-enable after light-sleep wake.
+    // WiFi was stopped before sleep and reconnect was deferred to avoid the WiFi
+    // reconnect task (priority 23) starving IDLE (priority 0) during the 8-second
+    // TWDT window. After the delay, restore WiFi.mode(WIFI_STA) so wifiManager
+    // can reconnect through its normal state machine.
+    if (m_wifiRestoreAfter > 0 && millis() >= m_wifiRestoreAfter) {
+        m_wifiRestoreAfter = 0;
+        WiFi.mode(WIFI_STA);
+        DEBUG_LOG_SYSTEM("Post-wake: WiFi re-enabled after deferred delay (Issue #44 test)");
+        g_debugLogger.flush();
+    }
+#endif
+
     switch (m_state) {
         case STATE_ACTIVE:
         case STATE_MOTION_ALERT:
@@ -1061,15 +1076,6 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     m_stats.sleepTime      += sleepSec;
     m_lastStatsUpdate       = millis();
 
-    // Issue #44 test: re-enable WiFi after wake so wifiManager.update() can reconnect.
-    // This MUST happen before wakeUp() routes us to a power state, since ACTIVE state
-    // expects WiFi to be available.
-#ifndef MOCK_MODE
-    WiFi.mode(WIFI_STA);
-    DEBUG_LOG_SYSTEM("Post-wake: WiFi mode restored to STA (Issue #44 test)");
-    g_debugLogger.flush();
-#endif
-
     wakeUp(sleepDuration);
 
     // Step 9: Wake sequence complete — back in loop() soon
@@ -1080,6 +1086,20 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Enable post-wake forced flush mode for 15 seconds.
     // Any DebugLogger write during this window will auto-flush to disk.
     m_postWakeFlushUntil = millis() + 15000;
+
+#ifndef MOCK_MODE
+    // Issue #44 test: defer WiFi re-enable until after the hazard alert completes.
+    // At boot, disableCore0WDT() runs AFTER WiFi already connected — IDLE is never
+    // subscribed during the WiFi window, so no crash. At wake, something re-subscribes
+    // IDLE asynchronously after step 2, then WiFi reconnect task (priority 23) starves
+    // IDLE for 8 seconds. Delaying WiFi reconnect by 5 seconds moves it past the TWDT
+    // danger window.
+    const uint32_t wifiDeferMs = 5000;
+    m_wifiRestoreAfter = millis() + wifiDeferMs;
+    DEBUG_LOG_SYSTEM("Post-wake: WiFi reconnect deferred by %ums (Issue #44 test)",
+        wifiDeferMs);
+    g_debugLogger.flush();
+#endif
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
