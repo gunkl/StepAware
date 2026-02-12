@@ -3,7 +3,7 @@
 #include "debug_logger.h"
 
 #ifndef MOCK_MODE
-#include <WiFi.h>          // WiFi.disconnect(), WiFi.mode() — used in enterLightSleep() for Issue #44
+#include <WiFi.h>          // WiFi.disconnect() — used in enterLightSleep()
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <esp_task_wdt.h>
@@ -71,7 +71,6 @@ PowerManager::PowerManager()
     , m_lastStatsUpdate(0)
     , m_startTime(0)
     , m_postWakeFlushUntil(0)
-    , m_wifiRestoreAfter(0)
     , m_voltageSampleIndex(0)
     , m_voltageSamplesFilled(false)
     , m_adcCalValid(false)
@@ -518,17 +517,6 @@ bool PowerManager::isUsbPower() {
 
 void PowerManager::handlePowerState() {
 #ifndef MOCK_MODE
-    // Issue #44 test: deferred WiFi re-enable after light-sleep wake.
-    // WiFi was stopped before sleep and reconnect was deferred to avoid the WiFi
-    // reconnect task (priority 23) starving IDLE (priority 0) during the 8-second
-    // TWDT window. After the delay, restore WiFi.mode(WIFI_STA) so wifiManager
-    // can reconnect through its normal state machine.
-    if (m_wifiRestoreAfter > 0 && millis() >= m_wifiRestoreAfter) {
-        m_wifiRestoreAfter = 0;
-        WiFi.mode(WIFI_STA);
-        DEBUG_LOG_SYSTEM("Post-wake: WiFi re-enabled after deferred delay (Issue #44 test)");
-        g_debugLogger.flush();
-    }
 #endif
 
     switch (m_state) {
@@ -958,16 +946,15 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     esp_task_wdt_delete(NULL);  // loopTask (current task)
     DEBUG_LOG_SYSTEM("Light sleep: Removed loopTask from watchdog for sleep entry");
 
-    // Issue #44 test: Stop WiFi before light sleep.
-    // Hypothesis: the WiFi task (priority 23) performs AP rejoin on wake and
-    // starves IDLE (priority 0) for the 8-second TWDT window.
-    // WiFi.mode(WIFI_STA) after wake re-enables the stack; wifiManager.update()
-    // reconnects through its normal state machine.
-    DEBUG_LOG_SYSTEM("Pre-sleep: stopping WiFi (Issue #44 WiFi test)");
+    // Disconnect WiFi before sleep. Closes TCP connections gracefully so
+    // ESPAsyncWebServer (async_tcp, priority 3) has nothing heavy to clean up at wake.
+    // Do NOT call WiFi.mode(WIFI_OFF) here — doing so forces an 8-second RF recalibration
+    // when WiFi.mode(WIFI_STA) is called at wake, which monopolizes the CPU at priority 23
+    // and starves IDLE from the TWDT — the exact crash seen in Issue #44 crash #13.
+    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi disconnect");
     g_debugLogger.flush();
-    WiFi.disconnect(false);  // false = keep AP credentials in RAM
-    WiFi.mode(WIFI_OFF);     // Power down WiFi radio
-    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi stopped");
+    WiFi.disconnect(false);  // false = keep AP credentials; radio stays in STA mode
+    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi disconnected (radio stays on)");
     g_debugLogger.flush();
 
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
@@ -1087,19 +1074,6 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Any DebugLogger write during this window will auto-flush to disk.
     m_postWakeFlushUntil = millis() + 15000;
 
-#ifndef MOCK_MODE
-    // Issue #44 test: defer WiFi re-enable until after the hazard alert completes.
-    // At boot, disableCore0WDT() runs AFTER WiFi already connected — IDLE is never
-    // subscribed during the WiFi window, so no crash. At wake, something re-subscribes
-    // IDLE asynchronously after step 2, then WiFi reconnect task (priority 23) starves
-    // IDLE for 8 seconds. Delaying WiFi reconnect by 5 seconds moves it past the TWDT
-    // danger window.
-    const uint32_t wifiDeferMs = 5000;
-    m_wifiRestoreAfter = millis() + wifiDeferMs;
-    DEBUG_LOG_SYSTEM("Post-wake: WiFi reconnect deferred by %ums (Issue #44 test)",
-        wifiDeferMs);
-    g_debugLogger.flush();
-#endif
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {
