@@ -7,6 +7,7 @@
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <esp_task_wdt.h>
+#include <esp_timer.h>
 #include <driver/adc.h>
 #include "esp_adc_cal.h"
 #include <driver/gpio.h>
@@ -113,10 +114,36 @@ PowerManager::PowerManager()
     }
 
     memset(m_motionWakePins, 0xFF, sizeof(m_motionWakePins));
+
+#ifndef NATIVE_BUILD
+    m_wdtClearTimer = nullptr;
+#endif
 }
 
 PowerManager::~PowerManager() {
+#ifndef MOCK_MODE
+    if (m_wdtClearTimer) {
+        esp_timer_stop(m_wdtClearTimer);
+        esp_timer_delete(m_wdtClearTimer);
+        m_wdtClearTimer = nullptr;
+    }
+#endif
 }
+
+#ifndef MOCK_MODE
+void PowerManager::wdtClearCallback(void* arg) {
+    // Runs from esp_timer task (priority 22) every 200ms during the post-wake window.
+    // Calls disableCore0WDT() to re-remove IDLE from TWDT, counteracting the IDF pm
+    // module's re-subscription after light sleep wake (Issue #44).
+    // Auto-stops when the 15-second post-wake window expires.
+    PowerManager* self = static_cast<PowerManager*>(arg);
+    disableCore0WDT();
+    if (!self->isPostWakeFlushActive()) {
+        esp_timer_stop(self->m_wdtClearTimer);
+        // NOTE: cannot call DEBUG_LOG_SYSTEM safely from esp_timer task context
+    }
+}
+#endif
 
 void PowerManager::setBatteryMonitoringEnabled(bool enabled) {
     m_batteryMonitoringEnabled = enabled;
@@ -237,6 +264,18 @@ bool PowerManager::begin(const Config* config) {
     gpio_set_direction((gpio_num_t)PIN_VBUS_DETECT, GPIO_MODE_INPUT);
     gpio_pulldown_en((gpio_num_t)PIN_VBUS_DETECT);
     #endif
+
+    // Issue #44: Create the post-wake WDT clear timer (one-time setup; started at each wake)
+    {
+        esp_timer_create_args_t timerArgs = {};
+        timerArgs.callback = &PowerManager::wdtClearCallback;
+        timerArgs.arg = this;
+        timerArgs.dispatch_method = ESP_TIMER_TASK;
+        timerArgs.name = "wdt_clear";
+        timerArgs.skip_unhandled_events = true;
+        esp_timer_create(&timerArgs, &m_wdtClearTimer);
+        DEBUG_LOG_SYSTEM("Power: WDT clear timer created (Issue #44)");
+    }
 #endif
 
     m_startTime = millis();
@@ -940,6 +979,12 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     uint8_t batteryPct = m_batteryStatus.percentage;
     DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
 
+    // Issue #44: Stop WDT clear timer before sleep (will be restarted at wake)
+    if (m_wdtClearTimer && esp_timer_is_active(m_wdtClearTimer)) {
+        esp_timer_stop(m_wdtClearTimer);
+        DEBUG_LOG_SYSTEM("Light sleep: WDT clear timer stopped");
+    }
+
     // CRITICAL FIX (Issue #44): Remove loopTask from watchdog before sleep.
     // esp_light_sleep_start() can take >5s, which would trigger a false-positive TASK_WDT.
     // IDLE task is permanently excluded from the watchdog at startup via disableCore0WDT() in main.cpp.
@@ -1073,6 +1118,21 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Enable post-wake forced flush mode for 15 seconds.
     // Any DebugLogger write during this window will auto-flush to disk.
     m_postWakeFlushUntil = millis() + 15000;
+
+#ifndef MOCK_MODE
+    // Issue #44: Start periodic WDT clear timer for the 15-second post-wake window.
+    // Fires every 200ms from esp_timer task (priority 22), calling disableCore0WDT()
+    // even while WiFi task (priority 23) monopolizes the CPU during reconnect.
+    // This prevents IDLE from accumulating 8s on the TWDT watchlist after wake.
+    if (m_wdtClearTimer) {
+        if (esp_timer_is_active(m_wdtClearTimer)) {
+            esp_timer_stop(m_wdtClearTimer);
+        }
+        esp_timer_start_periodic(m_wdtClearTimer, 200 * 1000); // 200ms in microseconds
+        DEBUG_LOG_SYSTEM("Wake: WDT clear timer started (200ms period, 15s window, Issue #44)");
+        g_debugLogger.flush();
+    }
+#endif
 
 }
 
