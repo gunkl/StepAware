@@ -7,7 +7,7 @@
 #include <esp_sleep.h>
 #include <esp_pm.h>
 #include <esp_task_wdt.h>
-#include <esp_timer.h>
+#include "freertos/task.h"
 #include <driver/adc.h>
 #include "esp_adc_cal.h"
 #include <driver/gpio.h>
@@ -114,36 +114,10 @@ PowerManager::PowerManager()
     }
 
     memset(m_motionWakePins, 0xFF, sizeof(m_motionWakePins));
-
-#ifndef NATIVE_BUILD
-    m_wdtClearTimer = nullptr;
-#endif
 }
 
 PowerManager::~PowerManager() {
-#ifndef MOCK_MODE
-    if (m_wdtClearTimer) {
-        esp_timer_stop(m_wdtClearTimer);
-        esp_timer_delete(m_wdtClearTimer);
-        m_wdtClearTimer = nullptr;
-    }
-#endif
 }
-
-#ifndef MOCK_MODE
-void PowerManager::wdtClearCallback(void* arg) {
-    // Runs from esp_timer task (priority 22) every 200ms during the post-wake window.
-    // Calls disableCore0WDT() to re-remove IDLE from TWDT, counteracting the IDF pm
-    // module's re-subscription after light sleep wake (Issue #44).
-    // Auto-stops when the 15-second post-wake window expires.
-    PowerManager* self = static_cast<PowerManager*>(arg);
-    disableCore0WDT();
-    if (!self->isPostWakeFlushActive()) {
-        esp_timer_stop(self->m_wdtClearTimer);
-        // NOTE: cannot call DEBUG_LOG_SYSTEM safely from esp_timer task context
-    }
-}
-#endif
 
 void PowerManager::setBatteryMonitoringEnabled(bool enabled) {
     m_batteryMonitoringEnabled = enabled;
@@ -265,17 +239,6 @@ bool PowerManager::begin(const Config* config) {
     gpio_pulldown_en((gpio_num_t)PIN_VBUS_DETECT);
     #endif
 
-    // Issue #44: Create the post-wake WDT clear timer (one-time setup; started at each wake)
-    {
-        esp_timer_create_args_t timerArgs = {};
-        timerArgs.callback = &PowerManager::wdtClearCallback;
-        timerArgs.arg = this;
-        timerArgs.dispatch_method = ESP_TIMER_TASK;
-        timerArgs.name = "wdt_clear";
-        timerArgs.skip_unhandled_events = true;
-        esp_timer_create(&timerArgs, &m_wdtClearTimer);
-        DEBUG_LOG_SYSTEM("Power: WDT clear timer created (Issue #44)");
-    }
 #endif
 
     m_startTime = millis();
@@ -828,11 +791,6 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     DEBUG_LOG_SYSTEM("Light sleep: feeding watchdog before sleep preparation");
     esp_task_wdt_reset();
 
-    // Reduce CPU frequency (ESP32-C3 max is 160MHz, not 240MHz)
-    DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: reducing CPU 160MHz -> 80MHz");
-    setCPUFrequency(80);
-    DEBUG_LOG_SYSTEM("Light sleep: CPU frequency reduced to 80MHz");
-
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
     // the IO_MUX function-select back to GPIO mode.  gpio_set_direction only
     // touches the GPIO controller direction bit and leaves IO_MUX unchanged.
@@ -979,18 +937,6 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     uint8_t batteryPct = m_batteryStatus.percentage;
     DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
 
-    // Issue #44: Stop WDT clear timer before sleep (will be restarted at wake)
-    if (m_wdtClearTimer && esp_timer_is_active(m_wdtClearTimer)) {
-        esp_timer_stop(m_wdtClearTimer);
-        DEBUG_LOG_SYSTEM("Light sleep: WDT clear timer stopped");
-    }
-
-    // CRITICAL FIX (Issue #44): Remove loopTask from watchdog before sleep.
-    // esp_light_sleep_start() can take >5s, which would trigger a false-positive TASK_WDT.
-    // IDLE task is permanently excluded from the watchdog at startup via disableCore0WDT() in main.cpp.
-    esp_task_wdt_delete(NULL);  // loopTask (current task)
-    DEBUG_LOG_SYSTEM("Light sleep: Removed loopTask from watchdog for sleep entry");
-
     // Disconnect WiFi before sleep. Closes TCP connections gracefully so
     // ESPAsyncWebServer (async_tcp, priority 3) has nothing heavy to clean up at wake.
     // Do NOT call WiFi.mode(WIFI_OFF) here — doing so forces an 8-second RF recalibration
@@ -1000,6 +946,42 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     g_debugLogger.flush();
     WiFi.disconnect(false);  // false = keep AP credentials; radio stays in STA mode
     DEBUG_LOG_SYSTEM("Pre-sleep: WiFi disconnected (radio stays on)");
+    g_debugLogger.flush();
+
+    // === TWDT teardown before sleep (Issue #44, build 0255) ===
+    // Remove all known TWDT subscribers then deinitialize. Build 0254 proved
+    // esp_timer is also subscribed (H6 disproven). We probe known task names
+    // since uxTaskGetSystemState requires configUSE_TRACE_FACILITY.
+    {
+        // Step A: Remove loopTask (current task)
+        esp_task_wdt_delete(NULL);
+
+        // Step B: Remove IDLE
+        disableCore0WDT();
+
+        // Step C: Remove esp_timer and any other system task subscribers.
+        // These names come from the build 0254 core dump task list.
+        const char* probeTasks[] = {"esp_timer", "wifi", "tiT", "sys_evt",
+                                    "async_tcp", "arduino_events", "mdns"};
+        int removedCount = 2;  // loopTask + IDLE already removed above
+        for (int i = 0; i < 7; i++) {
+            TaskHandle_t th = xTaskGetHandle(probeTasks[i]);
+            if (th != NULL && esp_task_wdt_status(th) == ESP_OK) {
+                esp_task_wdt_delete(th);
+                DEBUG_LOG_SYSTEM("Pre-sleep: removed '%s' from TWDT", probeTasks[i]);
+                removedCount++;
+            }
+        }
+        DEBUG_LOG_SYSTEM("Pre-sleep: removed %d task(s) from TWDT total", removedCount);
+    }
+
+    esp_err_t deinitErr = esp_task_wdt_deinit();
+    if (deinitErr == ESP_OK) {
+        DEBUG_LOG_SYSTEM("Pre-sleep: TWDT deinitialized successfully");
+    } else {
+        int errInt = (int)deinitErr;
+        DEBUG_LOG_SYSTEM("Pre-sleep: TWDT deinit FAILED err=%d", errInt);
+    }
     g_debugLogger.flush();
 
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
@@ -1024,14 +1006,22 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Each step gets logged + flushed so data survives a crash.
 
     // Step 1: Serial re-initialized
-    DEBUG_LOG_SYSTEM("Wake step 1/9: Serial re-initialized");
+    DEBUG_LOG_SYSTEM("Wake step 1/7: Serial re-initialized");
     g_debugLogger.flush();
 
-    // Step 2: Re-subscribe loopTask to watchdog, remove IDLE
-    esp_task_wdt_add(NULL);  // loopTask
-    disableCore0WDT();       // Re-remove IDLE (Issue #44)
-    DEBUG_LOG_SYSTEM("Wake step 2/9: WDT reconfigured (loopTask added, IDLE removed)");
-    g_debugLogger.flush();
+    // Step 2: Reinitialize TWDT without IDLE monitoring (Issue #44, build 0247)
+    // This IDF version uses the old esp_task_wdt_init(timeout, panic) API —
+    // there is no idle_core_mask parameter. The old API auto-subscribes IDLE
+    // based on CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0, so we call
+    // disableCore0WDT() immediately after to remove IDLE.
+    {
+        esp_err_t initErr = esp_task_wdt_init(8000, true);
+        disableCore0WDT();       // Remove IDLE (auto-subscribed by init)
+        esp_task_wdt_add(NULL);  // Re-subscribe loopTask
+        int errInt = (int)initErr;
+        DEBUG_LOG_SYSTEM("Wake step 2/7: TWDT reinit err=%d, loopTask re-added, IDLE removed", errInt);
+        g_debugLogger.flush();
+    }
 
     // Step 3: Log wake event
     {
@@ -1040,14 +1030,14 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         if (cause == ESP_SLEEP_WAKEUP_EXT0) causeStr = "EXT0 (button)";
         else if (cause == ESP_SLEEP_WAKEUP_TIMER) causeStr = "Timer";
         else if (cause == ESP_SLEEP_WAKEUP_GPIO) causeStr = "GPIO (PIR/button)";
-        DEBUG_LOG_SYSTEM("Wake step 3/9: Wake cause=%d (%s)", (int)cause, causeStr);
+        DEBUG_LOG_SYSTEM("Wake step 3/7: Wake cause=%d (%s)", (int)cause, causeStr);
         g_debugLogger.flush();
     }
 #endif
 
     // Calculate total time from entry to wake (includes sleep duration)
     uint32_t totalWakeTime = millis() - entryStartMs;
-    DEBUG_LOG_SYSTEM("Wake step 4/9: Total sleep time %lums, heap=%lu",
+    DEBUG_LOG_SYSTEM("Wake step 4/7: Total sleep time %lums, heap=%lu",
         totalWakeTime, (unsigned long)ESP.getFreeHeap());
     g_debugLogger.flush();
 
@@ -1056,27 +1046,20 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
                      s_wakePirPwr, s_wakeMcuSel);
 
 #ifndef MOCK_MODE
-    // Step 5: Restore CPU frequency (prime suspect for IDLE re-subscription via APB callbacks)
-    DEBUG_LOG_SYSTEM("Wake step 5/9: About to restore CPU to 160MHz");
-    g_debugLogger.flush();
-    setCPUFrequency(160);
-    DEBUG_LOG_SYSTEM("Wake step 5/9: CPU restored to 160MHz — DONE");
-    g_debugLogger.flush();
-
-    // Step 6: Disable stale GPIO wakeup sources
+    // Step 5: Disable stale GPIO wakeup sources
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
     }
     gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
-    DEBUG_LOG_SYSTEM("Wake step 6/9: GPIO wakeup sources disabled");
+    DEBUG_LOG_SYSTEM("Wake step 5/7: GPIO wakeup sources disabled");
     g_debugLogger.flush();
 
-    // Step 7: Release PIR power hold
+    // Step 6: Release PIR power hold
     gpio_hold_dis((gpio_num_t)PIN_PIR_POWER);
-    DEBUG_LOG_SYSTEM("Wake step 7/9: PIR power hold released");
+    DEBUG_LOG_SYSTEM("Wake step 6/7: PIR power hold released");
     g_debugLogger.flush();
 
-    // Step 8: Restore GPIO1 (near PIR) pull-up
+    // Step 7: Restore GPIO1 (near PIR) pull-up
     {
         gpio_config_t restore_conf = {};
         restore_conf.pin_bit_mask = (1ULL << PIN_PIR_NEAR);
@@ -1085,7 +1068,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         restore_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&restore_conf);
     }
-    DEBUG_LOG_SYSTEM("Wake step 8/9: GPIO1 pullup restored");
+    DEBUG_LOG_SYSTEM("Wake step 7/7: GPIO1 pullup restored");
     g_debugLogger.flush();
 
     // Deep sleep transition check
@@ -1110,30 +1093,14 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
     wakeUp(sleepDuration);
 
-    // Step 9: Wake sequence complete — back in loop() soon
-    DEBUG_LOG_SYSTEM("Wake step 9/9: wakeUp() complete, state=%s, returning to loop()",
+    // Wake sequence complete — back in loop() soon
+    DEBUG_LOG_SYSTEM("Wake complete: wakeUp() done, state=%s, returning to loop()",
         getStateName(m_state));
     g_debugLogger.flush();
 
     // Enable post-wake forced flush mode for 15 seconds.
     // Any DebugLogger write during this window will auto-flush to disk.
     m_postWakeFlushUntil = millis() + 15000;
-
-#ifndef MOCK_MODE
-    // Issue #44: Start periodic WDT clear timer for the 15-second post-wake window.
-    // Fires every 200ms from esp_timer task (priority 22), calling disableCore0WDT()
-    // even while WiFi task (priority 23) monopolizes the CPU during reconnect.
-    // This prevents IDLE from accumulating 8s on the TWDT watchlist after wake.
-    if (m_wdtClearTimer) {
-        if (esp_timer_is_active(m_wdtClearTimer)) {
-            esp_timer_stop(m_wdtClearTimer);
-        }
-        esp_timer_start_periodic(m_wdtClearTimer, 200 * 1000); // 200ms in microseconds
-        DEBUG_LOG_SYSTEM("Wake: WDT clear timer started (200ms period, 15s window, Issue #44)");
-        g_debugLogger.flush();
-    }
-#endif
-
 }
 
 void PowerManager::enterDeepSleep(uint32_t duration_ms, const char* reason) {

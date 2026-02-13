@@ -19,6 +19,9 @@
 #if !MOCK_HARDWARE
 #include <driver/uart.h>   // uart_driver_delete — see GPIO1 / UART0 note in setup()
 #endif
+#ifndef MOCK_MODE
+#include <esp_task_wdt.h>  // esp_task_wdt_status() — Issue #44 IDLE TWDT verification
+#endif
 #include "config.h"
 #include "state_machine.h"
 #include "sensor_factory.h"
@@ -1355,8 +1358,16 @@ void setup() {
     // disableCore0WDT() is the Arduino framework's own API for this; calling it here
     // ensures it runs after all filesystem operations that may re-subscribe IDLE.
 #ifndef MOCK_MODE
+    // Issue #44: Remove IDLE from TWDT at boot.
+    // disableCore0WDT() calls esp_task_wdt_delete(idle_handle) — documented IDF API.
     disableCore0WDT();
-    DEBUG_LOG_SYSTEM("Core 0 IDLE task removed from watchdog (Issue #44 fix)");
+
+    // Verify IDLE was actually removed
+    TaskHandle_t idleTask = xTaskGetIdleTaskHandleForCPU(0);
+    esp_err_t idleStatus = esp_task_wdt_status(idleTask);
+    int statusInt = (int)idleStatus;
+    DEBUG_LOG_SYSTEM("Issue #44: boot disableCore0WDT() done, IDLE TWDT status=%d "
+                     "(0=subscribed, 261=not_found)", statusInt);
 #endif
 
     Serial.println("[Main] Entering main loop...\n");
@@ -1367,11 +1378,21 @@ void loop() {
     g_watchdog.update();
 
 #ifndef MOCK_MODE
-    // Issue #44 mitigation: re-remove IDLE from TWDT on every iteration post-wake.
-    // disableCore0WDT() is a NOOP if IDLE is already absent. If IDF re-subscribes
-    // IDLE between loop() iterations, this removes it again before the 8s TWDT fires.
-    if (g_power.isPostWakeFlushActive()) {
-        disableCore0WDT();
+    // Issue #44 instrumentation: periodically check if IDLE got re-subscribed.
+    // This validates/invalidates hypotheses H1 and H2 about what re-subscribes IDLE.
+    // See docs/ISSUE_44_HYPOTHESES.md for hypothesis tracking.
+    {
+        static uint32_t lastIdleCheck = 0;
+        if (millis() - lastIdleCheck >= 10000) {  // Every 10 seconds
+            lastIdleCheck = millis();
+            TaskHandle_t idleTask = xTaskGetIdleTaskHandleForCPU(0);
+            esp_err_t status = esp_task_wdt_status(idleTask);
+            if (status == ESP_OK) {
+                // IDLE is subscribed! Something re-subscribed it. Log and remove.
+                DEBUG_LOG_SYSTEM("Issue #44: IDLE re-subscribed to TWDT! Removing. (H1/H2 confirmed)");
+                disableCore0WDT();
+            }
+        }
     }
 #endif
 
