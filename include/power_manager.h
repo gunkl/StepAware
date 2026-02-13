@@ -6,7 +6,6 @@
 
 #ifndef NATIVE_BUILD
 #include "esp_adc_cal.h"   // eFuse-based ADC calibration (ESP-IDF legacy API)
-#include <esp_timer.h>     // Issue #44: periodic disableCore0WDT() during post-wake window
 #endif
 
 /**
@@ -379,9 +378,6 @@ private:
     uint32_t m_lastStatsUpdate;         ///< Last stats accumulation timestamp
     uint32_t m_startTime;              ///< System start time
     uint32_t m_postWakeFlushUntil;     ///< Force-flush DebugLogger until this millis() (Issue #44 diag)
-#ifndef NATIVE_BUILD
-    esp_timer_handle_t m_wdtClearTimer;  ///< Issue #44: periodic disableCore0WDT() during post-wake window
-#endif
 
     // Voltage filtering
     static const uint8_t VOLTAGE_SAMPLES = 10;
@@ -500,10 +496,6 @@ private:
      */
     void updateStats();
 
-#ifndef NATIVE_BUILD
-    /// Issue #44: esp_timer callback — calls disableCore0WDT() every 200ms post-wake
-    static void wdtClearCallback(void* arg);
-#endif
 };
 
 // Global power manager instance

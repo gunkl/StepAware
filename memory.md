@@ -6,6 +6,21 @@ at the start of any session to avoid re-discovering known facts.
 
 ---
 
+## ESP-IDF Documentation (ESP32-C3)
+
+Always consult official ESP-IDF docs before making assumptions about framework behavior:
+
+- [API Reference Index](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/index.html)
+- [System API Reference](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/index.html)
+- [Watchdog Timers](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/wdts.html)
+- [Power Management](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/power_management.html)
+- [Sleep Modes](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/sleep_modes.html)
+- [ESP Timer](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/esp_timer.html)
+
+See also: [docs/ISSUE_44_HYPOTHESES.md](docs/ISSUE_44_HYPOTHESES.md) — hypothesis tracking for Issue #44 with documentation cross-references.
+
+---
+
 ## Docker
 
 All builds and tests run inside the project's Docker container:
