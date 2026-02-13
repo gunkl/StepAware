@@ -156,7 +156,8 @@
       "Bash(/c/Users/David/.platformio/penv/Scripts/platformio.exe run:*)",
       "WebFetch(domain:registry.platformio.org)",
       "WebFetch(domain:github.com)",
-      "Bash(/c/Users/David/.platformio/penv/Scripts/pip.exe install:*)"
+      "Bash(/c/Users/David/.platformio/penv/Scripts/pip.exe install:*)",
+      "Bash(del \"c:\\\\Users\\\\David\\\\Documents\\\\VSCode Projects\\\\ESP32\\\\StepAware\\\\docs\\\\issue_44_update.md\")"
     ]
   }
 }
