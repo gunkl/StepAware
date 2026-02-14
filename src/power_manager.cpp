@@ -562,12 +562,12 @@ void PowerManager::handlePowerState() {
 #ifndef MOCK_MODE
                 // Feed watchdog before initiating sleep sequence
                 esp_task_wdt_reset();
-                DEBUG_LOG_SYSTEM("Pre-sleep: watchdog fed, about to call sleep function");
+                DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: watchdog fed, about to call sleep function");
 #endif
                 if (m_config.enableDeepSleep && m_config.lightSleepToDeepSleepMs == 0) {
 #ifndef MOCK_MODE
                     esp_task_wdt_reset();
-                    DEBUG_LOG_SYSTEM("Pre-sleep: calling enterDeepSleep() - free heap: %d bytes",
+                    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: calling enterDeepSleep() - free heap: %d bytes",
                                      esp_get_free_heap_size());
 #endif
                     enterDeepSleep(0, reason);
@@ -579,9 +579,9 @@ void PowerManager::handlePowerState() {
 #ifndef MOCK_MODE
                     esp_task_wdt_reset();
                     // DIAGNOSTIC LOG: Show how sleep duration was computed to catch underflow bugs
-                    DEBUG_LOG_SYSTEM("Pre-sleep: calculated sleepDuration=%lu (enableDeepSleep=%d, lightSleepToDeepSleepMs=%lu)",
+                    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: calculated sleepDuration=%lu (enableDeepSleep=%d, lightSleepToDeepSleepMs=%lu)",
                                      sleepDuration, m_config.enableDeepSleep, m_config.lightSleepToDeepSleepMs);
-                    DEBUG_LOG_SYSTEM("Pre-sleep: calling enterLightSleep(%lu) - free heap: %d bytes",
+                    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: calling enterLightSleep(%lu) - free heap: %d bytes",
                                      sleepDuration, esp_get_free_heap_size());
 #endif
                     enterLightSleep(sleepDuration, reason);
@@ -775,7 +775,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM_VERBOSE("Power: %s -> LIGHT_SLEEP", prevStateName);
     }
     saveStateToRTC();
-    DEBUG_LOG_SYSTEM("Light sleep: RTC state saved (elapsed: %lums)", millis() - entryStartMs);
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: RTC state saved (elapsed: %lums)", millis() - entryStartMs);
 
     // Statics for wake snapshot — declared outside MOCK_MODE guard so they are
     // in scope for the log line after Serial.begin().  Assigned inside the guard;
@@ -788,7 +788,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
 
 #ifndef MOCK_MODE
     // Feed watchdog before entering sleep sequence
-    DEBUG_LOG_SYSTEM("Light sleep: feeding watchdog before sleep preparation");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: feeding watchdog before sleep preparation");
     esp_task_wdt_reset();
 
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
@@ -837,19 +837,19 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     }
 
     // Log which wake sources are armed
-    DEBUG_LOG_SYSTEM("=== LIGHT SLEEP WAKE SOURCES ===");
+    DEBUG_LOG_SYSTEM_DEBUG("=== LIGHT SLEEP WAKE SOURCES ===");
     for (uint8_t i = 0; i < m_motionWakePinCount; i++) {
         gpio_num_t pin = (gpio_num_t)m_motionWakePins[i];
         if (pin == (gpio_num_t)PIN_PIR_NEAR) {
-            DEBUG_LOG_SYSTEM("GPIO%d (near PIR): configured but NOT armed (Issue #38 workaround)", pin);
+            DEBUG_LOG_SYSTEM_DEBUG("GPIO%d (near PIR): configured but NOT armed (Issue #38 workaround)", pin);
         } else {
-            DEBUG_LOG_SYSTEM("GPIO%d (far PIR): ARMED for HIGH-level wake", pin);
+            DEBUG_LOG_SYSTEM_DEBUG("GPIO%d (far PIR): ARMED for HIGH-level wake", pin);
         }
     }
-    DEBUG_LOG_SYSTEM("GPIO0 (button): ARMED for LOW-level wake (boot button)");
-    DEBUG_LOG_SYSTEM("================================");
+    DEBUG_LOG_SYSTEM_DEBUG("GPIO0 (button): ARMED for LOW-level wake (boot button)");
+    DEBUG_LOG_SYSTEM_DEBUG("================================");
 
-    DEBUG_LOG_SYSTEM("Light sleep: GPIO wakeup sources configured");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: GPIO wakeup sources configured");
     esp_task_wdt_reset();
 
     // Timer wakeup for light→deep transition.  Subtract the setup
@@ -864,7 +864,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             // Cap at 1 hour per sleep cycle to prevent timer overflow issues.
             if (remainingMs > 3600000) {  // Max 1 hour per light sleep cycle
                 remainingMs = 3600000;
-                DEBUG_LOG_SYSTEM("Light sleep: duration capped at 1h to prevent timer overflow");
+                DEBUG_LOG_SYSTEM_DEBUG("Light sleep: duration capped at 1h to prevent timer overflow");
             }
 
             // Validate timer value won't overflow uint64_t microseconds
@@ -881,7 +881,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: timer wakeup enabled (%lums remaining)", remainingMs);
         }
     }
-    DEBUG_LOG_SYSTEM("Light sleep: timer wakeup configured");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: timer wakeup configured");
 
     // Combined pre-sleep diagnostic: IO_MUX MCU_SEL, GPIO4 wakeup register, live pin levels
     {
@@ -921,31 +921,31 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Global GPIO wakeup enable — must come AFTER all gpio_wakeup_enable()
     // calls per ESP-IDF documented order (esp_sleep.h §287).
     esp_sleep_enable_gpio_wakeup();
-    DEBUG_LOG_SYSTEM("Light sleep: global GPIO wakeup enabled");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: global GPIO wakeup enabled");
 
     // Feed watchdog before Serial shutdown (this can take time)
     esp_task_wdt_reset();
-    DEBUG_LOG_SYSTEM("Light sleep: flushing Serial buffer");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: flushing Serial buffer");
     Serial.flush();  // Drain buffer while peripheral is still open
 
-    DEBUG_LOG_SYSTEM("Light sleep: shutting down Serial (calling Serial.end())");
+    DEBUG_LOG_SYSTEM_DEBUG("Light sleep: shutting down Serial (calling Serial.end())");
     Serial.end();    // Cleanly shut down USB-JTAG-Serial.  end() + begin()
                      // on wake forces a cold-start the host can recover from.
 
     // Log battery voltage before sleep
     float batteryV = m_batteryStatus.voltage;
     uint8_t batteryPct = m_batteryStatus.percentage;
-    DEBUG_LOG_SYSTEM("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
+    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep battery: %.2fV (%u%%)", batteryV, batteryPct);
 
     // Disconnect WiFi before sleep. Closes TCP connections gracefully so
     // ESPAsyncWebServer (async_tcp, priority 3) has nothing heavy to clean up at wake.
     // Do NOT call WiFi.mode(WIFI_OFF) here — doing so forces an 8-second RF recalibration
     // when WiFi.mode(WIFI_STA) is called at wake, which monopolizes the CPU at priority 23
     // and starves IDLE from the TWDT — the exact crash seen in Issue #44 crash #13.
-    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi disconnect");
+    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: WiFi disconnect");
     g_debugLogger.flush();
     WiFi.disconnect(false);  // false = keep AP credentials; radio stays in STA mode
-    DEBUG_LOG_SYSTEM("Pre-sleep: WiFi disconnected (radio stays on)");
+    DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: WiFi disconnected (radio stays on)");
     g_debugLogger.flush();
 
     // === TWDT teardown before sleep (Issue #44, build 0255) ===
@@ -968,19 +968,19 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             TaskHandle_t th = xTaskGetHandle(probeTasks[i]);
             if (th != NULL && esp_task_wdt_status(th) == ESP_OK) {
                 esp_task_wdt_delete(th);
-                DEBUG_LOG_SYSTEM("Pre-sleep: removed '%s' from TWDT", probeTasks[i]);
+                DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: removed '%s' from TWDT", probeTasks[i]);
                 removedCount++;
             }
         }
-        DEBUG_LOG_SYSTEM("Pre-sleep: removed %d task(s) from TWDT total", removedCount);
+        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: removed %d task(s) from TWDT total", removedCount);
     }
 
     esp_err_t deinitErr = esp_task_wdt_deinit();
     if (deinitErr == ESP_OK) {
-        DEBUG_LOG_SYSTEM("Pre-sleep: TWDT deinitialized successfully");
+        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: TWDT deinitialized successfully");
     } else {
         int errInt = (int)deinitErr;
-        DEBUG_LOG_SYSTEM("Pre-sleep: TWDT deinit FAILED err=%d", errInt);
+        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: TWDT deinit FAILED err=%d", errInt);
     }
     g_debugLogger.flush();
 
@@ -1006,7 +1006,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Each step gets logged + flushed so data survives a crash.
 
     // Step 1: Serial re-initialized
-    DEBUG_LOG_SYSTEM("Wake step 1/7: Serial re-initialized");
+    DEBUG_LOG_SYSTEM_DEBUG("Wake step 1/7: Serial re-initialized");
     g_debugLogger.flush();
 
     // Step 2: Reinitialize TWDT without IDLE monitoring (Issue #44, build 0247)
@@ -1019,7 +1019,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         disableCore0WDT();       // Remove IDLE (auto-subscribed by init)
         esp_task_wdt_add(NULL);  // Re-subscribe loopTask
         int errInt = (int)initErr;
-        DEBUG_LOG_SYSTEM("Wake step 2/7: TWDT reinit err=%d, loopTask re-added, IDLE removed", errInt);
+        DEBUG_LOG_SYSTEM_DEBUG("Wake step 2/7: TWDT reinit err=%d, loopTask re-added, IDLE removed", errInt);
         g_debugLogger.flush();
     }
 
@@ -1030,14 +1030,14 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         if (cause == ESP_SLEEP_WAKEUP_EXT0) causeStr = "EXT0 (button)";
         else if (cause == ESP_SLEEP_WAKEUP_TIMER) causeStr = "Timer";
         else if (cause == ESP_SLEEP_WAKEUP_GPIO) causeStr = "GPIO (PIR/button)";
-        DEBUG_LOG_SYSTEM("Wake step 3/7: Wake cause=%d (%s)", (int)cause, causeStr);
+        DEBUG_LOG_SYSTEM_DEBUG("Wake step 3/7: Wake cause=%d (%s)", (int)cause, causeStr);
         g_debugLogger.flush();
     }
 #endif
 
     // Calculate total time from entry to wake (includes sleep duration)
     uint32_t totalWakeTime = millis() - entryStartMs;
-    DEBUG_LOG_SYSTEM("Wake step 4/7: Total sleep time %lums, heap=%lu",
+    DEBUG_LOG_SYSTEM_DEBUG("Wake step 4/7: Total sleep time %lums, heap=%lu",
         totalWakeTime, (unsigned long)ESP.getFreeHeap());
     g_debugLogger.flush();
 
@@ -1051,12 +1051,12 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         gpio_wakeup_disable((gpio_num_t)m_motionWakePins[i]);
     }
     gpio_wakeup_disable((gpio_num_t)BUTTON_PIN);
-    DEBUG_LOG_SYSTEM("Wake step 5/7: GPIO wakeup sources disabled");
+    DEBUG_LOG_SYSTEM_DEBUG("Wake step 5/7: GPIO wakeup sources disabled");
     g_debugLogger.flush();
 
     // Step 6: Release PIR power hold
     gpio_hold_dis((gpio_num_t)PIN_PIR_POWER);
-    DEBUG_LOG_SYSTEM("Wake step 6/7: PIR power hold released");
+    DEBUG_LOG_SYSTEM_DEBUG("Wake step 6/7: PIR power hold released");
     g_debugLogger.flush();
 
     // Step 7: Restore GPIO1 (near PIR) pull-up
@@ -1068,7 +1068,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         restore_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&restore_conf);
     }
-    DEBUG_LOG_SYSTEM("Wake step 7/7: GPIO1 pullup restored");
+    DEBUG_LOG_SYSTEM_DEBUG("Wake step 7/7: GPIO1 pullup restored");
     g_debugLogger.flush();
 
     // Deep sleep transition check
@@ -1094,7 +1094,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     wakeUp(sleepDuration);
 
     // Wake sequence complete — back in loop() soon
-    DEBUG_LOG_SYSTEM("Wake complete: wakeUp() done, state=%s, returning to loop()",
+    DEBUG_LOG_SYSTEM_DEBUG("Wake complete: wakeUp() done, state=%s, returning to loop()",
         getStateName(m_state));
     g_debugLogger.flush();
 

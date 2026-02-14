@@ -60,3 +60,12 @@ Build 0247 includes instrumentation to validate these hypotheses:
 - Crash: YES — `esp_timer` task WDT timeout during light sleep
 - Root cause: `esp_timer` subscribed to TWDT, not removed pre-sleep (H6 disproven)
 - Fix: Build 0255 enumerates ALL FreeRTOS tasks and removes all TWDT subscribers before deinit
+
+### Build 0256 (build 0255 fix) — Second Pass
+- Date: 2026-02-13
+- Pre-sleep task removal: Working — dynamic enumeration via xTaskGetHandle()
+- TWDT deinit: SUCCESS (all subscribers removed before deinit)
+- Crash: **NO** — first successful light sleep since Issue #44
+- Short sleep: PASS
+- Long sleep: PASS
+- Notes: uxTaskGetSystemState unavailable (configUSE_TRACE_FACILITY not enabled), used xTaskGetHandle() with known task name list instead
