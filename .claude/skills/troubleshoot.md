@@ -186,12 +186,26 @@ you nothing.
 
 **Force-flush after every log in the critical path:**
 ```cpp
-DEBUG_LOG_SYSTEM("Pre-sleep: about to do X");
+DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: about to do X");
 g_debugLogger.flush();  // survive crash here
 // ... do X ...
-DEBUG_LOG_SYSTEM("Pre-sleep: X complete, result=%d", result);
+DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: X complete, result=%d", result);
 g_debugLogger.flush();
 ```
+
+**Use DEBUG or VERBOSE level for all instrumentation — never INFO:**
+
+Troubleshooting logs are temporary diagnostic detail. They must not pollute normal
+device output at INFO level. Use the appropriate macro:
+
+| Macro | Level | Use for |
+|-------|-------|---------|
+| `DEBUG_LOG_SYSTEM_DEBUG(...)` | DEBUG | Step-by-step progress, return codes, TWDT operations, heartbeats |
+| `DEBUG_LOG_SYSTEM_VERBOSE(...)` | VERBOSE | Pin states, register dumps, high-frequency snapshots |
+| `DEBUG_LOG_SYSTEM(...)` | INFO | **Do NOT use for instrumentation** — reserved for operational events (state transitions, boot, mode changes) |
+
+When the issue is resolved and instrumentation is kept for future diagnosis, the
+DEBUG/VERBOSE level ensures it stays silent during normal operation.
 
 ---
 
@@ -303,9 +317,10 @@ For each build:
 | USB assumption | Diagnosed Serial.flush() hang as root cause — device was on battery, no USB host | Validate power source before forming hypothesis |
 | Multiple changes at once | WiFi.mode() change AND disableCore0WDT() change in same build — couldn't isolate which helped | One hypothesis per build |
 | Skipped IDF docs | Assumed `esp_task_wdt_reconfigure()` exists (it doesn't in IDF 4.4.x) | Check docs first; note API version constraints |
+| Wrong log level | All Issue #44 instrumentation used `DEBUG_LOG_SYSTEM()` (INFO), cluttering normal logs with 30+ diagnostic lines per sleep cycle | Use `DEBUG_LOG_SYSTEM_DEBUG()` or `_VERBOSE()` for all instrumentation |
 
 ---
 
-**Last Updated**: 2026-02-13
+**Last Updated**: 2026-02-14
 **For**: StepAware ESP32 Project
 **Derived from**: Issue #44 investigation, builds 0219–0255

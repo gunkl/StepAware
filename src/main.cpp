@@ -1366,7 +1366,7 @@ void setup() {
     TaskHandle_t idleTask = xTaskGetIdleTaskHandleForCPU(0);
     esp_err_t idleStatus = esp_task_wdt_status(idleTask);
     int statusInt = (int)idleStatus;
-    DEBUG_LOG_SYSTEM("Issue #44: boot disableCore0WDT() done, IDLE TWDT status=%d "
+    DEBUG_LOG_SYSTEM_DEBUG("Issue #44: boot disableCore0WDT() done, IDLE TWDT status=%d "
                      "(0=subscribed, 261=not_found)", statusInt);
 #endif
 
@@ -1389,7 +1389,7 @@ void loop() {
             esp_err_t status = esp_task_wdt_status(idleTask);
             if (status == ESP_OK) {
                 // IDLE is subscribed! Something re-subscribed it. Log and remove.
-                DEBUG_LOG_SYSTEM("Issue #44: IDLE re-subscribed to TWDT! Removing. (H1/H2 confirmed)");
+                DEBUG_LOG_SYSTEM_DEBUG("Issue #44: IDLE re-subscribed to TWDT! Removing. (H1/H2 confirmed)");
                 disableCore0WDT();
             }
         }
@@ -1404,7 +1404,7 @@ void loop() {
         if (millis() - lastHeartbeat >= 1000) {
             lastHeartbeat = millis();
             unsigned long freeHeap = (unsigned long)ESP.getFreeHeap();
-            DEBUG_LOG_SYSTEM("Post-wake heartbeat (heap=%lu)", freeHeap);
+            DEBUG_LOG_SYSTEM_DEBUG("Post-wake heartbeat (heap=%lu)", freeHeap);
             g_debugLogger.flush();
         }
     }
