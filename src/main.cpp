@@ -1034,6 +1034,18 @@ void setup() {
         Serial.printf("[Setup] Motion wake pins: %u configured\n", wakeCount);
     }
 
+    // Issue #45: Explicitly reconnect WiFi on wake.
+    // Pre-sleep WiFi.disconnect(false) queues a disconnect event but the
+    // arduino_events task may not process it before sleep, leaving WiFi.status()
+    // stale (WL_CONNECTED) for 1-21+ min after wake. Calling reconnect() here
+    // bypasses the passive polling entirely and ensures WiFi is up within seconds.
+    g_power.onWake([]() {
+        const char* wifiStateStr = WiFiManager::getStateName(g_wifi.getState());
+        DEBUG_LOG_SYSTEM("Post-wake: WiFi state=%s, triggering reconnect", wifiStateStr);
+        g_debugLogger.flush();
+        g_wifi.reconnect();
+    });
+
     // Assign PIR power pin and create recalibration scheduler.
     // Both PIR sensors share one power wire on GPIO20; bind to the near
     // sensor (slot 0 by convention). One recalibrate() call handles both.
