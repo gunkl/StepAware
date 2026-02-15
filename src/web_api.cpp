@@ -638,6 +638,7 @@ void WebAPI::handleGetStatus(AsyncWebServerRequest* request) {
         powerObj["usbPower"] = battery.usbPower;
         powerObj["low"] = battery.low;
         powerObj["critical"] = battery.critical;
+        powerObj["batteryReady"] = battery.valid;
         powerObj["monitoringEnabled"] = m_power->isBatteryMonitoringEnabled();
         powerObj["adcCalMethod"] = m_power->getAdcCalMethod();
 
@@ -3130,6 +3131,8 @@ void WebAPI::buildDashboardHTML() {
     html2 += "else{battIcon.className='status-icon inactive';battStatus.textContent='No battery';}}";
     html2 += "else if(data.power.usbPower){battIcon.className='status-icon active';";
     html2 += "battStatus.textContent='USB Power';}";
+    html2 += "else if(!data.power.batteryReady){battIcon.className='status-icon inactive';";
+    html2 += "battStatus.textContent='Initializing...';}";
     html2 += "else if(data.power.critical){battIcon.className='status-icon warning';";
     html2 += "battStatus.textContent=battPct+'% CRITICAL';}";
     html2 += "else if(data.power.low){battIcon.className='status-icon warning';";
@@ -3161,11 +3164,12 @@ void WebAPI::buildDashboardHTML() {
     html2 += "else{";
     html2 += "let battText;";
     html2 += "if(data.power.usbPower){battText='USB Power';}";
+    html2 += "else if(!data.power.batteryReady){battText='Initializing...';}";
     html2 += "else if(data.power.critical){battText=data.power.batteryPercent+'% CRITICAL';}";
     html2 += "else if(data.power.low){battText=data.power.batteryPercent+'% LOW';}";
     html2 += "else{battText=data.power.batteryPercent+'%';}";
     html2 += "document.getElementById('sys-battery').textContent=battText;";
-    html2 += "document.getElementById('sys-voltage').textContent=data.power.batteryVoltage.toFixed(2)+' V';";
+    html2 += "document.getElementById('sys-voltage').textContent=data.power.batteryReady?data.power.batteryVoltage.toFixed(2)+' V':'--';";
     html2 += "document.getElementById('sys-adc-cal').textContent=data.power.adcCalMethod||'--';";
     html2 += "document.getElementById('sys-power-state').textContent=data.power.stateName;}";
     html2 += "const lsT=data.power.lightSleepTime||0;";

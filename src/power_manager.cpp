@@ -100,6 +100,7 @@ PowerManager::PowerManager()
     m_batteryStatus.usbPower = false;
     m_batteryStatus.low = false;
     m_batteryStatus.critical = false;
+    m_batteryStatus.valid = false;
 
     // Initialize stats
     m_stats.uptime = 0;
@@ -341,12 +342,8 @@ void PowerManager::update() {
 void PowerManager::updateBatteryStatus() {
     // Read voltage
     float voltage = getBatteryVoltage();
-    m_batteryStatus.voltage = voltage;
 
-    // Calculate percentage
-    m_batteryStatus.percentage = calculateBatteryPercentage(voltage);
-
-    // Check USB power state
+    // Check USB power state (always valid, regardless of battery readiness)
     bool wasUsbPower = m_batteryStatus.usbPower;
     m_batteryStatus.usbPower = isUsbPower();
 
@@ -357,6 +354,28 @@ void PowerManager::updateBatteryStatus() {
             m_onUsbPower();
         }
     }
+
+    // Guard: require MIN_BATTERY_SAMPLES plausible readings before trusting voltage
+    // data. This prevents noisy first ADC samples at boot/deep-sleep-wake from
+    // setting low/critical flags and triggering spurious state machine transitions.
+    if (!m_batteryStatus.valid) {
+        int sampleCount = m_voltageSamplesFilled ? VOLTAGE_SAMPLES : m_voltageSampleIndex;
+        if (sampleCount >= MIN_BATTERY_SAMPLES && voltage >= 2.5f) {
+            m_batteryStatus.valid = true;
+            DEBUG_LOG_SYSTEM("Power: Battery readings valid (%d samples, %.2fV)", sampleCount, voltage);
+        } else {
+            // Update raw voltage for diagnostics but suppress low/critical flags
+            m_batteryStatus.voltage = voltage;
+            m_batteryStatus.low = false;
+            m_batteryStatus.critical = false;
+            return;
+        }
+    }
+
+    m_batteryStatus.voltage = voltage;
+
+    // Calculate percentage
+    m_batteryStatus.percentage = calculateBatteryPercentage(voltage);
 
     // Check battery thresholds
     bool wasLow = m_batteryStatus.low;
