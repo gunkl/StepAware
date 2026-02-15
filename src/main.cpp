@@ -1040,10 +1040,14 @@ void setup() {
     // stale (WL_CONNECTED) for 1-21+ min after wake. Calling reconnect() here
     // bypasses the passive polling entirely and ensures WiFi is up within seconds.
     g_power.onWake([]() {
-        const char* wifiStateStr = WiFiManager::getStateName(g_wifi.getState());
+        const char* wifiStateStr = WiFiManager::getStateName(wifiManager.getState());
         DEBUG_LOG_SYSTEM("Post-wake: WiFi state=%s, triggering reconnect", wifiStateStr);
         g_debugLogger.flush();
-        g_wifi.reconnect();
+        wifiManager.reconnect();
+        // Brief LED pulse to confirm wake from button press (no animation otherwise in MOTION_DETECT mode)
+        if (g_power.getButtonPressedAtWake() && ledMatrix && ledMatrix->isReady()) {
+            ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_BOOT_STATUS, 1000);
+        }
     });
 
     // Assign PIR power pin and create recalibration scheduler.

@@ -76,6 +76,7 @@ PowerManager::PowerManager()
     , m_voltageSamplesFilled(false)
     , m_adcCalValid(false)
     , m_adcCalMethod("none")
+    , m_buttonPressedAtWake(false)
     , m_onLowBattery(nullptr)
     , m_onCriticalBattery(nullptr)
     , m_onUsbPower(nullptr)
@@ -994,6 +995,9 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     s_wakePirPwr = gpio_get_level((gpio_num_t)PIN_PIR_POWER);
     s_wakeCause  = (int)esp_sleep_get_wakeup_cause();
     s_wakeMcuSel = (REG_READ(IO_MUX_GPIO1_REG) >> MCU_SEL_S) & MCU_SEL_V;
+    // Button: read immediately — a short press may already be released by the time
+    // detectAndRouteWakeSource() runs (~1 second later after Serial/TWDT reinit).
+    m_buttonPressedAtWake = (gpio_get_level((gpio_num_t)BUTTON_PIN) == 0);
 #endif
 
     // Wake.  Re-initialise USB-JTAG-Serial.  Must remain outside
@@ -1041,9 +1045,10 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         totalWakeTime, (unsigned long)ESP.getFreeHeap());
     g_debugLogger.flush();
 
-    DEBUG_LOG_SYSTEM_VERBOSE("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d",
+    int wakeSnapshotBtn = m_buttonPressedAtWake ? 1 : 0;
+    DEBUG_LOG_SYSTEM_VERBOSE("Wake snapshot: cause=%d GPIO1=%d GPIO4=%d PIR_PWR=%d MCU_SEL=%d Btn=%d",
                      s_wakeCause, s_wakeGPIO1, s_wakeGPIO4,
-                     s_wakePirPwr, s_wakeMcuSel);
+                     s_wakePirPwr, s_wakeMcuSel, wakeSnapshotBtn);
 
 #ifndef MOCK_MODE
     // Step 5: Disable stale GPIO wakeup sources
@@ -1175,7 +1180,7 @@ void PowerManager::detectAndRouteWakeSource(uint32_t sleepDurationMs) {
             // triggered it.  Read button first; if not pressed, scan motion pins.
             // Only route to MOTION_ALERT if a motion pin is actually HIGH now —
             // a momentary glitch that has already cleared must not trigger an alert.
-            if (gpio_get_level((gpio_num_t)BUTTON_PIN) == 0) {
+            if (m_buttonPressedAtWake) {
                 wakeSource = "Button";
                 newState = STATE_ACTIVE;
             } else {

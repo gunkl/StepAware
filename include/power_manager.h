@@ -355,6 +355,13 @@ public:
     bool isPostWakeFlushActive() const { return millis() < m_postWakeFlushUntil; }
 
     /**
+     * @brief Returns true if the button was pressed at the moment of wake from light sleep.
+     * Captured immediately after esp_light_sleep_start() returns, before Serial reinit.
+     * Useful for detecting short button presses that may release before wake routing runs.
+     */
+    bool getButtonPressedAtWake() const { return m_buttonPressedAtWake; }
+
+    /**
      * @brief Get power state name
      *
      * @param state Power state
@@ -391,6 +398,7 @@ private:
 #endif
     bool m_adcCalValid;             ///< true once m_adcCalChars is populated
     const char* m_adcCalMethod;     ///< human-readable cal method name
+    bool m_buttonPressedAtWake;     ///< button GPIO level captured immediately after esp_light_sleep_start() returns
 
     // Callbacks
     LowBatteryCallback m_onLowBattery;
