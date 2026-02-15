@@ -154,6 +154,9 @@ void DebugLogger::log(LogLevel level, LogCategory category, const char* format, 
     // Build log line with timestamp, level, category
     char logLine[384];
     time_t now = time(NULL);
+    // NOTE: If NTP corrects the system clock significantly after initial sync,
+    // calendar timestamps may appear to go backwards in the log. This is expected
+    // behavior — the initial timestamps used a stale RTC value, corrected by NTP.
     if (now > 946684800) {  // 946684800 = Jan 1 2000; valid only after NTP sync
         struct tm* tm = localtime(&now);
         if (tm) {
@@ -609,6 +612,8 @@ void DebugLogger::logRotationAttempt() {
     float percentUsed = (used * 100.0f) / total;
     debugFile.printf("  FS: %u/%u bytes (%.1f%% used, %u free)\n",
                     used, total, percentUsed, available);
+    debugFile.printf("  Free bytes: %u (runtime rotation triggers at < %u)\n",
+                    available, (size_t)(CRASH_RESERVE_BYTES + 8192));
 
     // Log file existence (new layout: prev + overflow + current)
     debugFile.printf("  Files: prev=%d overflow=%d current=%d crash_backup=%d\n",
@@ -916,32 +921,26 @@ void DebugLogger::checkAndRotateRunningLogs() {
 #if !MOCK_HARDWARE
     if (!m_currentFile) return;
 
-    // Calculate space budget (total minus crash reserve)
+    // Use actual FS free space — accounts for ALL files (prev log, crash_backup,
+    // configs, etc.), not just current + overflow.  The old check only counted
+    // currentSize + overflowSize against a "budget", which ignored the ~498KB prev
+    // log and caused the filesystem to fill to 99.6% before rotation fired.
     size_t totalBytes = LittleFS.totalBytes();
-    size_t budget = totalBytes - CRASH_RESERVE_BYTES;
+    size_t usedBytes  = LittleFS.usedBytes();
+    size_t freeBytes  = totalBytes - usedBytes;
 
-    // Get current log size
+    // Get current log size (still needed for tail-copy calculation below)
     size_t currentSize = m_currentFile.size();
 
-    // Get overflow log size if it exists
-    size_t overflowSize = 0;
-    if (LittleFS.exists(OVERFLOW_LOG)) {
-        File f = LittleFS.open(OVERFLOW_LOG, "r");
-        if (f) {
-            overflowSize = f.size();
-            f.close();
-        }
-    }
+    // Rotate when free space drops below crash reserve + 8KB headroom.
+    // CRASH_RESERVE_BYTES (~32KB) keeps room for crash_backup writes post-crash.
+    // The extra 8KB headroom prevents writes from failing before rotation fires.
+    if (freeBytes > (CRASH_RESERVE_BYTES + 8192)) return;
 
-    size_t usedByLogs = currentSize + overflowSize;
-
-    // Only rotate when we've reached 95% of budget
-    if (usedByLogs < (budget * 95 / 100)) return;
-
-    // Pre-compute percentage for safe printf use
-    unsigned int usedPct = (unsigned int)((usedByLogs * 100) / budget);
-    Serial.printf("[DebugLogger] Runtime rotation: logs=%u/%u (%u%%) - rotating\n",
-                  usedByLogs, budget, usedPct);
+    // Pre-compute for safe printf use (no expressions in variadic args)
+    unsigned int freePct = (unsigned int)(((totalBytes - freeBytes) * 100) / totalBytes);
+    Serial.printf("[DebugLogger] Runtime rotation: %u bytes free (%u%% used) - rotating\n",
+                  freeBytes, freePct);
 
     // Feed watchdog before potentially slow filesystem operations
     esp_task_wdt_reset();
