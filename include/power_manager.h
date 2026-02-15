@@ -58,6 +58,7 @@ public:
         bool usbPower;          ///< USB power connected
         bool low;               ///< Low battery flag (<20%)
         bool critical;          ///< Critical battery flag (<5%)
+        bool valid;             ///< True once MIN_BATTERY_SAMPLES accumulated and voltage is plausible
     };
 
     /**
@@ -388,6 +389,7 @@ private:
 
     // Voltage filtering
     static const uint8_t VOLTAGE_SAMPLES = 10;
+    static const uint8_t MIN_BATTERY_SAMPLES = 3;  ///< Samples required before readings are trusted
     float m_voltageSamples[VOLTAGE_SAMPLES];
     uint8_t m_voltageSampleIndex;
     bool m_voltageSamplesFilled;
