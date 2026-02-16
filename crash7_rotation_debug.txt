@@ -1,3 +1,0 @@
-[Boot #173] ROTATION ATTEMPT
-  FS: 184320/917504 bytes (20.1% used, 733184 free)
-  Files: prev=1 overflow=0 current=1 crash_backup=1
