@@ -2,7 +2,7 @@
 
 **ESP32-C3 Motion-Activated Hazard Warning System**
 
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+![Version](https://img.shields.io/badge/version-0.5.12-blue)
 ![Platform](https://img.shields.io/badge/platform-ESP32--C3-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 [![CI/CD Pipeline](https://github.com/gunkl/StepAware/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/gunkl/StepAware/actions)
