@@ -1278,6 +1278,16 @@ void setup() {
         g_power.onCriticalBattery(onBatteryLowCallback);
     }
 
+    // Wire up StateMachine ↔ PowerManager cross-references.
+    // StateMachine needs PowerManager to call recordActivity() from updateSensorStatusLEDs().
+    // PowerManager needs StateMachine for hasDisplayActivity() sleep guard and pre-sleep
+    // LED clear/diagnostics in enterLightSleep().
+    if (stateMachine) {
+        stateMachine->setPowerManager(&g_power);
+        g_power.setStateMachine(stateMachine);
+        Serial.println("[Setup] StateMachine <-> PowerManager cross-references wired");
+    }
+
     // Deep sleep reboots the CPU; light sleep can crash-reboot on ESP32-C3
     // if USB-JTAG-Serial is not re-initialised in time.  In either case the
     // motion event that triggered the wake is lost (sensors are in warmup).

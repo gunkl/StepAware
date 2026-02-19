@@ -28,6 +28,9 @@
  * - LOW_BATTERY: Special state for battery warning
  * - USB_POWER: USB power connected
  */
+// Forward declaration — avoids circular include (state_machine.h ↔ power_manager.h)
+class PowerManager;
+
 class StateMachine {
 public:
     /**
@@ -206,6 +209,48 @@ public:
     void setDirectionDetector(DirectionDetector* detector);
 
     /**
+     * @brief Set PowerManager reference (for recordActivity() calls from StateMachine)
+     *
+     * @param pm Pointer to PowerManager (nullptr to disconnect)
+     */
+    void setPowerManager(PowerManager* pm);
+
+    /**
+     * @brief Check if device has any active display state that should block sleep.
+     *
+     * Returns true if:
+     * - An animation is running (MOTION_ALERT, BOOT_STATUS, etc.)
+     * - A motion warning timer is still active
+     * - The mode indicator bitmap is on-screen
+     * - Any sensor status LED is currently ON
+     *
+     * Returning true causes PowerManager::shouldEnterSleep() to block the sleep
+     * transition until all display activity clears.
+     *
+     * @return true if sleep should be blocked due to display activity
+     */
+    bool hasDisplayActivity() const;
+
+    /**
+     * @brief Clear the LED matrix display (pre-sleep defensive clear).
+     *
+     * Stops any running animation and clears all pixels. Called by PowerManager
+     * immediately before esp_light_sleep_start() to prevent pixel state from
+     * persisting on the HT16K33 hardware throughout the sleep period.
+     */
+    void clearLEDDisplay();
+
+    /**
+     * @brief Log LED frame state and sensor motion states for pre-sleep diagnostics.
+     *
+     * Logs the raw 8-byte frame buffer (which pixels are lit) and the live
+     * motionDetected() state of each configured PIR sensor.  Call immediately
+     * before enterLightSleep()'s GPIO arm sequence so the information appears
+     * in the log even if the device never wakes.
+     */
+    void logPreSleepDiag() const;
+
+    /**
      * @brief Get direction detector
      *
      * @return DirectionDetector* Pointer to detector or nullptr if not set
@@ -221,6 +266,7 @@ private:
     HAL_LEDMatrix_8x8* m_ledMatrix;       ///< LED matrix display (Issue #12, optional)
     DirectionDetector* m_directionDetector; ///< Direction detector (dual-PIR, optional)
     class ConfigManager* m_config;        ///< Config manager (for runtime config access)
+    PowerManager* m_powerManager;         ///< Power manager reference (for recordActivity(), optional)
 
     // State
     OperatingMode m_currentMode; ///< Current operating mode
