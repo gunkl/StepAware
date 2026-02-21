@@ -4,6 +4,9 @@
 #include <Arduino.h>
 #include "config.h"
 
+// Forward declaration — avoids circular include (power_manager.h ↔ state_machine.h)
+class StateMachine;
+
 #ifndef NATIVE_BUILD
 #include "esp_adc_cal.h"   // eFuse-based ADC calibration (ESP-IDF legacy API)
 #endif
@@ -251,6 +254,17 @@ public:
     void setMotionWakePins(const uint8_t* pins, uint8_t count);
 
     /**
+     * @brief Set StateMachine reference for display-state queries and pre-sleep actions.
+     *
+     * When set, PowerManager calls hasDisplayActivity() inside shouldEnterSleep() to
+     * block sleep while the display has visible activity, and calls logPreSleepDiag() +
+     * clearLEDDisplay() inside enterLightSleep() before the GPIO arm sequence.
+     *
+     * @param sm Pointer to StateMachine (nullptr to disconnect)
+     */
+    void setStateMachine(StateMachine* sm);
+
+    /**
      * @brief Enter light sleep mode
      *
      * WiFi off, CPU 80MHz, wake on motion/button/timer.
@@ -414,6 +428,10 @@ private:
     static const uint8_t MAX_MOTION_WAKE_PINS = 4;
     uint8_t m_motionWakePins[MAX_MOTION_WAKE_PINS];
     uint8_t m_motionWakePinCount;
+
+    // StateMachine reference — optional; enables display-activity sleep guard and
+    // pre-sleep LED clear/logging.  Set via setStateMachine() in main setup().
+    StateMachine* m_stateMachine;
 
     /**
      * @brief Handle power state machine

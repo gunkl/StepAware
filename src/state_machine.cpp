@@ -1,4 +1,5 @@
 #include "state_machine.h"
+#include "power_manager.h"
 #include "sensor_manager.h"
 #include "config_manager.h"
 #include "logger.h"
@@ -87,6 +88,7 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_rebootPending(false)
     , m_rebootTime(0)
     , m_lastMatrixWasAnimating(false)
+    , m_powerManager(nullptr)
 {
     memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
 }
@@ -643,6 +645,63 @@ void StateMachine::setDirectionDetector(DirectionDetector* detector) {
     }
 }
 
+void StateMachine::setPowerManager(PowerManager* pm) {
+    m_powerManager = pm;
+    DEBUG_LOG_STATE("StateMachine: PowerManager reference %s", pm ? "SET" : "CLEARED");
+}
+
+bool StateMachine::hasDisplayActivity() const {
+    if (!m_ledMatrix) return false;
+    if (m_ledMatrix->isAnimating()) return true;
+    if (m_warningActive) return true;
+    if (m_modeIndicatorActive) return true;
+    if (m_rebootPending) return true;
+    for (int i = 0; i < 4; i++) {
+        if (m_lastSensorDisplayState[i]) return true;
+    }
+    return false;
+}
+
+void StateMachine::clearLEDDisplay() {
+    if (!m_ledMatrix) return;
+    if (m_ledMatrix->isAnimating()) {
+        m_ledMatrix->stopAnimation();  // stopAnimation() calls clear() internally
+    } else {
+        m_ledMatrix->clear();
+    }
+    // Reset tracking state so sensor status LEDs redraw correctly after wake
+    memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
+    m_lastMatrixWasAnimating = false;
+    LOG_INFO("StateMachine: LED display cleared (pre-sleep)");
+}
+
+void StateMachine::logPreSleepDiag() const {
+    // B1: Log raw LED frame buffer
+    if (m_ledMatrix) {
+        const uint8_t* frame = m_ledMatrix->getCurrentFrame();
+        int animating = m_ledMatrix->isAnimating() ? 1 : 0;
+        LOG_INFO("Pre-sleep LED frame: [%02x %02x %02x %02x %02x %02x %02x %02x] animating=%d",
+                 frame[0], frame[1], frame[2], frame[3],
+                 frame[4], frame[5], frame[6], frame[7],
+                 animating);
+        DEBUG_LOG_STATE("Pre-sleep display state: warning=%d modeInd=%d reboot=%d animating=%d",
+                        m_warningActive ? 1 : 0, m_modeIndicatorActive ? 1 : 0,
+                        m_rebootPending ? 1 : 0, animating);
+    }
+
+    // B4: Log each sensor's live motion state
+    if (m_sensorManager) {
+        for (uint8_t i = 0; i < 4; i++) {
+            HAL_MotionSensor* sensor = m_sensorManager->getSensor(i);
+            if (sensor && sensor->isReady()) {
+                int motionVal = sensor->motionDetected() ? 1 : 0;
+                LOG_INFO("Pre-sleep sensor[%u]: motion=%d displayState=%d",
+                         i, motionVal, m_lastSensorDisplayState[i] ? 1 : 0);
+            }
+        }
+    }
+}
+
 void StateMachine::updateSensorStatusLEDs() {
     if (!m_ledMatrix || !m_ledMatrix->isReady() || !m_config || !m_initialized) {
         return;
@@ -734,6 +793,11 @@ void StateMachine::updateSensorStatusLEDs() {
             m_ledMatrix->setPixel(x, y1, currentMotion);
             m_ledMatrix->setPixel(x, y2, currentMotion);
             m_lastSensorDisplayState[i] = currentMotion;
+            // A1: Treat sensor status LED turning ON as device activity — resets idle
+            // timer so sleep cannot be entered while the sensor indicator is visible.
+            if (currentMotion && m_powerManager) {
+                m_powerManager->recordActivity("sensor-status-led");
+            }
         }
     }
 }

@@ -178,6 +178,16 @@ public:
      */
     uint8_t* mockGetFrame() { return m_mockFrame; }
 
+    /**
+     * @brief Get the raw current frame buffer (8 bytes, one per row, bit 7 = leftmost pixel)
+     *
+     * Useful for diagnostic logging before entering sleep — lets callers inspect exactly
+     * which pixels are lit without modifying any display state.
+     *
+     * @return Pointer to internal 8-byte frame buffer (read-only)
+     */
+    const uint8_t* getCurrentFrame() const { return m_currentFrame; }
+
     // ========================================================================
     // Phase 2: Custom Animation Support (Stubs)
     // ========================================================================

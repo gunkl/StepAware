@@ -1,4 +1,5 @@
 #include "power_manager.h"
+#include "state_machine.h"
 #include "logger.h"
 #include "debug_logger.h"
 
@@ -82,6 +83,7 @@ PowerManager::PowerManager()
     , m_onUsbPower(nullptr)
     , m_onWake(nullptr)
     , m_motionWakePinCount(0)
+    , m_stateMachine(nullptr)
 {
     // Initialize default configuration
     m_config.idleToLightSleepMs = 180000;       // 3 minutes
@@ -168,6 +170,11 @@ void PowerManager::setMotionWakePins(const uint8_t* pins, uint8_t count) {
     m_motionWakePinCount = count;
     memcpy(m_motionWakePins, pins, count);
     DEBUG_LOG_SYSTEM("Power: setMotionWakePins — %u pin(s) registered", count);
+}
+
+void PowerManager::setStateMachine(StateMachine* sm) {
+    m_stateMachine = sm;
+    DEBUG_LOG_SYSTEM_DEBUG("Power: StateMachine reference %s", sm ? "SET" : "CLEARED");
 }
 
 bool PowerManager::begin(const Config* config) {
@@ -750,6 +757,19 @@ bool PowerManager::shouldEnterSleep() {
         return false;
     }
 
+    // A2: Block sleep if the display has visible activity (animation, warning, sensor
+    // status LED on, mode indicator, reboot pending).  The idle timer continues to
+    // count — once activity clears, the existing elapsed time still drives sleep.
+    // Only the instantaneous "is something on screen right now?" question is asked here.
+    if (m_stateMachine && m_stateMachine->hasDisplayActivity()) {
+        static uint32_t lastDisplayBlockLog = 0;
+        if (millis() - lastDisplayBlockLog >= 10000) {
+            DEBUG_LOG_SYSTEM_DEBUG("Sleep check: BLOCKED — display activity in progress");
+            lastDisplayBlockLog = millis();
+        }
+        return false;
+    }
+
     if (idleTime >= m_config.idleToLightSleepMs) {
         DEBUG_LOG_SYSTEM_VERBOSE("Sleep check: READY - idle=%lums >= timeout=%lums",
                          idleTime, m_config.idleToLightSleepMs);
@@ -811,6 +831,18 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     DEBUG_LOG_SYSTEM_DEBUG("Light sleep: feeding watchdog before sleep preparation");
     esp_task_wdt_reset();
 
+    // B1+B4: Log LED frame state and sensor motion states before sleep
+    if (m_stateMachine) {
+        m_stateMachine->logPreSleepDiag();
+    }
+
+    // B2: Clear LED matrix before sleep — prevents pixel state persisting on the
+    // HT16K33 hardware (which retains its display RAM through light sleep).
+    if (m_stateMachine) {
+        m_stateMachine->clearLEDDisplay();
+        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: LED matrix cleared");
+    }
+
     // gpio_config() (not gpio_set_direction) is required here: it reconfigures
     // the IO_MUX function-select back to GPIO mode.  gpio_set_direction only
     // touches the GPIO controller direction bit and leaves IO_MUX unchanged.
@@ -841,7 +873,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             io_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
             gpio_config(&io_conf);
             esp_err_t wakeErr = gpio_wakeup_enable(pin, GPIO_INTR_HIGH_LEVEL);
-            DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed HIGH-level wakeup (rc=%d)", (int)pin, (int)wakeErr);
+            DEBUG_LOG_SYSTEM_DEBUG("Light sleep: GPIO%d armed HIGH-level wakeup (rc=%d)", (int)pin, (int)wakeErr);
         }
     }
 
@@ -853,7 +885,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         btn_conf.intr_type     = GPIO_INTR_DISABLE;
         gpio_config(&btn_conf);
         esp_err_t btnWakeErr = gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
-        DEBUG_LOG_SYSTEM_VERBOSE("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
+        DEBUG_LOG_SYSTEM_DEBUG("Light sleep: GPIO%d armed LOW-level wakeup (rc=%d)", BUTTON_PIN, (int)btnWakeErr);
     }
 
     // Log which wake sources are armed
@@ -928,7 +960,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
             int pirPwrLvl = gpio_get_level((gpio_num_t)PIN_PIR_POWER);
             snprintf(diagLog + pos, sizeof(diagLog) - pos, " PIR_PWR=%d", pirPwrLvl);
         }
-        DEBUG_LOG_SYSTEM_VERBOSE("%s", diagLog);
+        DEBUG_LOG_SYSTEM_DEBUG("%s", diagLog);
     }
 
     // Hold GPIO20 (PIR sensor power rail) OUTPUT HIGH during light sleep.
@@ -1005,7 +1037,7 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     g_debugLogger.flush();
 
     // NOTE: No Serial logging possible after this point until Serial.begin() on wake
-    esp_light_sleep_start();
+    esp_err_t sleepRet = esp_light_sleep_start();
 
     // Capture pin state at the exact moment of wake.  Serial is not yet
     // available — store into statics declared above; log after Serial.begin().
@@ -1031,6 +1063,13 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // Step 1: Serial re-initialized
     DEBUG_LOG_SYSTEM_DEBUG("Wake step 1/7: Serial re-initialized");
     g_debugLogger.flush();
+
+    // B5: Log esp_light_sleep_start() return code (non-zero means device never slept)
+    {
+        int sleepRetInt = (int)sleepRet;
+        DEBUG_LOG_SYSTEM_DEBUG("Wake: esp_light_sleep_start() returned %d (0=OK, non-zero=never slept)", sleepRetInt);
+        g_debugLogger.flush();
+    }
 
     // Step 2: Reinitialize TWDT without IDLE monitoring (Issue #44, build 0247)
     // This IDF version uses the old esp_task_wdt_init(timeout, panic) API —
