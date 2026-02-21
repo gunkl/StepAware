@@ -298,6 +298,15 @@ private:
     bool m_lastSensorDisplayState[4];    ///< Last-drawn motion state per sensor slot (avoids redundant I2C writes)
     bool m_lastMatrixWasAnimating;       ///< Detects busy→idle transition to force redraw
 
+    // Post-warning info display (Issue #30)
+    enum PostWarningPhase {
+        PW_NONE,            // No post-warning display
+        PW_WIFI_STATUS,     // Showing WiFi status (2s)
+        PW_BATTERY_STATUS,  // Showing battery status (2s)
+    };
+    PostWarningPhase m_postWarningPhase;
+    uint32_t m_postWarningPhaseStart;
+
     /**
      * @brief Enter a new operating mode
      *
@@ -356,6 +365,23 @@ private:
      * Suppressed while any animation, mode indicator, or reboot bitmap is active.
      */
     void updateSensorStatusLEDs();
+
+    /**
+     * @brief Start post-warning info sequence (WiFi then battery display)
+     * Called when motion warning expires (EVENT_TIMER_EXPIRED).
+     */
+    void startPostWarningSequence();
+
+    /**
+     * @brief Update post-warning info display state machine
+     * Transitions: WiFi (2s) → Battery (2s) → done
+     */
+    void updatePostWarningDisplay();
+
+    /**
+     * @brief Show battery status bitmap based on current percentage
+     */
+    void showPostWarningBattery();
 };
 
 #endif // STEPAWARE_STATE_MACHINE_H

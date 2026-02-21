@@ -2,6 +2,7 @@
 #define STEPAWARE_OTA_MANAGER_H
 
 #include <Arduino.h>
+#include <functional>
 
 /**
  * @brief OTA (Over-The-Air) Firmware Update Manager
@@ -114,9 +115,22 @@ public:
      */
     String getCurrentPartition() const;
 
+    /**
+     * @brief OTA progress callback type
+     * @param percent Upload progress percentage (0-100)
+     */
+    typedef std::function<void(uint8_t percent)> ProgressCallback;
+
+    /**
+     * @brief Register progress callback for display updates
+     * @param callback Function called on each progress update
+     */
+    void onProgress(ProgressCallback callback) { m_progressCallback = callback; }
+
 private:
     Status m_status;           ///< Current upload status
     bool m_firstChunk;         ///< Flag to track first chunk (for validation)
+    ProgressCallback m_progressCallback;  ///< Progress display callback (Issue #30)
 
     /**
      * @brief Set error message

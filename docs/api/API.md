@@ -618,6 +618,53 @@ curl http://192.168.1.100/api/logs
 
 ---
 
+## LED Matrix Animations (Issue #30)
+
+### Built-in Animation Types
+
+| Type | Description |
+|------|-------------|
+| `MOTION_ALERT` | Flashing arrow + scroll down (motion warning) |
+| `BATTERY_LOW` | Battery draining animation (4 frames) |
+| `BOOT_STATUS` | Checkmark (success) or X (error) |
+| `ERROR` | X icon |
+| `WIFI_CONNECTED` | WiFi signal bars |
+| `WIFI_DISCONNECTED` | Broken WiFi icon |
+| `SNAKE_PROGRESS` | Snake-fill progress bar (0-64 pixels, used for boot/OTA) |
+
+### Boot Progress Display
+
+The device shows a snake-fill pattern on the 8x8 LED matrix during boot, with 13 milestones mapped to pixel fill levels:
+
+| Pixels | Milestone |
+|--------|-----------|
+| 1 | Matrix early init |
+| 6 | LittleFS mounted |
+| 11 | Debug logger ready |
+| 16 | Config loaded |
+| 22 | Sensors loaded |
+| 28 | Direction detector ready |
+| 33 | LEDs initialized |
+| 38 | Button ready |
+| 42 | State machine ready |
+| 48 | Power manager ready |
+| 54 | WiFi starting |
+| 60 | NTP initialized |
+| 64 | Boot complete |
+
+### Post-Motion-Alert Info Display
+
+After a motion alert animation expires, the matrix automatically shows:
+1. WiFi status (connected/disconnected icon) for 2 seconds
+2. Battery level (appropriate fill icon) for 2 seconds
+3. Returns to sensor status indicators
+
+### OTA Progress Display
+
+During firmware upload via `/api/ota/upload`, the LED matrix shows a snake-fill pattern from 0 to 64 pixels representing 0-100% upload progress.
+
+---
+
 ## Additional Notes
 
 - All timestamps are in milliseconds since device boot

@@ -106,7 +106,7 @@
 // ============================================================================
 
 // Version Information
-#define FIRMWARE_VERSION    "0.5.13"
+#define FIRMWARE_VERSION    "0.6.0"
 #define FIRMWARE_NAME       "StepAware"
 #define BUILD_DATE          __DATE__
 #define BUILD_TIME          __TIME__
@@ -173,6 +173,10 @@
 #define MATRIX_SCROLL_SPEED_MS      100     // Scroll delay between frames
 #define MATRIX_FLASH_DURATION_MS    200     // Flash on/off duration
 #define MATRIX_BOOT_DISPLAY_MS      3000    // Boot status display time
+#define BOOT_PROGRESS_COMPLETE_HOLD_MS  500     // Hold full snake before clearing
+#define WIFI_FIRST_CONNECT_DISPLAY_MS   2000    // WiFi first-connect emblem duration
+#define OTA_COMPLETE_HOLD_MS            1000    // Hold full snake after OTA complete
+#define OTA_COMPLETE_BITMAP_MS          2000    // Show checkmark after OTA complete
 
 // ============================================================================
 // Battery Management

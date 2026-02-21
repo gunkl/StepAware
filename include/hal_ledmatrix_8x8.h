@@ -36,6 +36,7 @@ public:
         ANIM_ERROR,             // Error indicator (X icon)
         ANIM_WIFI_CONNECTED,    // WiFi signal bars
         ANIM_WIFI_DISCONNECTED, // Broken WiFi icon
+        ANIM_SNAKE_PROGRESS,    // Snake fill pattern for boot/OTA progress (0-64 pixels)
         ANIM_CUSTOM             // For Phase 2
     };
 
@@ -120,6 +121,24 @@ public:
     AnimationPattern getPattern() const;
 
     /**
+     * @brief Set snake progress fill level
+     *
+     * Fills pixels 0 through pixelCount-1 in snake traversal order
+     * (L→R, R→L alternating rows). Used for boot progress and OTA progress.
+     * This is a static display, not a timed animation.
+     *
+     * @param pixelCount Number of pixels to fill (0-64)
+     */
+    void setSnakeProgress(uint8_t pixelCount);
+
+    /**
+     * @brief Get current snake progress fill level
+     *
+     * @return uint8_t Current fill level (0-64)
+     */
+    uint8_t getSnakeProgress() const { return m_snakeProgress; }
+
+    /**
      * @brief Draw a frame buffer to display
      *
      * @param frame 8-byte frame buffer (each byte = one row)
@@ -187,6 +206,13 @@ public:
      * @return Pointer to internal 8-byte frame buffer (read-only)
      */
     const uint8_t* getCurrentFrame() const { return m_currentFrame; }
+
+    /**
+     * @brief Display battery status bitmap based on percentage
+     * Shows appropriate battery fill level icon.
+     * @param percentage Battery percentage (0-100)
+     */
+    void showBatteryBitmap(uint8_t percentage);
 
     // ========================================================================
     // Phase 2: Custom Animation Support (Stubs)
@@ -316,6 +342,7 @@ private:
     uint32_t m_animationDuration;
     uint32_t m_lastFrameTime;
     uint8_t m_animationFrame;
+    uint8_t m_snakeProgress;        // Current snake fill level (0-64)
 
     // Custom animations (Phase 2)
     static const uint8_t MAX_CUSTOM_ANIMATIONS = 8;

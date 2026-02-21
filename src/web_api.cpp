@@ -502,6 +502,15 @@ bool WebAPI::begin() {
     m_otaManager = new OTAManager();
     if (m_otaManager) {
         m_otaManager->begin();
+        // Issue #30: Wire OTA progress to LED matrix snake display
+        if (m_ledMatrix && m_ledMatrix->isReady()) {
+            m_otaManager->onProgress([this](uint8_t percent) {
+                if (m_ledMatrix && m_ledMatrix->isReady()) {
+                    uint8_t pixels = (uint8_t)((percent * 64) / 100);
+                    m_ledMatrix->setSnakeProgress(pixels);
+                }
+            });
+        }
     }
 
     // OTA upload endpoint (chunked file upload handler)

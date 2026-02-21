@@ -127,6 +127,53 @@ static const uint8_t BATTERY_EMPTY[] = {
     0b01111110   // └──────┘
 };
 
+// Battery bitmaps for post-warning status display (healthy levels)
+static const uint8_t BATTERY_FULL[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01111110,  // │██████│ (full)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_75[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01111110,  // │██████│ (75%)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_50[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │
+    0b01000010,  // │      │
+    0b01111110,  // │██████│ (50%)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+// Snake traversal lookup: index 0-63 → (x, y) coordinates
+// Row 0: L→R, Row 1: R→L, Row 2: L→R, etc. (boustrophedon pattern)
+static const struct { uint8_t x; uint8_t y; } SNAKE_PIXELS[64] = {
+    {0,0},{1,0},{2,0},{3,0},{4,0},{5,0},{6,0},{7,0}, // Row 0 L→R
+    {7,1},{6,1},{5,1},{4,1},{3,1},{2,1},{1,1},{0,1}, // Row 1 R→L
+    {0,2},{1,2},{2,2},{3,2},{4,2},{5,2},{6,2},{7,2}, // Row 2 L→R
+    {7,3},{6,3},{5,3},{4,3},{3,3},{2,3},{1,3},{0,3}, // Row 3 R→L
+    {0,4},{1,4},{2,4},{3,4},{4,4},{5,4},{6,4},{7,4}, // Row 4 L→R
+    {7,5},{6,5},{5,5},{4,5},{3,5},{2,5},{1,5},{0,5}, // Row 5 R→L
+    {0,6},{1,6},{2,6},{3,6},{4,6},{5,6},{6,6},{7,6}, // Row 6 L→R
+    {7,7},{6,7},{5,7},{4,7},{3,7},{2,7},{1,7},{0,7}, // Row 7 R→L
+};
+
 HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
                                      uint8_t scl_pin, bool mock_mode)
     : m_i2cAddress(i2c_address)
@@ -141,6 +188,7 @@ HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
     , m_animationDuration(0)
     , m_lastFrameTime(0)
     , m_animationFrame(0)
+    , m_snakeProgress(0)
     , m_customAnimationCount(0)
     , m_activeCustomAnimation(nullptr)
     , m_i2cTransactionCount(0)
@@ -310,6 +358,7 @@ void HAL_LEDMatrix_8x8::startAnimation(AnimationPattern pattern, uint32_t durati
         case ANIM_ERROR:             patternName = "ERROR"; break;
         case ANIM_WIFI_CONNECTED:    patternName = "WIFI_CONNECTED"; break;
         case ANIM_WIFI_DISCONNECTED: patternName = "WIFI_DISCONNECTED"; break;
+        case ANIM_SNAKE_PROGRESS:    patternName = "SNAKE_PROGRESS"; break;
         case ANIM_CUSTOM:            patternName = "CUSTOM"; break;
     }
 
@@ -322,6 +371,24 @@ void HAL_LEDMatrix_8x8::stopAnimation() {
         m_currentPattern = ANIM_NONE;
         clear();
     }
+}
+
+void HAL_LEDMatrix_8x8::setSnakeProgress(uint8_t pixelCount) {
+    if (!m_initialized) return;
+    if (pixelCount > 64) pixelCount = 64;
+
+    m_snakeProgress = pixelCount;
+    m_currentPattern = ANIM_SNAKE_PROGRESS;
+
+    // Build frame buffer from snake lookup
+    uint8_t frame[8] = {0};
+    for (uint8_t i = 0; i < pixelCount; i++) {
+        uint8_t x = SNAKE_PIXELS[i].x;
+        uint8_t y = SNAKE_PIXELS[i].y;
+        frame[y] |= (1 << (7 - x));  // MSB-first format
+    }
+
+    drawFrame(frame);
 }
 
 bool HAL_LEDMatrix_8x8::isAnimating() const {
@@ -428,6 +495,22 @@ void HAL_LEDMatrix_8x8::mockSetFrame(const uint8_t frame[8]) {
     }
 }
 
+void HAL_LEDMatrix_8x8::showBatteryBitmap(uint8_t percentage) {
+    if (!m_initialized) return;
+
+    if (percentage >= 75) {
+        drawBitmap(BATTERY_FULL);
+    } else if (percentage >= 50) {
+        drawBitmap(BATTERY_75);
+    } else if (percentage >= 25) {
+        drawBitmap(BATTERY_50);
+    } else if (percentage >= 10) {
+        drawBitmap(BATTERY_33);
+    } else {
+        drawBitmap(BATTERY_10);
+    }
+}
+
 void HAL_LEDMatrix_8x8::updateAnimation() {
     if (!m_initialized || m_currentPattern == ANIM_NONE) {
         return;
@@ -461,6 +544,10 @@ void HAL_LEDMatrix_8x8::updateAnimation() {
             break;
         case ANIM_WIFI_DISCONNECTED:
             drawBitmap(WIFI_DISCONNECTED);
+            break;
+        case ANIM_SNAKE_PROGRESS:
+            // Static display - no animation update needed
+            // Progress is set explicitly via setSnakeProgress()
             break;
         case ANIM_CUSTOM:
             animateCustom();

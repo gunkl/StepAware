@@ -157,6 +157,9 @@ bool OTAManager::handleUploadStart(size_t totalSize) {
     m_status.totalSize = totalSize;
     m_status.bytesWritten = 0;
     m_status.progressPercent = 0;
+    if (m_progressCallback) {
+        m_progressCallback(0);
+    }
 
     LOG_INFO("OTA: Upload session started successfully");
     return true;
@@ -194,6 +197,10 @@ bool OTAManager::handleUploadChunk(uint8_t* data, size_t len) {
 
     m_status.bytesWritten += written;
     m_status.progressPercent = (m_status.bytesWritten * 100) / m_status.totalSize;
+    // Notify progress callback (Issue #30 - LED matrix display)
+    if (m_progressCallback) {
+        m_progressCallback(m_status.progressPercent);
+    }
 
     // Log progress at 25%, 50%, 75%
     if (m_status.progressPercent % 25 == 0 && m_status.progressPercent > 0) {

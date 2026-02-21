@@ -4,6 +4,7 @@
 #include "config_manager.h"
 #include "logger.h"
 #include "debug_logger.h"
+#include <WiFi.h>
 
 // ─── Mode-indicator bitmaps (8×8, MSB = leftmost pixel) ───
 
@@ -58,6 +59,8 @@ static const uint8_t MODE_INDICATOR_REBOOT[] = {
 
 #define MODE_INDICATOR_DURATION_MS   2000  // How long indicator bitmap stays on-screen
 #define REBOOT_FEEDBACK_DURATION_MS  2000  // How long reboot bitmap shows before restart
+#define POST_WARNING_WIFI_DISPLAY_MS    2000
+#define POST_WARNING_BATTERY_DISPLAY_MS 2000
 
 StateMachine::StateMachine(SensorManager* sensorManager,
                            HAL_LED* hazardLED,
@@ -89,6 +92,8 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_rebootTime(0)
     , m_lastMatrixWasAnimating(false)
     , m_powerManager(nullptr)
+    , m_postWarningPhase(PW_NONE)
+    , m_postWarningPhaseStart(0)
 {
     memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
 }
@@ -202,6 +207,11 @@ void StateMachine::update() {
     // Update warning LED if active
     updateWarning();
 
+    // Update post-warning info display (Issue #30)
+    if (m_postWarningPhase != PW_NONE) {
+        updatePostWarningDisplay();
+    }
+
     // Update status LED
     updateStatusLED();
 
@@ -261,6 +271,10 @@ void StateMachine::handleEvent(SystemEvent event) {
         case EVENT_TIMER_EXPIRED:
             DEBUG_LOG_STATE("StateMachine: Event TIMER_EXPIRED");
             stopWarning();
+            // Start post-warning info sequence (WiFi then battery)
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                startPostWarningSequence();
+            }
             break;
 
         case EVENT_BATTERY_LOW:
@@ -368,6 +382,9 @@ bool StateMachine::isWarningActive() {
 }
 
 void StateMachine::triggerWarning(uint32_t duration_ms) {
+    // Cancel any active post-warning display
+    m_postWarningPhase = PW_NONE;
+
     m_warningActive = true;
     m_warningStartTime = millis();
     m_warningDuration = duration_ms;
@@ -656,6 +673,7 @@ bool StateMachine::hasDisplayActivity() const {
     if (m_warningActive) return true;
     if (m_modeIndicatorActive) return true;
     if (m_rebootPending) return true;
+    if (m_postWarningPhase != PW_NONE) return true;
     for (int i = 0; i < 4; i++) {
         if (m_lastSensorDisplayState[i]) return true;
     }
@@ -800,4 +818,49 @@ void StateMachine::updateSensorStatusLEDs() {
             }
         }
     }
+}
+
+void StateMachine::startPostWarningSequence() {
+    m_postWarningPhase = PW_WIFI_STATUS;
+    m_postWarningPhaseStart = millis();
+
+    // Show WiFi status bitmap
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected) {
+        m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_WIFI_CONNECTED, POST_WARNING_WIFI_DISPLAY_MS);
+    } else {
+        m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_WIFI_DISCONNECTED, POST_WARNING_WIFI_DISPLAY_MS);
+    }
+    const char* statusStr = wifiConnected ? "connected" : "disconnected";
+    DEBUG_LOG_STATE("Post-warning: showing WiFi status (%s)", statusStr);
+}
+
+void StateMachine::updatePostWarningDisplay() {
+    uint32_t elapsed = millis() - m_postWarningPhaseStart;
+
+    if (m_postWarningPhase == PW_WIFI_STATUS && elapsed >= POST_WARNING_WIFI_DISPLAY_MS) {
+        // Transition to battery status
+        m_postWarningPhase = PW_BATTERY_STATUS;
+        m_postWarningPhaseStart = millis();
+        showPostWarningBattery();
+    } else if (m_postWarningPhase == PW_BATTERY_STATUS && elapsed >= POST_WARNING_BATTERY_DISPLAY_MS) {
+        // Done - return to idle
+        m_postWarningPhase = PW_NONE;
+        if (m_ledMatrix) {
+            m_ledMatrix->stopAnimation();
+        }
+        DEBUG_LOG_STATE("Post-warning: info sequence complete");
+    }
+}
+
+void StateMachine::showPostWarningBattery() {
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) return;
+
+    uint8_t percentage = 50;  // Default if no power manager
+    if (m_powerManager) {
+        percentage = m_powerManager->getBatteryPercentage();
+    }
+
+    m_ledMatrix->showBatteryBitmap(percentage);
+    DEBUG_LOG_STATE("Post-warning: showing battery status (%u%%)", percentage);
 }

@@ -22,6 +22,10 @@ Detect a human entering a specific area (e.g., hallway) and notify them of a haz
 - **Motion Detection**: AM312 PIR sensor with 12m range and 65° detection angle
 - **LED Warning**: Bright, visible, repeated blinking for 15+ seconds when motion detected
 - **8x8 LED Matrix Display** (Optional): Animated visual warnings and status displays with custom animation support
+  - **Boot Progress**: Snake-fill pattern shows initialization progress across 13 milestones (0-64 pixels)
+  - **WiFi Status**: Connected/disconnected emblem shown on first WiFi connect each boot
+  - **Post-Alert Info**: After motion alert, displays WiFi status (2s) then battery level (2s)
+  - **OTA Progress**: Snake-fill visualization during firmware upload (0% to 100%)
 - **Multiple Operating Modes**: OFF, Continuous ON, Motion Detection, Night Light modes
   - **OFF Mode**: Deep sleep with button wake capability (maximum power savings)
   - **Continuous ON**: Always flashing hazard warning
