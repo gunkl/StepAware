@@ -284,9 +284,16 @@ void DirectionDetector::handleFarClear()
 {
     DEBUG_LOG_SENSOR("DirectionDetector: FAR sensor CLEARED (state=%s)", getStateName());
 
-    // Far sensor cleared - update state based on near sensor
+    // In FAR_ONLY: don't reset immediately. Keep state latched so near sensor
+    // can still trigger APPROACHING within the confirmation window.
+    // processStateMachine() handles the timeout if near never fires.
+    // Fix for Issue #51: premature reset prevented wake-from-sleep alerts.
+    if (m_currentState == DIR_FAR_ONLY) {
+        return;
+    }
+
+    // For other states: reset if both sensors are now clear
     if (!m_nearSensor->motionDetected()) {
-        // Both sensors now clear - reset to IDLE
         if (m_currentState != DIR_IDLE && !m_approachingConfirmed) {
             DEBUG_LOG_SENSOR("DirectionDetector: Both sensors cleared - resetting to IDLE");
             resetState();
@@ -331,9 +338,13 @@ void DirectionDetector::processStateMachine()
                 m_currentState = DIR_BOTH_ACTIVE;
             }
             else if (!farActive) {
-                // Far cleared without near ever triggering
-                DEBUG_LOG_SENSOR("DirectionDetector: Far cleared without near trigger - resetting");
-                resetState();
+                // Far cleared — keep FAR_ONLY latched until confirmation window
+                // expires so near can still trigger APPROACHING (Issue #51).
+                uint32_t elapsed = millis() - m_lastFarTriggerTime;
+                if (elapsed > m_confirmationWindowMs) {
+                    DEBUG_LOG_SENSOR("DirectionDetector: Confirmation window expired (%ums) - resetting", elapsed);
+                    resetState();
+                }
             }
             break;
 
