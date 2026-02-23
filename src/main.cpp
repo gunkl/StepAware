@@ -1040,6 +1040,13 @@ void setup() {
     // stale (WL_CONNECTED) for 1-21+ min after wake. Calling reconnect() here
     // bypasses the passive polling entirely and ensures WiFi is up within seconds.
     g_power.onWake([]() {
+        // Issue #52: Seed direction detector with wake context BEFORE first update().
+        // The far PIR (GPIO4) triggered the wake — tell DirectionDetector so it can
+        // detect APPROACHING even if both sensors are already HIGH when update() runs.
+        if (directionDetector && g_power.getState() == PowerManager::STATE_MOTION_ALERT) {
+            directionDetector->seedFarTrigger(500);
+        }
+
         const char* wifiStateStr = WiFiManager::getStateName(wifiManager.getState());
         DEBUG_LOG_SYSTEM("Post-wake: WiFi state=%s, triggering reconnect", wifiStateStr);
         g_debugLogger.flush();

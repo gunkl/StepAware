@@ -187,6 +187,19 @@ public:
      */
     void setPatternTimeoutMs(uint32_t timeout_ms);
 
+    /**
+     * @brief Seed far sensor trigger from external context (e.g., wake from sleep)
+     *
+     * Pre-sets FAR_ONLY state with a backdated timestamp so that a subsequent
+     * near trigger in the same update() call won't be rejected as simultaneous.
+     * Used when the far PIR woke the device from light sleep — the temporal
+     * far→near sequence happened while the CPU was halted.
+     *
+     * @param offsetMs How far back to backdate the trigger (default: 500ms).
+     *                 Must be > simultaneousThresholdMs and < confirmationWindowMs.
+     */
+    void seedFarTrigger(uint32_t offsetMs = 500);
+
     // =========================================================================
     // Debugging
     // =========================================================================

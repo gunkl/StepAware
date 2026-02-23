@@ -154,6 +154,19 @@ void DirectionDetector::setPatternTimeoutMs(uint32_t timeout_ms)
     DEBUG_LOG_SENSOR("DirectionDetector: Pattern timeout set to %u ms", timeout_ms);
 }
 
+void DirectionDetector::seedFarTrigger(uint32_t offsetMs)
+{
+    uint32_t now = millis();
+    m_currentState = DIR_FAR_ONLY;
+    m_stateStartTime = now - offsetMs;
+    m_lastFarTriggerTime = now - offsetMs;
+    m_lastFarTriggerMicros = micros() - (offsetMs * 1000);
+    m_lastFarTriggerLoopCount = m_updateCallCount;
+    m_lastFarState = true;  // Suppress rising edge re-detection in next update()
+
+    DEBUG_LOG_SENSOR("DirectionDetector: Seeded FAR trigger from wake (offset=%ums, state=FAR_ONLY)", offsetMs);
+}
+
 // =========================================================================
 // Debugging
 // =========================================================================
