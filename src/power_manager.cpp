@@ -757,6 +757,17 @@ bool PowerManager::shouldEnterSleep() {
         return false;
     }
 
+    // Block sleep for always-on modes (CONTINUOUS_ON) — do not rely solely
+    // on animation state, which may be temporarily interrupted (battery notice).
+    if (m_stateMachine && m_stateMachine->isAlwaysOnMode()) {
+        static uint32_t lastAlwaysOnLog = 0;
+        if (millis() - lastAlwaysOnLog >= 60000) {
+            DEBUG_LOG_SYSTEM_VERBOSE("Sleep check: BLOCKED — always-on mode active");
+            lastAlwaysOnLog = millis();
+        }
+        return false;
+    }
+
     // A2: Block sleep if the display has visible activity (animation, warning, sensor
     // status LED on, mode indicator, reboot pending).  The idle timer continues to
     // count — once activity clears, the existing elapsed time still drives sleep.

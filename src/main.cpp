@@ -626,6 +626,13 @@ static bool pendingBatteryLow = false;
  * Defers behind a motion alert animation rather than interrupting it.
  */
 void onBatteryLowCallback() {
+    // In CONTINUOUS_ON: show battery notice directly — hazard animation
+    // will self-heal via processMode() after the 2s battery animation ends
+    if (stateMachine && stateMachine->isAlwaysOnMode()) {
+        showBatteryStatus(g_power.getBatteryPercentage());
+        return;
+    }
+    // Other modes: defer if motion alert is currently playing
     if (ledMatrix && ledMatrix->isAnimating() &&
         ledMatrix->getPattern() == HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT) {
         pendingBatteryLow = true;  // Play after warning finishes

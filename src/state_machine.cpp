@@ -536,7 +536,14 @@ void StateMachine::processMode() {
             break;
 
         case CONTINUOUS_ON:
-            // LED pattern is handled by update()
+            // Self-healing: restart hazard animation if it stopped
+            // (e.g., after battery notice animation finished)
+            if (m_ledMatrix && m_ledMatrix->isReady() &&
+                !m_modeIndicatorActive &&
+                !m_ledMatrix->isAnimating()) {
+                m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_MOTION_ALERT, 0);
+                LOG_INFO("CONTINUOUS_ON: self-healed — restarted hazard animation");
+            }
             break;
 
         case MOTION_DETECT:

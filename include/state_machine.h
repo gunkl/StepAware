@@ -232,6 +232,12 @@ public:
     bool hasDisplayActivity() const;
 
     /**
+     * @brief Check if current mode requires permanent display activity (no sleep).
+     * @return true if in CONTINUOUS_ON mode
+     */
+    bool isAlwaysOnMode() const { return m_currentMode == CONTINUOUS_ON; }
+
+    /**
      * @brief Clear the LED matrix display (pre-sleep defensive clear).
      *
      * Stops any running animation and clears all pixels. Called by PowerManager
