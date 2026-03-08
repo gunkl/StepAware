@@ -329,6 +329,9 @@ private:
     float m_errorRate;
     uint32_t m_lastErrorRateUpdate;
 
+    // Periodic re-init tracking (for I2C recovery when begin() fails at boot)
+    uint32_t m_lastReinitAttempt;
+
     // Mock mode
     uint8_t m_mockFrame[8];
 

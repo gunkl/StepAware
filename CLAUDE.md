@@ -619,6 +619,39 @@ DEBUG_LOG_SYSTEM("Time: %lu.%lu", seconds, deciseconds);  // ✅ Simple variable
 - Serial.printf(), logger.log(), etc.
 - Any function using variadic arguments (...) or va_list
 
+### Observability Rule: Always Log Success AND Failure
+
+Every code change that involves retry logic, initialization, recovery, or any
+operation that can succeed or fail MUST include DEBUG-level logging for BOTH
+outcomes. This ensures future log downloads can confirm whether the change is
+working as intended.
+
+**BAD — silent success:**
+```cpp
+if (esp_task_wdt_init(8000, true) != ESP_OK) {
+    int errInt = (int)err;
+    DEBUG_LOG_SYSTEM_DEBUG("TWDT init failed: err=%d", errInt);
+}
+// success case: nothing logged — invisible in future diagnosis
+```
+
+**GOOD — both paths logged:**
+```cpp
+esp_err_t err = esp_task_wdt_init(8000, true);
+int errInt = (int)err;
+if (err != ESP_OK) {
+    DEBUG_LOG_SYSTEM_DEBUG("TWDT init failed: err=%d", errInt);
+} else {
+    DEBUG_LOG_SYSTEM_DEBUG("TWDT init succeeded");
+}
+```
+
+This rule applies to: I2C operations, WiFi reconnects, TWDT lifecycle,
+file system operations, sensor initialization, and any retry logic.
+
+(Learned from Issue #54: the TWDT reinit logged its return code but didn't
+explicitly log success, making it hard to confirm the fix was active.)
+
 ### GPIO / pinMode Best Practices
 
 **CRITICAL: ESP32 Arduino framework `pinMode` constants are bitmasks, NOT sequential integers**

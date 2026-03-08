@@ -1043,7 +1043,38 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
         DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: TWDT deinitialized successfully");
     } else {
         int errInt = (int)deinitErr;
-        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: TWDT deinit FAILED err=%d", errInt);
+        DEBUG_LOG_SYSTEM_DEBUG("Pre-sleep: TWDT deinit failed (err=%d), probing for remaining subscribers...", errInt);
+        g_debugLogger.flush();
+
+        // Re-probe all known subscribers (same list as above, plus loopTask and IDLE)
+        const char* retryTasks[] = {"esp_timer", "wifi", "tiT", "sys_evt",
+                                    "async_tcp", "arduino_events", "mdns"};
+        // Check loopTask (NULL handle = current task)
+        if (esp_task_wdt_status(NULL) == ESP_OK) {
+            const char* taskName = "loopTask";
+            DEBUG_LOG_SYSTEM_DEBUG("TWDT deinit retry: found '%s' still subscribed, removing", taskName);
+            esp_task_wdt_delete(NULL);
+        }
+        // Check IDLE via known handle
+        TaskHandle_t idleHandle = xTaskGetIdleTaskHandleForCPU(0);
+        if (idleHandle != NULL && esp_task_wdt_status(idleHandle) == ESP_OK) {
+            const char* taskName = "IDLE";
+            DEBUG_LOG_SYSTEM_DEBUG("TWDT deinit retry: found '%s' still subscribed, removing", taskName);
+            esp_task_wdt_delete(idleHandle);
+        }
+        // Check named system tasks
+        for (int i = 0; i < 7; i++) {
+            TaskHandle_t th = xTaskGetHandle(retryTasks[i]);
+            if (th != NULL && esp_task_wdt_status(th) == ESP_OK) {
+                const char* taskName = retryTasks[i];
+                DEBUG_LOG_SYSTEM_DEBUG("TWDT deinit retry: found '%s' still subscribed, removing", taskName);
+                esp_task_wdt_delete(th);
+            }
+        }
+        // Retry deinit after removing remaining subscribers
+        esp_err_t retryErr = esp_task_wdt_deinit();
+        int retryErrInt = (int)retryErr;
+        DEBUG_LOG_SYSTEM_DEBUG("TWDT deinit retry result: err=%d", retryErrInt);
     }
     g_debugLogger.flush();
 
@@ -1087,13 +1118,32 @@ void PowerManager::enterLightSleep(uint32_t duration_ms, const char* reason) {
     // there is no idle_core_mask parameter. The old API auto-subscribes IDLE
     // based on CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0, so we call
     // disableCore0WDT() immediately after to remove IDLE.
+    // Retry up to 3 times — deinit before sleep may have left stale state (Issue #54).
     {
-        esp_err_t initErr = esp_task_wdt_init(8000, true);
-        disableCore0WDT();       // Remove IDLE (auto-subscribed by init)
-        esp_task_wdt_add(NULL);  // Re-subscribe loopTask
-        int errInt = (int)initErr;
-        DEBUG_LOG_SYSTEM_DEBUG("Wake step 2/7: TWDT reinit err=%d, loopTask re-added, IDLE removed", errInt);
-        g_debugLogger.flush();
+        esp_err_t initErr = ESP_FAIL;
+        int attempt = 0;
+        for (attempt = 1; attempt <= 3; attempt++) {
+            initErr = esp_task_wdt_init(8000, true);
+            int errInt = (int)initErr;
+            DEBUG_LOG_SYSTEM_DEBUG("TWDT reinit: attempt %d/3, err=%d", attempt, errInt);
+            g_debugLogger.flush();
+            if (initErr == ESP_OK) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        if (initErr == ESP_OK) {
+            disableCore0WDT();       // Remove IDLE (auto-subscribed by init)
+            esp_task_wdt_add(NULL);  // Re-subscribe loopTask
+            DEBUG_LOG_SYSTEM_DEBUG("Wake step 2/7: TWDT reinit OK (attempt %d), loopTask re-added, IDLE removed", attempt);
+            g_debugLogger.flush();
+        } else {
+            int errInt = (int)initErr;
+            DEBUG_LOG_SYSTEM("CRITICAL: TWDT reinit failed after 3 retries (last err=%d), forcing restart", errInt);
+            g_debugLogger.flush();
+            esp_restart();
+        }
     }
 
     // Step 3: Log wake event

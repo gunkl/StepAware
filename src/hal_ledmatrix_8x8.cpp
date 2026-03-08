@@ -147,6 +147,7 @@ HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
     , m_i2cFailureCount(0)
     , m_errorRate(-1.0f)
     , m_lastErrorRateUpdate(0)
+    , m_lastReinitAttempt(0)
 #if !MOCK_HARDWARE
     , m_matrix(nullptr)
 #endif
@@ -183,22 +184,43 @@ bool HAL_LEDMatrix_8x8::begin() {
     // Initialize I2C
     Wire.begin(m_sdaPin, m_sclPin, I2C_FREQUENCY);
 
-    // Create matrix object
-    m_matrix = new Adafruit_8x8matrix();
-    if (!m_matrix) {
-        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to allocate matrix object");
-        return false;
+    // Initialize matrix with retry logic (up to 3 attempts)
+    // I2C bus may be intermittently unavailable at boot; retrying after a short
+    // delay recovers without requiring a full power cycle.
+    bool beginSuccess = false;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C init attempt %d/3 for HT16K33 at 0x%02X",
+                      attempt, m_i2cAddress);
+
+        // Re-create matrix object on each attempt so the Adafruit library
+        // starts with a clean internal state.
+        if (m_matrix) {
+            delete m_matrix;
+            m_matrix = nullptr;
+        }
+        m_matrix = new Adafruit_8x8matrix();
+        if (!m_matrix) {
+            DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to allocate matrix object on attempt %d", attempt);
+            return false;
+        }
+
+        m_i2cTransactionCount++;
+        beginSuccess = m_matrix->begin(m_i2cAddress);
+
+        if (beginSuccess) {
+            DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C init: success on attempt %d", attempt);
+            break;
+        }
+
+        m_i2cFailureCount++;
+        if (attempt < 3) {
+            delay(200);  // 200 ms for I2C bus to settle before next attempt
+        }
     }
 
-    // Initialize matrix
-    bool beginSuccess = m_matrix->begin(m_i2cAddress);
-
-    // Track initial I2C transaction
-    m_i2cTransactionCount++;
     if (!beginSuccess) {
-        m_i2cFailureCount++;
-        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: Failed to initialize HT16K33 at address 0x%02X (check wiring/address)",
-                  m_i2cAddress);
+        DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C init: all 3 attempts failed for HT16K33 at 0x%02X",
+                      m_i2cAddress);
         delete m_matrix;
         m_matrix = nullptr;
         return false;
@@ -225,6 +247,26 @@ bool HAL_LEDMatrix_8x8::begin() {
 
 void HAL_LEDMatrix_8x8::update() {
     if (!m_initialized) {
+        // Periodically attempt to re-initialize the matrix if it failed at boot.
+        // This recovers from transient I2C bus unavailability without needing a
+        // full power cycle. Only applies to real hardware (non-mock) mode.
+        if (!m_mockMode) {
+#if !MOCK_HARDWARE
+            uint32_t now = millis();
+            uint32_t elapsed = now - m_lastReinitAttempt;
+            bool intervalElapsed = (m_lastReinitAttempt == 0) || (elapsed >= 30000);
+            if (intervalElapsed) {
+                m_lastReinitAttempt = now;
+                DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C periodic re-init attempt");
+                bool ok = begin();
+                if (ok) {
+                    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C periodic re-init: SUCCESS — matrix recovered");
+                } else {
+                    DEBUG_LOG_LED("HAL_LEDMatrix_8x8: I2C periodic re-init: failed, will retry in 30s");
+                }
+            }
+#endif
+        }
         return;
     }
 

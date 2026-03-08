@@ -1436,6 +1436,29 @@ void loop() {
     }
 #endif
 
+    // Issue #54: Verify TWDT is protecting loopTask after each wake cycle.
+    // Runs once per wake (while isPostWakeFlushActive()), resets for the next wake.
+    // Uses esp_task_wdt_status(NULL) — NULL means current task (loopTask).
+#ifndef MOCK_MODE
+    {
+        static bool twdtVerifiedThisWake = false;
+        if (g_power.isPostWakeFlushActive() && !twdtVerifiedThisWake) {
+            twdtVerifiedThisWake = true;
+            esp_err_t loopStatus = esp_task_wdt_status(NULL);
+            int statusInt = (int)loopStatus;
+            const char* statusStr = "NO";
+            if (loopStatus == ESP_OK) {
+                statusStr = "YES";
+            }
+            DEBUG_LOG_SYSTEM_DEBUG("Issue #54: Post-wake TWDT verify: loopTask subscribed=%s (status=%d)", statusStr, statusInt);
+            g_debugLogger.flush();
+        }
+        if (!g_power.isPostWakeFlushActive()) {
+            twdtVerifiedThisWake = false;
+        }
+    }
+#endif
+
     // Issue #44 diagnostic: 1-second heartbeat for 15s after light-sleep wake.
     // Heartbeat stops → loopTask is fully starved by a priority ≥ 2 task.
     // Heartbeat continues → loopTask IS running, IDLE just gets re-subscribed too fast.
@@ -1446,6 +1469,19 @@ void loop() {
             unsigned long freeHeap = (unsigned long)ESP.getFreeHeap();
             DEBUG_LOG_SYSTEM_DEBUG("Post-wake heartbeat (heap=%lu)", freeHeap);
             g_debugLogger.flush();
+        }
+    }
+
+    // Issue #54: Periodic heap monitoring — detects gradual leaks over multi-day operation.
+    // Log every 60s; use DEBUG level to avoid spamming operational logs.
+    {
+        static uint32_t lastHeapLog = 0;
+        if (millis() - lastHeapLog >= 60000) {
+            lastHeapLog = millis();
+            unsigned long freeHeap = (unsigned long)ESP.getFreeHeap();
+            unsigned long minHeap = (unsigned long)ESP.getMinFreeHeap();
+            unsigned long maxAlloc = (unsigned long)ESP.getMaxAllocHeap();
+            DEBUG_LOG_SYSTEM_DEBUG("Heap monitor: free=%lu min=%lu maxAlloc=%lu", freeHeap, minHeap, maxAlloc);
         }
     }
 
@@ -1481,10 +1517,28 @@ void loop() {
     }
 
     // Update WiFi manager (handles connection state, reconnection)
-    wifiManager.update();
+    // Issue #54: Time WiFi update to detect blocking >100ms (H3 hypothesis).
+    {
+        uint32_t wifiStart = millis();
+        wifiManager.update();
+        uint32_t wifiDuration = millis() - wifiStart;
+        if (wifiDuration > 100) {
+            unsigned long dur = (unsigned long)wifiDuration;
+            DEBUG_LOG_SYSTEM_DEBUG("WiFi update took %lums (>100ms threshold)", dur);
+        }
+    }
 
     // Update NTP manager (handles sync completion, hourly checks, daily resync)
-    ntpManager.update();
+    // Issue #54: Time NTP update to detect blocking >100ms (H3 hypothesis).
+    {
+        uint32_t ntpStart = millis();
+        ntpManager.update();
+        uint32_t ntpDuration = millis() - ntpStart;
+        if (ntpDuration > 100) {
+            unsigned long dur = (unsigned long)ntpDuration;
+            DEBUG_LOG_SYSTEM_DEBUG("NTP update took %lums (>100ms threshold)", dur);
+        }
+    }
 
     // Update recalibration scheduler (smart nightly PIR recal)
     if (recalScheduler) {
