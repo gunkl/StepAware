@@ -114,9 +114,27 @@ public:
      */
     String getCurrentPartition() const;
 
+    /**
+     * @brief Progress callback type for OTA display updates
+     *
+     * @param progressPercent Current progress (0-100)
+     * @param context User-provided context pointer
+     */
+    typedef void (*ProgressCallback)(uint8_t progressPercent, void* context);
+
+    /**
+     * @brief Set progress callback for display updates
+     *
+     * @param callback Function to call on progress update
+     * @param context Context pointer passed to callback
+     */
+    void setProgressCallback(ProgressCallback callback, void* context = nullptr);
+
 private:
     Status m_status;           ///< Current upload status
     bool m_firstChunk;         ///< Flag to track first chunk (for validation)
+    ProgressCallback m_progressCallback;   ///< Progress display callback
+    void* m_progressContext;               ///< Progress callback context
 
     /**
      * @brief Set error message

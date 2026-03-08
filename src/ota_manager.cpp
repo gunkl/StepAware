@@ -9,8 +9,15 @@
 
 OTAManager::OTAManager()
     : m_firstChunk(false)
+    , m_progressCallback(nullptr)
+    , m_progressContext(nullptr)
 {
     memset(&m_status, 0, sizeof(m_status));
+}
+
+void OTAManager::setProgressCallback(ProgressCallback callback, void* context) {
+    m_progressCallback = callback;
+    m_progressContext = context;
 }
 
 bool OTAManager::begin() {
@@ -194,6 +201,11 @@ bool OTAManager::handleUploadChunk(uint8_t* data, size_t len) {
 
     m_status.bytesWritten += written;
     m_status.progressPercent = (m_status.bytesWritten * 100) / m_status.totalSize;
+
+    // Invoke progress callback for display updates
+    if (m_progressCallback) {
+        m_progressCallback(m_status.progressPercent, m_progressContext);
+    }
 
     // Log progress at 25%, 50%, 75%
     if (m_status.progressPercent % 25 == 0 && m_status.progressPercent > 0) {

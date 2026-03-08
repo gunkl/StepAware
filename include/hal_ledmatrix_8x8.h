@@ -165,6 +165,36 @@ public:
     bool isReady() const { return m_initialized; }
 
     /**
+     * @brief Set snake progress display (boot/OTA progress)
+     *
+     * Draws pixelCount pixels in snake order (L→R even rows, R→L odd rows).
+     * Direct draw call - does not set animation pattern, won't conflict with update().
+     *
+     * @param pixelCount Number of pixels to light (0-64)
+     */
+    void setSnakeProgress(uint8_t pixelCount);
+
+    /**
+     * @brief Show battery level bitmap (healthy range)
+     *
+     * Selects and displays appropriate battery bitmap based on percentage.
+     * >75%: FULL, >50%: 75%, >25%: 50%, ≤25%: uses existing low battery bitmaps.
+     *
+     * @param percentage Battery percentage (0-100)
+     */
+    void showBatteryBitmap(uint8_t percentage);
+
+    /**
+     * @brief Show WiFi connected icon (static draw, no animation)
+     */
+    void showWifiConnected();
+
+    /**
+     * @brief Show WiFi disconnected icon (static draw, no animation)
+     */
+    void showWifiDisconnected();
+
+    /**
      * @brief Mock mode: Set frame buffer
      *
      * @param frame 8-byte frame buffer

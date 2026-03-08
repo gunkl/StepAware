@@ -127,6 +127,61 @@ static const uint8_t BATTERY_EMPTY[] = {
     0b01111110   // └──────┘
 };
 
+// Battery healthy-level bitmaps (for post-alert info display)
+static const uint8_t BATTERY_FULL[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01111110,  // │██████│ (full)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_75[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │ (empty top)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+static const uint8_t BATTERY_50[] = {
+    0b00011000,  // Terminal at top
+    0b01111110,  // ┌──────┐
+    0b01000010,  // │      │ (empty)
+    0b01000010,  // │      │ (empty)
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110,  // │██████│
+    0b01111110   // └──────┘
+};
+
+// Snake-fill order: maps pixel index (0-63) to (row, col)
+// Even rows: L→R (col 0→7), Odd rows: R→L (col 7→0)
+static const uint8_t SNAKE_ORDER[64][2] = {
+    // Row 0, left-to-right
+    {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},
+    // Row 1, right-to-left
+    {1,7},{1,6},{1,5},{1,4},{1,3},{1,2},{1,1},{1,0},
+    // Row 2, left-to-right
+    {2,0},{2,1},{2,2},{2,3},{2,4},{2,5},{2,6},{2,7},
+    // Row 3, right-to-left
+    {3,7},{3,6},{3,5},{3,4},{3,3},{3,2},{3,1},{3,0},
+    // Row 4, left-to-right
+    {4,0},{4,1},{4,2},{4,3},{4,4},{4,5},{4,6},{4,7},
+    // Row 5, right-to-left
+    {5,7},{5,6},{5,5},{5,4},{5,3},{5,2},{5,1},{5,0},
+    // Row 6, left-to-right
+    {6,0},{6,1},{6,2},{6,3},{6,4},{6,5},{6,6},{6,7},
+    // Row 7, right-to-left
+    {7,7},{7,6},{7,5},{7,4},{7,3},{7,2},{7,1},{7,0}
+};
+
 HAL_LEDMatrix_8x8::HAL_LEDMatrix_8x8(uint8_t i2c_address, uint8_t sda_pin,
                                      uint8_t scl_pin, bool mock_mode)
     : m_i2cAddress(i2c_address)
@@ -661,6 +716,73 @@ void HAL_LEDMatrix_8x8::writeDisplay() {
         }
 #endif
     }
+}
+
+// ============================================================================
+// Snake Progress & Status Display (Issue #55 / #30)
+// ============================================================================
+
+void HAL_LEDMatrix_8x8::setSnakeProgress(uint8_t pixelCount) {
+    if (!m_initialized) {
+        return;
+    }
+    if (pixelCount > 64) {
+        pixelCount = 64;
+    }
+
+    // Build frame from scratch using snake order
+    uint8_t frame[8];
+    memset(frame, 0, sizeof(frame));
+    for (uint8_t i = 0; i < pixelCount; i++) {
+        uint8_t row = SNAKE_ORDER[i][0];
+        uint8_t col = SNAKE_ORDER[i][1];
+        frame[row] |= (1 << (7 - col));  // MSB-first: bit 7 = leftmost pixel (x=0)
+    }
+    drawFrame(frame);
+
+    // Log at key milestones to avoid flooding
+    if (pixelCount == 0 || pixelCount == 16 || pixelCount == 32 ||
+        pixelCount == 48 || pixelCount == 64) {
+        DEBUG_LOG_SYSTEM_DEBUG("Snake progress: %u/64 pixels drawn", pixelCount);
+    }
+}
+
+void HAL_LEDMatrix_8x8::showBatteryBitmap(uint8_t percentage) {
+    if (!m_initialized) {
+        return;
+    }
+
+    const char* bracket = "FULL";
+    if (percentage > 75) {
+        drawBitmap(BATTERY_FULL);
+        bracket = "FULL";
+    } else if (percentage > 50) {
+        drawBitmap(BATTERY_75);
+        bracket = "75%";
+    } else if (percentage > 25) {
+        drawBitmap(BATTERY_50);
+        bracket = "50%";
+    } else {
+        drawBitmap(BATTERY_33);
+        bracket = "33%";
+    }
+    DEBUG_LOG_SYSTEM_DEBUG("Battery bitmap: %u%% -> %s", percentage, bracket);
+}
+
+void HAL_LEDMatrix_8x8::showWifiConnected() {
+    if (!m_initialized) {
+        return;
+    }
+    drawBitmap(WIFI_CONNECTED);
+    DEBUG_LOG_SYSTEM_DEBUG("WiFi connected icon displayed");
+}
+
+void HAL_LEDMatrix_8x8::showWifiDisconnected() {
+    if (!m_initialized) {
+        return;
+    }
+    drawBitmap(WIFI_DISCONNECTED);
+    DEBUG_LOG_SYSTEM_DEBUG("WiFi disconnected icon displayed");
 }
 
 // ============================================================================

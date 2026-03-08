@@ -2184,6 +2184,22 @@ void WebAPI::handleOTAUpload(AsyncWebServerRequest* request, const String& filen
             }
             return;
         }
+
+        // Wire OTA progress to LED matrix for visual feedback (Issue #55 / #30)
+        if (m_ledMatrix && m_ledMatrix->isReady() && m_otaManager) {
+            m_otaManager->setProgressCallback(
+                [](uint8_t pct, void* ctx) {
+                    HAL_LEDMatrix_8x8* matrix = static_cast<HAL_LEDMatrix_8x8*>(ctx);
+                    if (matrix && matrix->isReady()) {
+                        uint8_t pixels = (uint8_t)((uint32_t)pct * 64 / 100);
+                        matrix->setSnakeProgress(pixels);
+                    }
+                },
+                m_ledMatrix
+            );
+            m_ledMatrix->setSnakeProgress(0);  // Start with empty display
+            DEBUG_LOG_SYSTEM_DEBUG("OTA: LED matrix progress display wired");
+        }
     }
 
     // Write chunk
@@ -2202,6 +2218,11 @@ void WebAPI::handleOTAUpload(AsyncWebServerRequest* request, const String& filen
     if (final) {
         if (m_otaManager->handleUploadComplete()) {
             LOG_INFO("OTA: Firmware upload completed successfully");
+
+            // Show full progress on matrix
+            if (m_ledMatrix && m_ledMatrix->isReady()) {
+                m_ledMatrix->setSnakeProgress(64);  // Full bar
+            }
 
             StaticJsonDocument<256> doc;
             doc["success"] = true;

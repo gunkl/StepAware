@@ -89,6 +89,9 @@ StateMachine::StateMachine(SensorManager* sensorManager,
     , m_rebootTime(0)
     , m_lastMatrixWasAnimating(false)
     , m_powerManager(nullptr)
+    , m_postWarnPhase(POST_WARN_IDLE)
+    , m_postWarnPhaseEndTime(0)
+    , m_wifiConnected(false)
 {
     memset(m_lastSensorDisplayState, 0, sizeof(m_lastSensorDisplayState));
 }
@@ -408,6 +411,78 @@ void StateMachine::stopWarning() {
     }
 
     DEBUG_LOG_STATE("StateMachine: Warning stopped");
+
+    // Start post-warning info sequence (only in MOTION_DETECT mode)
+    // Don't start when exiting mode (stopWarning called from exitMode)
+    if (m_currentMode == MOTION_DETECT && m_ledMatrix && m_ledMatrix->isReady()) {
+        m_postWarnPhase = POST_WARN_WIFI;
+        m_postWarnPhaseEndTime = millis() + MATRIX_POST_WARN_WIFI_MS;
+
+        // Show WiFi status bitmap
+        if (m_wifiConnected) {
+            m_ledMatrix->showWifiConnected();
+        } else {
+            m_ledMatrix->showWifiDisconnected();
+        }
+
+        const char* wifiStr = m_wifiConnected ? "connected" : "disconnected";
+        DEBUG_LOG_SYSTEM_DEBUG("Post-warn: starting phase WIFI (wifi=%s)", wifiStr);
+    }
+}
+
+void StateMachine::setWiFiConnected(bool connected) {
+    m_wifiConnected = connected;
+}
+
+void StateMachine::updatePostWarningPhase() {
+    if (m_postWarnPhase == POST_WARN_IDLE) {
+        return;
+    }
+    if (!m_ledMatrix || !m_ledMatrix->isReady()) {
+        m_postWarnPhase = POST_WARN_IDLE;
+        return;
+    }
+
+    // Check if current phase timer has expired
+    if (millis() < m_postWarnPhaseEndTime) {
+        return;  // Phase still active
+    }
+
+    // Advance to next phase
+    if (m_postWarnPhase == POST_WARN_WIFI) {
+        // Transition: WIFI -> BATTERY
+        m_postWarnPhase = POST_WARN_BATTERY;
+        m_postWarnPhaseEndTime = millis() + MATRIX_POST_WARN_BATTERY_MS;
+
+        // Show battery level
+        uint8_t battPct = 50;  // Default if no power manager
+        if (m_powerManager) {
+            battPct = m_powerManager->getBatteryStatus().percentage;
+        }
+
+        if (battPct < 30) {
+            // Low battery — use existing animated drain display
+            m_ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_BATTERY_LOW, MATRIX_POST_WARN_BATTERY_MS);
+        } else {
+            // Healthy battery — show static level bitmap
+            m_ledMatrix->showBatteryBitmap(battPct);
+        }
+
+        DEBUG_LOG_SYSTEM_DEBUG("Post-warn: WIFI -> BATTERY (battery=%u%%)", battPct);
+
+    } else if (m_postWarnPhase == POST_WARN_BATTERY) {
+        // Transition: BATTERY -> IDLE (sequence complete)
+        m_postWarnPhase = POST_WARN_IDLE;
+
+        // Stop any animation and clear display
+        if (m_ledMatrix->isAnimating()) {
+            m_ledMatrix->stopAnimation();
+        } else {
+            m_ledMatrix->clear();
+        }
+
+        DEBUG_LOG_SYSTEM_DEBUG("Post-warn: BATTERY -> IDLE (sequence complete)");
+    }
 }
 
 uint32_t StateMachine::getUptimeSeconds() {
@@ -621,6 +696,8 @@ void StateMachine::handleMotionDetection() {
 
 void StateMachine::updateWarning() {
     if (!m_warningActive) {
+        // Update post-warning info display if active
+        updatePostWarningPhase();
         return;
     }
 
@@ -654,13 +731,15 @@ void StateMachine::setDirectionDetector(DirectionDetector* detector) {
 
 void StateMachine::setPowerManager(PowerManager* pm) {
     m_powerManager = pm;
-    DEBUG_LOG_STATE("StateMachine: PowerManager reference %s", pm ? "SET" : "CLEARED");
+    const char* pmStatus = pm ? "SET" : "CLEARED";
+    DEBUG_LOG_STATE("StateMachine: PowerManager reference %s", pmStatus);
 }
 
 bool StateMachine::hasDisplayActivity() const {
     if (!m_ledMatrix) return false;
     if (m_ledMatrix->isAnimating()) return true;
     if (m_warningActive) return true;
+    if (m_postWarnPhase != POST_WARN_IDLE) return true;
     if (m_modeIndicatorActive) return true;
     if (m_rebootPending) return true;
     for (int i = 0; i < 4; i++) {
@@ -714,8 +793,9 @@ void StateMachine::updateSensorStatusLEDs() {
         return;
     }
 
-    // Matrix is "busy" when an animation, mode indicator, or reboot bitmap owns the display
-    bool matrixBusy = m_ledMatrix->isAnimating() || m_modeIndicatorActive || m_rebootPending;
+    // Matrix is "busy" when an animation, mode indicator, reboot bitmap, or post-warn sequence owns the display
+    bool matrixBusy = m_ledMatrix->isAnimating() || m_modeIndicatorActive || m_rebootPending
+                      || (m_postWarnPhase != POST_WARN_IDLE);
 
     // Animation just ended — matrix was cleared, force redraw of any active sensor indicators
     bool matrixJustBecameIdle = m_lastMatrixWasAnimating && !matrixBusy;

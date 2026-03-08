@@ -138,6 +138,27 @@ void onWiFiConnected() {
     DEBUG_LOG_WIFI("Connected callback - starting Web API if needed");
     ntpManager.onWiFiConnected();
     startWebAPI();
+
+    // Show WiFi emblem on first connect per boot (Issue #55 / #30)
+    static bool wifiEmblemShown = false;
+    if (!wifiEmblemShown && ledMatrix && ledMatrix->isReady()) {
+        bool currentlyAnimating = ledMatrix->isAnimating();
+        if (!currentlyAnimating) {
+            wifiEmblemShown = true;
+            ledMatrix->startAnimation(HAL_LEDMatrix_8x8::ANIM_WIFI_CONNECTED, MATRIX_WIFI_EMBLEM_MS);
+            DEBUG_LOG_SYSTEM_DEBUG("WiFi first-connect emblem: shown");
+        } else {
+            // Don't interrupt active animation (boot/motion) — mark as shown anyway
+            // to avoid showing it late when it's no longer relevant
+            wifiEmblemShown = true;
+            DEBUG_LOG_SYSTEM_DEBUG("WiFi first-connect emblem: skipped (animation active)");
+        }
+    }
+
+    // Update state machine WiFi status
+    if (stateMachine) {
+        stateMachine->setWiFiConnected(true);
+    }
 }
 
 // ============================================================================
@@ -832,6 +853,19 @@ void setup() {
     Serial.println("[Setup] USB-JTAG-Serial self-test: OK");
 #endif
 
+    // ── Stage 1: Early LED matrix probe (before LittleFS/config) ──
+    // Initialize with compile-time defaults so boot progress is visible ASAP.
+    // Will be reconfigured from user config in Stage 2 after configManager.begin().
+    ledMatrix = new HAL_LEDMatrix_8x8(MATRIX_I2C_ADDRESS, I2C_SDA_PIN, I2C_SCL_PIN, MOCK_HARDWARE);
+    if (ledMatrix && ledMatrix->begin()) {
+        ledMatrix->setSnakeProgress(1);  // M0: single pixel = matrix alive
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M0: matrix early probe OK, snake=1/64");
+        Serial.println("[Setup] ✓ LED Matrix early probe: OK (snake M0)");
+    } else {
+        Serial.println("[Setup] LED Matrix early probe: not detected (will retry from config)");
+        if (ledMatrix) { delete ledMatrix; ledMatrix = nullptr; }
+    }
+
     Serial.println("[Setup] Initializing StepAware...");
 
 #if !MOCK_HARDWARE
@@ -882,16 +916,37 @@ void setup() {
     }
 #endif
 
+    // Boot milestone M1: LittleFS mounted
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m1px = 8;
+        ledMatrix->setSnakeProgress(m1px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M1: LittleFS mounted, snake=%u/64", m1px);
+    }
+
     // Initialize debug logger EARLY (requires LittleFS) with minimal logging
     Serial.println("[Setup] Initializing debug logger...");
     if (!g_debugLogger.begin(DebugLogger::LEVEL_ERROR, DebugLogger::CAT_ALL)) {
         Serial.println("[Setup] WARNING: Debug logger initialization failed");
     }
 
+    // Boot milestone M2: DebugLogger initialized
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m2px = 13;
+        ledMatrix->setSnakeProgress(m2px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M2: DebugLogger init, snake=%u/64", m2px);
+    }
+
     // Initialize crash handler and check for previous crash
     Serial.println("[Setup] Initializing crash handler...");
     CrashHandler::begin();  // Register panic/abort hooks
     CrashHandler::logResetReason();  // Log reset reason, display any crash from previous boot
+
+    // Boot milestone M3: CrashHandler initialized
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m3px = 18;
+        ledMatrix->setSnakeProgress(m3px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M3: CrashHandler init, snake=%u/64", m3px);
+    }
 
     // Initialize configuration manager (loads from SPIFFS)
     Serial.println("[Setup] Initializing configuration manager...");
@@ -936,6 +991,27 @@ void setup() {
 
     Serial.printf("[Setup] Log level set to %u (%s) from config\n",
                   bootCfg.logLevel, Logger::getLevelName(loggerLevel));
+
+    // ── Stage 2: Reconfigure matrix from user config ──
+    if (ledMatrix && ledMatrix->isReady()) {
+        const ConfigManager::DisplaySlotConfig& displayCfgEarly = bootCfg.displays[0];
+        if (displayCfgEarly.active && displayCfgEarly.enabled &&
+            displayCfgEarly.type == DISPLAY_TYPE_MATRIX_8X8) {
+            ledMatrix->setBrightness(displayCfgEarly.brightness);
+            ledMatrix->setRotation(displayCfgEarly.rotation);
+            uint8_t brightEarly = displayCfgEarly.brightness;
+            uint8_t rotEarly = displayCfgEarly.rotation;
+            DEBUG_LOG_SYSTEM_VERBOSE("Boot Stage 2: matrix reconfigured from config (brightness=%u, rotation=%u)",
+                                     brightEarly, rotEarly);
+        }
+    }
+
+    // Boot milestone M4: ConfigManager loaded + matrix reconfigured
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m4px = 24;
+        ledMatrix->setSnakeProgress(m4px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M4: ConfigManager + Stage 2, snake=%u/64", m4px);
+    }
 
     // Now write boot info with correct log level
     DEBUG_LOG_BOOT("=== StepAware Starting ===");
@@ -1021,6 +1097,13 @@ void setup() {
     // Print loaded sensors
     Serial.println("[Setup] Sensor configuration:");
     sensorManager.printStatus();
+
+    // Boot milestone M5: Sensors loaded
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m5px = 33;
+        ledMatrix->setSnakeProgress(m5px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M5: sensors loaded, snake=%u/64", m5px);
+    }
 
     // Collect active PIR pins for sleep wake-source registration.
     // Mirrors the sensor-loading loop above; if no sensors were loaded
@@ -1113,6 +1196,13 @@ void setup() {
         Serial.println("[Setup] Direction detector disabled");
     }
 
+    // Boot milestone M6: Direction detector initialized
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m6px = 40;
+        ledMatrix->setSnakeProgress(m6px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M6: direction detector init, snake=%u/64", m6px);
+    }
+
     // Initialize LEDs based on configuration
     Serial.println("[Setup] Initializing LEDs based on configuration...");
     hazardLED = nullptr;
@@ -1179,23 +1269,32 @@ void setup() {
         while (1) { delay(1000); }
     }
 
+    // Boot milestone M7: LEDs + button initialized
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m7px = 48;
+        ledMatrix->setSnakeProgress(m7px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M7: LEDs + button init, snake=%u/64", m7px);
+    }
+
     // Initialize LED matrix display (Issue #12)
-    // (cfg already retrieved earlier for sensor initialization)
+    // Stage 1 may have already created the matrix with compile-time defaults.
+    // If so, just log it. If Stage 1 failed, try from config now.
     const ConfigManager::DisplaySlotConfig& displayCfg = cfg.displays[0];
 
-    if (displayCfg.active && displayCfg.enabled &&
-        displayCfg.type == DISPLAY_TYPE_MATRIX_8X8) {
+    if (ledMatrix && ledMatrix->isReady()) {
+        // Stage 1 already initialized the matrix — nothing more to do
+        Serial.println("[Setup] ✓ LED Matrix already initialized (early probe)");
+    } else if (displayCfg.active && displayCfg.enabled &&
+               displayCfg.type == DISPLAY_TYPE_MATRIX_8X8) {
 
-        Serial.println("[Setup] Initializing 8x8 LED Matrix...");
+        Serial.println("[Setup] Initializing 8x8 LED Matrix from config...");
         Serial.printf("[Setup]   I2C Address: 0x%02X\n", displayCfg.i2cAddress);
         Serial.printf("[Setup]   SDA Pin: GPIO %d\n", displayCfg.sdaPin);
         Serial.printf("[Setup]   SCL Pin: GPIO %d\n", displayCfg.sclPin);
         Serial.printf("[Setup]   Brightness: %d/15\n", displayCfg.brightness);
-        // Pre-compute arithmetic to avoid va_list stack corruption
         int rotationDegrees = displayCfg.rotation * 90;
         Serial.printf("[Setup]   Rotation: %d°\n", rotationDegrees);
 
-        // Create LED matrix instance
         ledMatrix = new HAL_LEDMatrix_8x8(
             displayCfg.i2cAddress,
             displayCfg.sdaPin,
@@ -1203,21 +1302,11 @@ void setup() {
             MOCK_HARDWARE
         );
 
-        // Initialize LED matrix
         if (ledMatrix && ledMatrix->begin()) {
-            // Apply configuration settings
             ledMatrix->setBrightness(displayCfg.brightness);
             ledMatrix->setRotation(displayCfg.rotation);
-
-            // Show boot animation
-            ledMatrix->startAnimation(
-                HAL_LEDMatrix_8x8::ANIM_BOOT_STATUS,
-                MATRIX_BOOT_DISPLAY_MS
-            );
-
-            Serial.println("[Setup] ✓ LED Matrix initialized successfully");
+            Serial.println("[Setup] ✓ LED Matrix initialized from config");
         } else {
-            // Matrix initialization failed - will fall back to hazard LED only
             Serial.println("[Setup] WARNING: LED Matrix initialization failed");
             Serial.println("[Setup]          Using hazard LED for warnings");
             if (ledMatrix) {
@@ -1229,7 +1318,6 @@ void setup() {
         Serial.println("[Setup] LED Matrix not configured in settings");
 
         #if MOCK_HARDWARE
-        // In mock mode, create LED matrix anyway for testing animations via web UI
         Serial.println("[Setup] Creating LED Matrix in mock mode for testing...");
         ledMatrix = new HAL_LEDMatrix_8x8(0x70, 8, 9, true);
         if (ledMatrix && ledMatrix->begin()) {
@@ -1280,6 +1368,13 @@ void setup() {
     if (!stateMachine->begin(defaultMode)) {
         Serial.println("[Setup] ERROR: Failed to initialize state machine");
         while (1) { delay(1000); }
+    }
+
+    // Boot milestone M8: State machine started
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m8px = 56;
+        ledMatrix->setSnakeProgress(m8px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M8: state machine begin, snake=%u/64", m8px);
     }
 
     // Initialize Power Manager
@@ -1342,6 +1437,12 @@ void setup() {
 
     // Register callback to start Web API when WiFi connects
     wifiManager.onConnected(onWiFiConnected);
+    wifiManager.onDisconnected([]() {
+        DEBUG_LOG_WIFI("Disconnected callback");
+        if (stateMachine) {
+            stateMachine->setWiFiConnected(false);
+        }
+    });
 
     if (!wifiManager.begin(&wifiConfig)) {
         Serial.println("[Setup] WARNING: WiFi manager initialization failed");
@@ -1352,6 +1453,13 @@ void setup() {
         }
     }
 
+    // Boot milestone M9: WiFi manager started
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m9px = 60;
+        ledMatrix->setSnakeProgress(m9px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M9: WiFi manager begin, snake=%u/64", m9px);
+    }
+
     // Initialize NTP Manager
     Serial.println("[Setup] Initializing NTP manager...");
     ntpManager.begin(cfg.ntpEnabled, cfg.ntpServer, cfg.timezoneOffsetHours);
@@ -1360,6 +1468,13 @@ void setup() {
     // (callback will also fire when WiFi connects later)
     if (cfg.wifiEnabled) {
         startWebAPI();
+    }
+
+    // Boot milestone M10: Boot complete — full snake
+    if (ledMatrix && ledMatrix->isReady()) {
+        uint8_t m10px = 64;
+        ledMatrix->setSnakeProgress(m10px);
+        DEBUG_LOG_SYSTEM_VERBOSE("Boot M10: boot complete, snake=%u/64", m10px);
     }
 
     Serial.println("[Setup] ✓ Initialization complete!");

@@ -174,6 +174,12 @@
 #define MATRIX_FLASH_DURATION_MS    200     // Flash on/off duration
 #define MATRIX_BOOT_DISPLAY_MS      3000    // Boot status display time
 
+// Post-motion-alert info display timings
+#define MATRIX_POST_WARN_WIFI_MS      2000    // WiFi status display after motion alert
+#define MATRIX_POST_WARN_BATTERY_MS   2000    // Battery level display after WiFi status
+// WiFi first-connect emblem display time
+#define MATRIX_WIFI_EMBLEM_MS         2000    // First WiFi connect emblem duration
+
 // ============================================================================
 // Battery Management
 // ============================================================================

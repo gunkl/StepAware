@@ -247,6 +247,15 @@ public:
     void clearLEDDisplay();
 
     /**
+     * @brief Update WiFi connection status for post-warning display
+     *
+     * Called by main.cpp WiFi callbacks to track current connection state.
+     *
+     * @param connected true if WiFi is connected
+     */
+    void setWiFiConnected(bool connected);
+
+    /**
      * @brief Log LED frame state and sensor motion states for pre-sleep diagnostics.
      *
      * Logs the raw 8-byte frame buffer (which pixels are lit) and the live
@@ -362,6 +371,23 @@ private:
      * Suppressed while any animation, mode indicator, or reboot bitmap is active.
      */
     void updateSensorStatusLEDs();
+
+    // Post-warning info display sequence (Issue #55 / #30)
+    enum PostWarningPhase {
+        POST_WARN_IDLE,       // No sequence active
+        POST_WARN_WIFI,       // Showing WiFi status bitmap (2s)
+        POST_WARN_BATTERY     // Showing battery bitmap (2s)
+    };
+    PostWarningPhase m_postWarnPhase;     ///< Current post-warning phase
+    uint32_t m_postWarnPhaseEndTime;      ///< millis() when current phase expires
+    bool m_wifiConnected;                 ///< Current WiFi state (updated by main.cpp callbacks)
+
+    /**
+     * @brief Update post-warning info display sequence
+     *
+     * Advances through WIFI -> BATTERY -> IDLE phases after motion alert expires.
+     */
+    void updatePostWarningPhase();
 };
 
 #endif // STEPAWARE_STATE_MACHINE_H
