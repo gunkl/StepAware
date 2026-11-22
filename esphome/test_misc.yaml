@@ -1,0 +1,67 @@
+# Compile test for stepaware_boot_reset and the packages in esphome/packages/.
+# Build-only: never flash this to the real device.
+# ultrasonic_grove.yaml is checked separately by test_misc_grove.yaml (same sensor id/pin).
+
+esphome:
+  name: stepaware-test-misc
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [stepaware_boot_reset]
+
+packages:
+  time: !include packages/time.yaml
+  diagnostics: !include packages/diagnostics.yaml
+  ultrasonic: !include packages/ultrasonic_hcsr04.yaml
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+output:
+  # Stand-in for the hazard LED
+  - platform: ledc
+    id: hazard_led_pwm
+    pin: GPIO3
+
+stepaware_boot_reset:
+  button_pin: GPIO0
+  output: hazard_led_pwm
+  wifi_reset_hold: 15s
+  factory_reset_hold: 30s
+  max_wait: 40s
+
+binary_sensor:
+  # The same pin the core uses as its mode button; the boot-reset component must not clash.
+  - platform: gpio
+    id: mode_button
+    name: "Mode Button"
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true

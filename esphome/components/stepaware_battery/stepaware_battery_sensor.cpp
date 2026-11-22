@@ -1,0 +1,190 @@
+#include "stepaware_battery_sensor.h"
+
+#ifdef USE_ESP32_VARIANT_ESP32C3
+
+#include "esphome/core/hal.h"
+#include "esphome/core/helpers.h"
+#include "esphome/core/log.h"
+
+#include <driver/gpio.h>
+#include <esp_adc/adc_cali_scheme.h>
+#include <esp_private/adc_share_hw_ctrl.h>
+#include <esp_private/sar_periph_ctrl.h>
+#include <esp_rom_sys.h>
+#include <hal/adc_ll.h>
+#include <soc/apb_saradc_struct.h>
+
+namespace esphome::stepaware_battery {
+
+static const char *const TAG = "stepaware_battery";
+
+// Fixed wiring: battery divider on GPIO5 = ADC2 channel 0 (the only ADC2 channel on the C3).
+static constexpr adc_unit_t BATTERY_ADC_UNIT = ADC_UNIT_2;
+static constexpr adc_channel_t BATTERY_ADC_CHANNEL = ADC_CHANNEL_0;
+static constexpr gpio_num_t BATTERY_GPIO = GPIO_NUM_5;
+static constexpr adc_atten_t BATTERY_ADC_ATTEN = ADC_ATTEN_DB_12;
+static constexpr uint32_t ONESHOT_DONE_EVENT = ADC_LL_EVENT_ADC2_ONESHOT_DONE;
+
+// The onetime_start edge must be held >= 3 ADC controller clocks. Controller clock is
+// APB 80 MHz / (ADC_LL_CLKM_DIV_NUM_DEFAULT + 1) = 5 MHz, so 3 cycles = 0.6 us; IDF's
+// adc_hal_onetime_start() computes 3 us for this divider, use the same.
+static constexpr uint32_t START_PULSE_DELAY_US = 3;
+// A conversion takes a few us; anything longer means the arbiter never granted the SAR.
+static constexpr uint32_t CONVERSION_TIMEOUT_US = 100;
+// Retries per sample when WiFi's power detector wins the arbiter.
+static constexpr uint8_t MAX_RETRIES_PER_SAMPLE = 3;
+static constexpr uint32_t RETRY_DELAY_US = 50;
+// Linear fallback when no eFuse calibration is burnt: StepAware v0.6.x formula
+// (raw / 4095 * 3.3 V). Approximate only; the C3 12 dB range saturates below 3.3 V.
+static constexpr float FALLBACK_FULL_SCALE_MV = 3300.0f;
+static constexpr float RAW_FULL_SCALE = 4095.0f;
+static constexpr uint32_t FAILURE_LOG_EVERY = 10;
+
+void StepAwareBatterySensor::setup() {
+    // GPIO5 as a plain analog input: no digital input buffer, no pulls.
+    gpio_config_t ioConf{};
+    ioConf.pin_bit_mask = 1ULL << BATTERY_GPIO;
+    ioConf.mode = GPIO_MODE_DISABLE;
+    ioConf.pull_up_en = GPIO_PULLUP_DISABLE;
+    ioConf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    ioConf.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&ioConf);
+
+    // Un-gate and reset the APB_SARADC peripheral (ref-counted, shared with the IDF driver).
+    adc_apb_periph_claim();
+
+    // Load the per-chip SAR "initial code" from eFuse into ADC2. Done once here, which runs
+    // before the wifi component starts (setup priority DATA > WIFI). It is deliberately not
+    // rewritten per read: with WiFi up the PHY owns ADC2 and StepAware v0.6.4 never touched it.
+    adc_calc_hw_calibration_code(BATTERY_ADC_UNIT, BATTERY_ADC_ATTEN);
+    sar_periph_ctrl_adc_oneshot_power_acquire();
+    adc_set_hw_calibration_code(BATTERY_ADC_UNIT, BATTERY_ADC_ATTEN);
+    sar_periph_ctrl_adc_oneshot_power_release();
+
+    // raw -> mV calibration. IDF 5.5 accepts ADC_UNIT_2 here on the C3: esp_efuse_rtc_calib
+    // has no separate ADC2 data on this chip and uses the ADC1 eFuse reference points (see
+    // components/efuse/esp32c3/esp_efuse_rtc_calib.c). This replaces IDF 4.4's
+    // esp_adc_cal_characterize() that v0.6.4 used, which did the same thing.
+    adc_cali_curve_fitting_config_t caliConf{};
+    caliConf.unit_id = BATTERY_ADC_UNIT;
+    caliConf.chan = BATTERY_ADC_CHANNEL;
+    caliConf.atten = BATTERY_ADC_ATTEN;
+    caliConf.bitwidth = ADC_BITWIDTH_12;
+    esp_err_t err = adc_cali_create_scheme_curve_fitting(&caliConf, &m_caliHandle);
+    if (err != ESP_OK) {
+        m_caliHandle = nullptr;
+        ESP_LOGW(TAG, "eFuse curve-fitting calibration unavailable (%s); using linear fallback",
+                 esp_err_to_name(err));
+    }
+}
+
+bool StepAwareBatterySensor::readRawOnce(uint16_t &raw) {
+    bool done;
+    bool valid = false;
+    {
+        // Keep reconfiguration + conversion atomic (~10 us) so nothing on this core
+        // reprograms the shared APB_SARADC oneshot registers in between.
+        InterruptLock lock;
+
+        // Controller clock: APB source, divider set *before* enabling (div 0 = no output),
+        // then the clkm output enable bit, which v0.6.4 found is required on the C3.
+        adc_ll_digi_clk_sel(ADC_DIGI_CLK_SRC_DEFAULT);
+        adc_ll_digi_controller_clk_div(ADC_LL_CLKM_DIV_NUM_DEFAULT, ADC_LL_CLKM_DIV_B_DEFAULT,
+                                       ADC_LL_CLKM_DIV_A_DEFAULT);
+        APB_SARADC.apb_adc_clkm_conf.clk_en = 1;
+        adc_ll_digi_set_clk_div(ADC_LL_DIGI_SAR_CLK_DIV_DEFAULT);
+
+        adc_oneshot_ll_set_atten(BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL, BATTERY_ADC_ATTEN);
+        adc_oneshot_ll_set_channel(BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL);
+
+        adc_oneshot_ll_clear_event(ONESHOT_DONE_EVENT);
+        adc_oneshot_ll_disable_all_unit();
+        adc_oneshot_ll_enable(BATTERY_ADC_UNIT);
+        adc_oneshot_ll_start(false);
+        esp_rom_delay_us(START_PULSE_DELAY_US);
+        adc_oneshot_ll_start(true);
+
+        uint32_t waitedUs = 0;
+        while (!adc_oneshot_ll_get_event(ONESHOT_DONE_EVENT) &&
+               waitedUs < CONVERSION_TIMEOUT_US) {
+            esp_rom_delay_us(1);
+            waitedUs++;
+        }
+        done = adc_oneshot_ll_get_event(ONESHOT_DONE_EVENT);
+        if (done) {
+            raw = static_cast<uint16_t>(adc_oneshot_ll_get_raw_result(BATTERY_ADC_UNIT));
+            // ADC2 data carries the arbiter result in its channel field; WiFi pre-emption
+            // marks the sample invalid.
+            valid = adc_oneshot_ll_raw_check_valid(BATTERY_ADC_UNIT, raw);
+        }
+        adc_oneshot_ll_disable_all_unit();
+    }
+    return done && valid;
+}
+
+float StepAwareBatterySensor::rawToMillivolts(float raw) const {
+    if (m_caliHandle != nullptr) {
+        int mv = 0;
+        int rawInt = static_cast<int>(raw + 0.5f);
+        if (adc_cali_raw_to_voltage(m_caliHandle, rawInt, &mv) == ESP_OK) {
+            return static_cast<float>(mv);
+        }
+    }
+    return raw / RAW_FULL_SCALE * FALLBACK_FULL_SCALE_MV;
+}
+
+void StepAwareBatterySensor::update() {
+    uint32_t rawSum = 0;
+    uint8_t goodSamples = 0;
+    uint32_t failedConversions = 0;
+
+    // Hold the SAR powered for the batch; released back to FSM control afterwards.
+    sar_periph_ctrl_adc_oneshot_power_acquire();
+    for (uint8_t i = 0; i < m_samples; i++) {
+        for (uint8_t attempt = 0; attempt < MAX_RETRIES_PER_SAMPLE; attempt++) {
+            uint16_t raw = 0;
+            if (readRawOnce(raw)) {
+                rawSum += raw;
+                goodSamples++;
+                break;
+            }
+            failedConversions++;
+            delayMicroseconds(RETRY_DELAY_US);
+        }
+    }
+    sar_periph_ctrl_adc_oneshot_power_release();
+
+    // Need at least half the requested samples; otherwise keep the last published value
+    // rather than publishing 0 or a skewed average.
+    if (goodSamples == 0 || goodSamples * 2 < m_samples) {
+        m_failedUpdates++;
+        if (m_failedUpdates == 1 || m_failedUpdates % FAILURE_LOG_EVERY == 0) {
+            ESP_LOGW(TAG, "ADC2 read failed (%u/%u samples valid, %" PRIu32 " failed conversions,"
+                     " %" PRIu32 " failed updates); keeping last value",
+                     goodSamples, m_samples, failedConversions, m_failedUpdates);
+        }
+        return;
+    }
+
+    float rawAvg = static_cast<float>(rawSum) / goodSamples;
+    float volts = rawToMillivolts(rawAvg) / 1000.0f;
+    ESP_LOGD(TAG, "raw=%.1f (%u/%u samples, %" PRIu32 " retries) -> %.3f V", rawAvg, goodSamples,
+             m_samples, failedConversions, volts);
+    this->publish_state(volts);
+}
+
+void StepAwareBatterySensor::dump_config() {
+    LOG_SENSOR("", "StepAware Battery (ADC2)", this);
+    ESP_LOGCONFIG(TAG,
+                  "  Channel: ADC2 CH0 (GPIO5), attenuation 12 dB\n"
+                  "  Samples: %u\n"
+                  "  Calibration: %s",
+                  m_samples, m_caliHandle != nullptr ? "eFuse curve fitting" : "linear fallback");
+    LOG_UPDATE_INTERVAL(this);
+}
+
+float StepAwareBatterySensor::get_setup_priority() const { return setup_priority::DATA; }
+
+}  // namespace esphome::stepaware_battery
+
+#endif  // USE_ESP32_VARIANT_ESP32C3

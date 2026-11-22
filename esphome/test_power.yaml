@@ -1,0 +1,134 @@
+# Compile-only test for the stepaware_power external component. NOT for flashing.
+esphome:
+  name: stepaware-test-power
+  friendly_name: StepAware Power Test
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [stepaware_power]
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+safe_mode:
+  # stepaware_power is not set up in safe mode, and enable_on_boot is false below.
+  on_safe_mode:
+    - wifi.enable:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  enable_on_boot: false
+  ap:
+    password: !secret fallback_ap_password
+
+deep_sleep:
+  id: deep_sleep_ctl
+
+output:
+  - platform: gpio
+    id: pir_power
+    pin: GPIO20
+
+switch:
+  - platform: output
+    id: pir_power_switch
+    output: pir_power
+    restore_mode: ALWAYS_ON
+    internal: true
+
+binary_sensor:
+  - platform: gpio
+    id: pir_near
+    name: "PIR Near"
+    pin:
+      number: GPIO1
+      mode: INPUT_PULLUP
+  - platform: gpio
+    id: pir_far
+    name: "PIR Far"
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+  - platform: gpio
+    id: button
+    name: "Button"
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+  - platform: gpio
+    id: usb_power
+    name: "USB Power"
+    pin:
+      number: GPIO6
+      mode: INPUT_PULLDOWN
+  - platform: homeassistant
+    id: stay_awake_ha
+    entity_id: input_boolean.stepaware_stay_awake
+
+globals:
+  - id: fake_busy
+    type: bool
+    initial_value: "false"
+
+stepaware_power:
+  id: power
+  deep_sleep_id: deep_sleep_ctl
+  pir_pins: [GPIO1, GPIO4]
+  button_pin: GPIO0
+  usb_power_pin: GPIO6
+  pir_power_pin: GPIO20
+  stay_awake: stay_awake_ha
+  button_sensor: button
+  activity_sensors: [pir_near, pir_far, button]
+  busy_condition: !lambda return id(fake_busy);
+  last_activity: !lambda return 0;
+  boot_grace: 60s
+  checkin_min_awake: 10s
+  wifi_timeout: 30s
+  on_motion_wake:
+    - logger.log: "on_motion_wake fired"
+    - globals.set:
+        id: fake_busy
+        value: "true"
+    - delay: 3s
+    - globals.set:
+        id: fake_busy
+        value: "false"
+  on_sleep:
+    - logger.log: "about to deep sleep"
+  power_saving_mode:
+    name: "Power Saving Mode"
+  idle_timeout:
+    name: "Idle Timeout"
+  motion_wake_idle:
+    name: "Motion Wake Idle"
+  checkin_interval:
+    name: "Check-in Interval"
+  wake_reason:
+    name: "Wake Reason"
+  deep_sleep_count:
+    name: "Deep Sleep Count"
+  sleep_blocked:
+    name: "Sleep Blocked"
+  sleep_block_reason:
+    name: "Sleep Block Reason"

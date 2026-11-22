@@ -1,0 +1,57 @@
+# Optional Grove Ultrasonic Ranger v2.0 (single signal pin; port of HAL_Ultrasonic_Grove).
+#
+#   packages:
+#     ultrasonic: !include packages/ultrasonic_grove.yaml
+#   stepaware:
+#     ...
+#     distance: distance_cm      # warn when distance_min <= d <= distance_max (cm)
+#     distance_min: 30           # defaults: SENSOR_MIN/MAX_DISTANCE_CM in include/config.h
+#     distance_max: 200
+#
+# Wiring (include/config.h): SIG on GPIO8 (shared trigger/echo), VCC 3.3 V or 5 V.
+# GPIO8 is an ESP32-C3 strapping pin (it must be high for UART download mode; the normal SPI
+# boot does not depend on it). Not verified on hardware: that the module does not pull SIG
+# low during reset.
+#
+# Uses this repo's stepaware_grove_ultrasonic platform (metres) and scales to cm, because
+# the stepaware core compares the raw state with distance_min/max in cm.
+# Do not use together with ultrasonic_hcsr04.yaml (same id, same GPIO8).
+
+external_components:
+  - source:
+      type: local
+      # Relative to the directory of the main YAML (esphome/), not of this package file.
+      path: components
+    components: [stepaware_grove_ultrasonic]
+
+sensor:
+  # Fast, unthrottled reading for the stepaware core (kept out of Home Assistant).
+  - platform: stepaware_grove_ultrasonic
+    id: distance_cm
+    internal: true
+    pin:
+      number: GPIO8
+      ignore_strapping_warning: true
+    timeout: 3.5m
+    pulse_time: 10us
+    update_interval: 100ms
+    unit_of_measurement: cm
+    accuracy_decimals: 0
+    filters:
+      # Timeout (nothing in range) and readings under the 2 cm floor become NaN, and NaN
+      # must reach the core: it means "no target". Do not use filter_out: nan / clamp here;
+      # they would hold the last in-range value and keep the warning on.
+      - lambda: |-
+          return (std::isnan(x) || x < 0.02f) ? NAN : x * 100.0f;
+      # Median of 3 like DistanceSensorBase (NaN samples are skipped; all-NaN gives NaN).
+      - median:
+          window_size: 3
+          send_every: 1
+
+  # Throttled copy for Home Assistant.
+  - platform: copy
+    source_id: distance_cm
+    id: distance_ha
+    name: "Distance"
+    filters:
+      - throttle: 1s

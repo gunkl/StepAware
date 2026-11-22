@@ -1,0 +1,110 @@
+# Compile test for the stepaware core component (modes, button, hazard LED, direction).
+# Not a device image: build-only check, never flash this to the real device.
+esphome:
+  name: stepaware-test-core
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [stepaware]
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+output:
+  - platform: ledc
+    id: hazard_led_pwm
+    pin: GPIO3
+
+binary_sensor:
+  - platform: gpio
+    id: motion_near
+    name: "Motion Near"
+    device_class: motion
+    pin:
+      number: GPIO1
+      mode: INPUT_PULLUP
+  - platform: gpio
+    id: motion_far
+    name: "Motion Far"
+    device_class: motion
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+  - platform: gpio
+    id: mode_button
+    name: "Mode Button"
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+  - platform: stepaware
+    approaching:
+      name: "Approaching"
+    leaving:
+      name: "Leaving"
+
+stepaware:
+  id: stepaware_core
+  motion_near: motion_near
+  motion_far: motion_far
+  button: mode_button
+  hazard_led: hazard_led_pwm
+  default_mode: Motion
+  motion_warning_duration: 5s
+  pir_warmup: 60s
+  long_press: 1s
+  direction_detection:
+    confirmation_window: 5s
+    simultaneous_threshold: 150ms
+    pattern_timeout: 10s
+
+select:
+  - platform: stepaware
+    mode:
+      name: "Operating Mode"
+
+number:
+  - platform: stepaware
+    warning_duration:
+      name: "Motion Warning Duration"
+    led_brightness:
+      name: "Hazard LED Brightness"
+
+switch:
+  - platform: stepaware
+    direction_detection:
+      name: "Direction Detection"
+
+text_sensor:
+  - platform: stepaware
+    state:
+      name: "StepAware State"

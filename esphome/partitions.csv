@@ -1,0 +1,17 @@
+# ESP32-C3 Partition Table for OTA Updates
+# Total Flash: 4MB
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+# NVS partition for WiFi credentials and system settings
+nvs,        data, nvs,     0x9000,   0x5000,
+# OTA data partition (tracks which app partition to boot)
+otadata,    data, ota,     0xe000,   0x2000,
+# First OTA app partition (1.5MB) - currently running firmware
+app0,       app,  ota_0,   0x10000,  0x180000,
+# Second OTA app partition (1.5MB) - OTA update target
+app1,       app,  ota_1,   0x190000, 0x180000,
+# Core dump partition (64KB) for crash debugging
+coredump,   data, coredump, 0x310000, 0x10000,
+# LittleFS data partition (896KB) for logs, config, user content
+# Note: Label is "spiffs" for compatibility with LittleFS.begin() default
+spiffs,     data, spiffs,  0x320000, 0xE0000,

@@ -1,0 +1,370 @@
+# StepAware - ESPHome build, stage 2 (full feature set)
+#
+# Components (esphome/components/):
+#   stepaware         - operating modes, warning state machine, button, hazard LED patterns,
+#                       direction detection (logic in components/stepaware/core, unit-tested)
+#   stepaware_matrix  - HT16K33 8x8 matrix driver + animations
+#   stepaware_battery - ADC2 (GPIO5) battery read that works while WiFi is on
+#   stepaware_power   - deep-sleep policy: wake-cause -> WiFi policy, multi-pin wake, PIR rail hold
+#   stepaware_grove_ultrasonic - available, not wired (this unit has two PIRs only)
+#
+# Safety: Power Saving Mode defaults to "Off", so the device never sleeps until it is switched
+# to "Deep sleep" from Home Assistant. See docs/ESPHOME_PLAN.md for the wake policy.
+#
+# Dormant ("switched off"): hold the button >= 5 s and release, or press "Shut Down" in HA.
+# Deep sleep with button-only wake, flag kept in flash: USB / power-on / brownout boots go
+# straight back to sleep until the button is pressed. See docs/ESPHOME.md "Dormant mode".
+#
+# Secrets live in esphome/secrets.yaml (gitignored). Template: secrets.yaml.example.
+
+substitutions:
+  device_name: stepaware
+  friendly_name: StepAware
+  # Voltage divider on GPIO5: R1 = R2, so Vbat = Vadc * 2 (BATTERY_DIVIDER_RATIO in config.h)
+  battery_divider_ratio: "2.0"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  project:
+    name: gunkl.stepaware
+    version: "0.7.0-esphome-stage2"
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  # Identical copy of StepAware's partitions.csv (1.5 MB app slots).
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components:
+      - stepaware
+      - stepaware_matrix
+      - stepaware_battery
+      - stepaware_power
+      - stepaware_boot_reset
+
+packages:
+  # Home Assistant time (ha_time) + SNTP fallback; needed by the nightly PIR recalibration.
+  time: !include packages/time.yaml
+  # Reset reason, heap, uptime, and ESP-IDF core dump to the coredump partition.
+  # After adding/removing this package run `esphome clean stepaware.yaml` once (cached sdkconfig).
+  diagnostics: !include packages/diagnostics.yaml
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+safe_mode:
+  # After 10 failed boots, come up with only WiFi + OTA so a fixed image can be pushed.
+  num_attempts: 10
+  reboot_timeout: 10min
+  on_safe_mode:
+    - wifi.enable:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # stepaware_power overrides this per wake cause before WiFi starts (off only for PIR wakes
+  # in Deep sleep mode on battery).
+  enable_on_boot: true
+  ap:
+    ssid: "StepAware Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+i2c:
+  id: i2c_bus
+  sda: GPIO7
+  scl: GPIO10
+  frequency: 100kHz
+  scan: true
+
+# ---------------------------------------------------------------------------
+# Hardware
+# ---------------------------------------------------------------------------
+output:
+  # Hazard LED, owned by the stepaware core (blink patterns + brightness).
+  - platform: ledc
+    id: hazard_led_pwm
+    pin: GPIO3
+
+status_led:
+  pin:
+    number: GPIO2
+    ignore_strapping_warning: true
+
+stepaware_matrix:
+  id: led_matrix
+  address: 0x70
+  brightness: 15
+  rotation: 0
+
+deep_sleep:
+  # Policy and wake sources come from stepaware_power; no sleep_duration / wakeup_pin here.
+  id: deep_sleep_ctl
+
+# Hold the button at power-on: release after 15 s = WiFi reset, after 30 s = factory reset.
+# Skipped on deep-sleep wakes. Holding the button at power-on also wakes a dormant device
+# (stepaware_power clears the flag first), so these resets work from dormant too.
+stepaware_boot_reset:
+  button_pin: GPIO0
+  output: hazard_led_pwm
+  wifi_reset_hold: 15s
+  factory_reset_hold: 30s
+
+binary_sensor:
+  - platform: gpio
+    id: motion_near
+    name: "Motion Near"
+    device_class: motion
+    pin:
+      number: GPIO1
+      mode: INPUT_PULLUP
+    filters:
+      # During PIR recalibration the rail is cut and the pulled-up input reads high:
+      # report no motion so neither the core nor HA sees a false trigger.
+      - lambda: |-
+          if (id(power_ctl).isRecalibrating()) return false;
+          return x;
+
+  - platform: gpio
+    id: motion_far
+    name: "Motion Far"
+    device_class: motion
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+    filters:
+      - lambda: |-
+          if (id(power_ctl).isRecalibrating()) return false;
+          return x;
+
+  - platform: gpio
+    id: mode_button
+    name: "Mode Button"
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+
+  - platform: gpio
+    id: usb_power
+    name: "USB Power"
+    device_class: plug
+    pin:
+      number: GPIO6
+      mode: INPUT_PULLDOWN
+
+  # Create this helper in HA (Settings > Devices & services > Helpers > Toggle) to keep the
+  # device awake for OTA/debugging. Missing or off = normal sleep policy.
+  - platform: homeassistant
+    id: stay_awake_ha
+    entity_id: input_boolean.stepaware_stay_awake
+
+  - platform: stepaware
+    approaching:
+      name: "Approaching"
+    leaving:
+      name: "Leaving"
+
+# ---------------------------------------------------------------------------
+# StepAware logic
+# ---------------------------------------------------------------------------
+stepaware:
+  id: stepaware_core
+  motion_near: motion_near
+  motion_far: motion_far
+  button: mode_button
+  hazard_led: hazard_led_pwm
+  matrix: led_matrix
+  battery_low: battery_low_bs
+  battery_level: battery_percent
+  sensor_status_pixels: true
+  default_mode: Motion
+  motion_warning_duration: 5s
+  led_brightness: 100%
+  pir_warmup: 60s
+  # Holds act on RELEASE: 1 s .. <5 s = reboot, >= 5 s = dormant (countdown bar + icons on
+  # the matrix, hazard LED fast blink -> solid). Short clicks still cycle the mode at once.
+  long_press: 1s
+  reboot_on_long_press: true
+  dormant_hold: 5s
+  on_dormant:
+    - lambda: |-
+        if (!id(power_ctl).requestDormant(step_power::DORMANT_REASON_GESTURE)) {
+          id(stepaware_core).cancelShutdown();
+        }
+  direction_detection:
+    enabled: true
+    confirmation_window: 5s
+    simultaneous_threshold: 100ms
+    pattern_timeout: 10s
+
+stepaware_power:
+  id: power_ctl
+  deep_sleep_id: deep_sleep_ctl
+  pir_pins: [GPIO1, GPIO4]
+  button_pin: GPIO0
+  usb_power_pin: GPIO6
+  pir_power_pin: GPIO20
+  stay_awake: stay_awake_ha
+  button_sensor: mode_button
+  activity_sensors: [motion_near, motion_far, mode_button]
+  busy_condition: !lambda return id(stepaware_core).isBusy();
+  last_activity: !lambda return id(stepaware_core).getLastActivityMs();
+  boot_grace: 60s
+  checkin_min_awake: 10s
+  wifi_timeout: 30s
+  default_mode: "Off"
+  on_motion_wake:
+    - lambda: id(stepaware_core).handleMotionWake();
+  on_sleep:
+    # Every deep-sleep entry (normal, dormant, critical): blank + HT16K33 standby, LED off.
+    - lambda: id(stepaware_core).prepareForSleep();
+  dormant:
+    shutdown_button:
+      name: "Shut Down"
+    last_shutdown:
+      name: "Last Shutdown"
+    feedback_time: 1500ms
+    # 0s = one press wakes it. Set e.g. 1s to require a 1 s hold (bag-bump protection).
+    wake_hold: 0s
+    on_shutdown:
+      - lambda: id(stepaware_core).showShutdown();
+    on_dormant_wake:
+      - lambda: id(stepaware_core).ignoreButtonUntilReleased();
+  battery:
+    voltage_sensor: battery_voltage
+    # The thresholds StepAware v0.6.x actually ran with (PowerManager constructor); the
+    # config.h 3.3 / 3.0 V values were never applied.
+    low_threshold: 3.4V
+    critical_threshold: 3.2V
+    hysteresis: 0.1V
+    min_samples: 3
+    critical_samples: 3
+    # As in v0.6.x: on battery, a confirmed critical level forces deep sleep (button-only wake)
+    # even when Power Saving Mode is Off, to protect the LiPo. Set false to never auto-sleep.
+    # The shutdown is a dormant entry: after charging, press the button to wake it.
+    critical_shutdown: true
+    battery_low:
+      id: battery_low_bs
+      name: "Battery Low"
+    battery_critical:
+      name: "Battery Critical"
+    battery_state:
+      name: "Battery State"
+  pir_recalibration:
+    time_id: ha_time
+    window_start: 2
+    window_end: 4
+    quiescence: 1h
+    cooldown: 2h
+    power_off_time: 2s
+    warmup: 60s
+    button:
+      name: "Recalibrate PIRs"
+    recalibrating:
+      name: "PIR Recalibrating"
+  power_saving_mode:
+    name: "Power Saving Mode"
+  idle_timeout:
+    name: "Idle Timeout"
+  motion_wake_idle:
+    name: "Motion Wake Idle"
+  checkin_interval:
+    name: "Check-in Interval"
+  wake_reason:
+    name: "Wake Reason"
+  deep_sleep_count:
+    name: "Deep Sleep Count"
+  sleep_blocked:
+    name: "Sleep Blocked"
+  sleep_block_reason:
+    name: "Sleep Block Reason"
+
+select:
+  - platform: stepaware
+    mode:
+      name: "Operating Mode"
+
+number:
+  - platform: stepaware
+    warning_duration:
+      name: "Motion Warning Duration"
+    led_brightness:
+      name: "Hazard LED Brightness"
+  - platform: stepaware_matrix
+    name: "Matrix Brightness"
+
+switch:
+  - platform: stepaware
+    direction_detection:
+      name: "Direction Detection"
+
+text_sensor:
+  - platform: stepaware
+    state:
+      name: "State"
+  - platform: version
+    name: "ESPHome Version"
+
+# ---------------------------------------------------------------------------
+# Sensors
+# ---------------------------------------------------------------------------
+sensor:
+  - platform: stepaware_battery
+    id: battery_voltage
+    name: "Battery Voltage"
+    samples: 8
+    update_interval: 60s
+    accuracy_decimals: 2
+    filters:
+      - multiply: ${battery_divider_ratio}
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+
+  - platform: template
+    id: battery_percent
+    name: "Battery"
+    device_class: battery
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 60s
+    # Linear between 3.0 V (critical, 0 %) and 4.2 V (full, 100 %), as config.h defines them.
+    lambda: |-
+      if (isnan(id(battery_voltage).state)) return NAN;
+      float pct = (id(battery_voltage).state - 3.0f) / (4.2f - 3.0f) * 100.0f;
+      return clamp(pct, 0.0f, 100.0f);
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+
+button:
+  - platform: restart
+    name: "Restart"
+  - platform: safe_mode
+    name: "Restart (Safe Mode)"
+  - platform: template
+    name: "Clear LED Matrix"
+    on_press:
+      - stepaware_matrix.clear: led_matrix

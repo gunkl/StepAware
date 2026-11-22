@@ -1,0 +1,36 @@
+# StepAware time source package (replaces the old NTPManager).
+#
+#   packages:
+#     time: !include packages/time.yaml
+#   # optional, before/next to packages: (the main file wins over the package default)
+#   substitutions:
+#     timezone: "America/Los_Angeles"
+#
+# Two clocks, both with the same IANA timezone (old firmware default: UTC-8, which ignored
+# DST; the IANA zone follows US daylight saving):
+#   ha_time   - Home Assistant's clock over the native API. Preferred: no extra traffic, works
+#               as soon as the API connects.
+#   sntp_time - SNTP (pool.ntp.org) fallback for when the API is not connected, e.g. HA down
+#               or the device on the fallback AP with internet access.
+# Lambdas can use whichever is valid:
+#   auto now = id(ha_time).now(); if (!now.is_valid()) now = id(sntp_time).now();
+#
+# Why it matters: the PIR recalibration scheduler (nightly power-cycle of the PIRs in a quiet
+# window, port of RecalScheduler) needs local wall-clock time; without a valid time it never
+# fires. Note that motion wakes in Deep sleep mode keep WiFi off, so the clock only syncs on
+# WiFi sessions (boot, button, check-in, USB); the system clock keeps running
+# across deep sleep (on the internal RC oscillator, so it drifts between syncs).
+
+substitutions:
+  timezone: "America/Los_Angeles"
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: ${timezone}
+
+  - platform: sntp
+    id: sntp_time
+    timezone: ${timezone}
+    servers:
+      - pool.ntp.org

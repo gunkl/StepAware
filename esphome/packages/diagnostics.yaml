@@ -1,0 +1,52 @@
+# StepAware crash / health diagnostics package (replaces CrashHandler + the old coredump
+# build flags).
+#
+#   packages:
+#     diagnostics: !include packages/diagnostics.yaml
+#
+# Adds diagnostic entities (reset reason, heap, loop time, uptime) and turns on the ESP-IDF
+# core dump to flash. The core dump goes to the "coredump" partition (0x310000, 64 KB) that
+# esphome/partitions.csv already reserves. Retrieval over USB: see docs/ESPHOME.md
+# ("Crash diagnostics").
+#
+# The esp32: block below only adds framework options; package dicts are merged key by key,
+# so board / partitions / framework type stay those of the main YAML.
+
+esp32:
+  framework:
+    advanced:
+      # ESPHome excludes the IDF espcoredump component by default
+      # (DEFAULT_EXCLUDED_IDF_COMPONENTS); without this the options below are silently
+      # dropped from the final sdkconfig.
+      include_builtin_idf_components: [espcoredump]
+    sdkconfig_options:
+      # Port of -D CONFIG_ESP_COREDUMP_ENABLE=1 / DATA_FORMAT_ELF / CHECKSUM_CRC32 from
+      # platformio.ini, as real Kconfig options (ENABLE_TO_FLASH selects ENABLE).
+      CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH: y
+      CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF: y
+      CONFIG_ESP_COREDUMP_CHECKSUM_CRC32: y
+
+debug:
+  update_interval: 60s
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Reset Reason"
+    device:
+      name: "Device Info"
+
+sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    min_free:
+      name: "Heap Min Free"
+    loop_time:
+      name: "Loop Time"
+
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s

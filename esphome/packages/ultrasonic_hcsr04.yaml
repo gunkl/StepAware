@@ -1,0 +1,53 @@
+# Optional HC-SR04 ultrasonic distance sensor (port of HAL_Ultrasonic).
+#
+#   packages:
+#     ultrasonic: !include packages/ultrasonic_hcsr04.yaml
+#   stepaware:
+#     ...
+#     distance: distance_cm      # warn when distance_min <= d <= distance_max (cm)
+#     distance_min: 30           # defaults: SENSOR_MIN/MAX_DISTANCE_CM in include/config.h
+#     distance_max: 200
+#
+# Wiring (include/config.h): trigger GPIO8, echo GPIO9. HC-SR04 echo is a 5 V signal on a 5 V
+# supply: level-shift or divide it down to 3.3 V.
+# GPIO8 and GPIO9 are ESP32-C3 strapping pins (GPIO9 low at reset = download mode, GPIO8 must
+# be high for UART download): nothing on them may hold GPIO9 low during reset.
+#
+# The ultrasonic platform reports metres; the stepaware core compares the raw state with
+# distance_min/max, which are in cm, so this sensor is scaled to cm.
+# Do not use together with ultrasonic_grove.yaml (same id, same GPIO8).
+
+sensor:
+  # Fast, unthrottled reading for the stepaware core (kept out of Home Assistant).
+  - platform: ultrasonic
+    id: distance_cm
+    internal: true
+    trigger_pin:
+      number: GPIO8
+      ignore_strapping_warning: true
+    echo_pin:
+      number: GPIO9
+      ignore_strapping_warning: true
+    # HC-SR04 rated range is 4 m; the echo wait is capped accordingly (~23 ms).
+    timeout: 4m
+    update_interval: 100ms
+    unit_of_measurement: cm
+    accuracy_decimals: 0
+    filters:
+      # Timeout (nothing in range) and readings under the 2 cm minimum become NaN, and NaN
+      # must reach the core: it means "no target". Do not use filter_out: nan / clamp here;
+      # they would hold the last in-range value and keep the warning on.
+      - lambda: |-
+          return (std::isnan(x) || x < 0.02f) ? NAN : x * 100.0f;
+      # Median of 3 like DistanceSensorBase (NaN samples are skipped; all-NaN gives NaN).
+      - median:
+          window_size: 3
+          send_every: 1
+
+  # Throttled copy for Home Assistant.
+  - platform: copy
+    source_id: distance_cm
+    id: distance_ha
+    name: "Distance"
+    filters:
+      - throttle: 1s

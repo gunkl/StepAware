@@ -1,0 +1,60 @@
+# Compile test for the stepaware_battery and stepaware_grove_ultrasonic external components.
+# Build-only: not meant to be flashed onto the production device.
+
+esphome:
+  name: stepaware-test-sensors
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+    # No CONFIG_ADC_ONESHOT_FORCE_USE_ADC2_ON_C3: stepaware_battery bypasses the oneshot driver.
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [stepaware_battery, stepaware_grove_ultrasonic]
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+sensor:
+  - platform: stepaware_battery
+    id: battery_voltage
+    name: "Battery Voltage"
+    samples: 8
+    update_interval: 60s
+    accuracy_decimals: 2
+    filters:
+      # Divider R1 = R2 on GPIO5 (BATTERY_DIVIDER_RATIO in config.h)
+      - multiply: 2.0
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+
+  - platform: stepaware_grove_ultrasonic
+    id: grove_distance
+    name: "Grove Distance"
+    pin:
+      number: GPIO8
+      ignore_strapping_warning: true
+    timeout: 3.5m
+    pulse_time: 10us
+    update_interval: 100ms
+    filters:
+      # Equivalent of DistanceSensorBase: drop timeouts, median of 3, 2 cm floor.
+      - filter_out: nan
+      - median:
+          window_size: 3
+          send_every: 1
+      - clamp:
+          min_value: 0.02
+          ignore_out_of_range: true
