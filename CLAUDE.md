@@ -771,6 +771,10 @@ You need to adjust when:
 - [API.md](API.md) - REST API reference
 - [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) - Quick start guide
 
+### Available Skills
+- `/troubleshoot` - Structured debugging methodology for non-trivial bugs
+- `/end-of-session` - Review conversation for lessons learned and update CLAUDE.md/memory.md
+
 ### StepAware Components
 - State Machine: [include/state_machine.h](include/state_machine.h)
 - Config Manager: [include/config_manager.h](include/config_manager.h)

@@ -706,7 +706,7 @@ void WebAPI::handleGetConfig(AsyncWebServerRequest* request) {
     DEBUG_LOG_API("WebAPI: Returning sensor configuration (error rates not included - "
               "use POST /api/sensors/:slot/errorrate to trigger test)");
 
-    char buffer[2048];
+    char buffer[4096];
     if (!m_config->toJSON(buffer, sizeof(buffer))) {
         sendError(request, 500, "Failed to serialize configuration");
         return;
@@ -815,8 +815,11 @@ void WebAPI::handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, siz
     }
 
     // Return updated config
-    char buffer[2048];
-    m_config->toJSON(buffer, sizeof(buffer));
+    char buffer[4096];
+    if (!m_config->toJSON(buffer, sizeof(buffer))) {
+        sendError(request, 500, "Failed to serialize configuration");
+        return;
+    }
     sendJSON(request, 200, buffer);
 
     DEBUG_LOG_API("Config updated via API");

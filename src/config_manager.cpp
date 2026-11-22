@@ -137,11 +137,21 @@ bool ConfigManager::save() {
     }
     DEBUG_LOG_CONFIG("Total displays: %d", displayCount);
 
-    char buffer[2048];
-    if (!toJSON(buffer, sizeof(buffer))) {
+    // Heap-allocate to avoid stack overflow and to fit full config JSON
+    // (WiFi creds + 2+ sensors + displays can exceed 2048 bytes)
+    char* buffer = (char*)malloc(4096);
+    if (!buffer) {
+        setError("Out of memory for JSON buffer");
+        DEBUG_LOG_CONFIG("Config save FAILED: malloc(4096) failed (heap exhausted?)");
+        DEBUG_LOG_CONFIG("=== Save Failed: Out of memory ===");
+        return false;
+    }
+
+    if (!toJSON(buffer, 4096)) {
         setError("Failed to serialize config to JSON");
         DEBUG_LOG_CONFIG("Config save FAILED: Failed to serialize to JSON");
         DEBUG_LOG_CONFIG("=== Save Failed: JSON serialization error ===");
+        free(buffer);
         return false;
     }
 
@@ -150,11 +160,13 @@ bool ConfigManager::save() {
         setError("Failed to open config file for writing");
         DEBUG_LOG_CONFIG("Config save FAILED: Cannot open file for writing");
         DEBUG_LOG_CONFIG("=== Save Failed: Cannot open file ===");
+        free(buffer);
         return false;
     }
 
     size_t written = file.print(buffer);
     file.close();
+    free(buffer);
 
     if (written == 0) {
         setError("Failed to write config to file");
@@ -796,9 +808,15 @@ bool ConfigManager::toJSON(char* buffer, size_t bufferSize) {
 
     if (size == 0 || size >= bufferSize) {
         setError("JSON buffer too small");
+        uint32_t sizeNeeded = (uint32_t)size;
+        uint32_t cap = (uint32_t)bufferSize;
+        DEBUG_LOG_CONFIG("toJSON FAILED: needed %u bytes, buffer capacity %u", sizeNeeded, cap);
         return false;
     }
 
+    uint32_t serializedSize = (uint32_t)size;
+    uint32_t bufCap = (uint32_t)bufferSize;
+    DEBUG_LOG_CONFIG("toJSON: serialized %u bytes (buffer capacity: %u)", serializedSize, bufCap);
     return true;
 }
 
