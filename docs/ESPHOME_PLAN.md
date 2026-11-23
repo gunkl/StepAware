@@ -291,6 +291,26 @@ Remaining work is housekeeping:
 - move to the new PC (`MIGRATE-TO-NEW-PC.md` in the old Windows checkout)
 - optionally profile the 100–150 ms Loop Time peaks
 
+### New dev container, ESPHome 2026.11.0 and new WiFi (2026-11-22)
+
+- **Dev environment:** moved to the new PC's `stepaware-dev` container.
+  - ESPHome 2026.11.0 (unpinned) compiled the components with no changes. It builds with
+    ESP-IDF 5.5.6 directly instead of through PlatformIO, so the toolchain moved to
+    `~/.cache/esphome/idf/` and gdb is installed separately (see ESPHOME.md, crash diagnostics).
+  - The only new compiler warning is cosmetic: an enum/size_t mix in a conditional in
+    `stepaware.cpp` `setup()`.
+- **Device Builder:** the config is split into `stepaware_base.yaml`, the local entry
+  `stepaware.yaml` and the HA wrapper `ha/stepaware.yaml`, so HA builds from GitHub. The
+  validated config is unchanged.
+- **OTA:** the 2026.11.0 image (1,009,824 bytes) went from the container to 10.124.0.98.
+  - The same OTA moved the device to a new SSID. It came back at **10.123.0.98**.
+  - The API connects there, safe_mode logged "Boot seems successful", and
+    *Reset Reason* = `Reboot request from esphome.ota`.
+  - The only boot warning is ESPHome's hint about `flash_chip: generic` to save IRAM.
+- **Not re-verified on 2026.11.0:** deep sleep and wake paths, dormant mode and the matrix.
+  Power Saving Mode was Off and the device on USB during this check. The native tests haven't
+  been run in the new container.
+
 ## Decisions (2026-11-22)
 
 1. Hybrid design on **ESP-IDF**: approved.

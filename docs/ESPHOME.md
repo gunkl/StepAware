@@ -353,8 +353,8 @@ Then, inside the container:
 ```bash
 esphome config stepaware.yaml                              # validate
 esphome compile stepaware.yaml                             # build
-esphome upload stepaware.yaml --device 10.124.0.98         # native OTA (verified)
-esphome logs stepaware.yaml --device 10.124.0.98           # API log stream
+esphome upload stepaware.yaml --device 10.123.0.98         # native OTA (verified)
+esphome logs stepaware.yaml --device 10.123.0.98           # API log stream
 ```
 
 - Secrets come from `esphome/secrets.yaml` (gitignored). Copy `secrets.yaml.example` and fill
