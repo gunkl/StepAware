@@ -114,6 +114,11 @@ void PowerNumber::control(float value) {
     this->parent_->onSettingChanged();
 }
 
+void PowerSwitch::write_state(bool state) {
+    this->publish_state(state);
+    this->parent_->onSettingChanged();
+}
+
 #ifdef USE_BUTTON
 void RecalButton::press_action() { this->parent_->startRecalibration("button"); }
 
@@ -631,9 +636,19 @@ void StepAwarePower::setup() {
         }
     }
 
+    bool motionWifi = false;
+    if (m_motionWakeWifi != nullptr) {
+        motionWifi = m_motionWakeWifi->get_initial_state_with_restore_mode().value_or(false);
+        m_motionWakeWifi->publish_state(motionWifi);
+    }
+
     // WiFi decision. WiFiComponent::setup() (priority WIFI, later) reads enable_on_boot, so set
-    // it either way: no delay on WiFi-on boots, no radio on motion wakes.
-    bool wifiOn = !isDeepSleepMode() || m_usbAtWake || m_session != SESSION_RADIO_OFF;
+    // it either way: no delay on WiFi-on boots, no radio on motion wakes unless "WiFi on Motion
+    // Wake" is on. A motion wake with WiFi keeps the motion session's short idle limit, but
+    // first gives Home Assistant its check-in window (or the WiFi timeout). Spurious GPIO wakes
+    // never turn the radio on.
+    bool wifiOn = !isDeepSleepMode() || m_usbAtWake || m_session != SESSION_RADIO_OFF ||
+                  (motionWifi && m_wakeCause == WAKE_PIR);
     if (wifi::global_wifi_component != nullptr) {
         wifi::global_wifi_component->set_enable_on_boot(wifiOn);
     }

@@ -12,7 +12,8 @@ sensor, the feedback delay, hold-to-wake and the on_shutdown / on_dormant_wake h
 
 from esphome import automation
 import esphome.codegen as cg
-from esphome.components import binary_sensor, button, number, select, sensor, text_sensor
+from esphome.components import binary_sensor, button, number, select, sensor, switch
+from esphome.components import text_sensor
 from esphome.components import time as time_
 from esphome.components.deep_sleep import DeepSleepComponent
 import esphome.config_validation as cv
@@ -35,7 +36,7 @@ DEPENDENCIES = ["esp32", "wifi", "deep_sleep"]
 def AUTO_LOAD(config):
     # button only with pir_recalibration (its "Recalibrate PIRs" entity): loading it
     # unconditionally would reserve the id "button" in configs that use it for a sensor.
-    base = ["binary_sensor", "number", "select", "sensor", "text_sensor"]
+    base = ["binary_sensor", "number", "select", "sensor", "switch", "text_sensor"]
     if not config or "pir_recalibration" in config or "dormant" in config:
         base.append("button")
     return base
@@ -59,6 +60,7 @@ CONF_ON_SLEEP = "on_sleep"
 CONF_POWER_SAVING_MODE = "power_saving_mode"
 CONF_IDLE_TIMEOUT = "idle_timeout"
 CONF_MOTION_WAKE_IDLE = "motion_wake_idle"
+CONF_MOTION_WAKE_WIFI = "motion_wake_wifi"
 CONF_CHECKIN_INTERVAL = "checkin_interval"
 CONF_WAKE_REASON = "wake_reason"
 CONF_DEEP_SLEEP_COUNT = "deep_sleep_count"
@@ -117,6 +119,9 @@ PowerNumber = stepaware_power_ns.class_(
 )
 RecalButton = stepaware_power_ns.class_(
     "RecalButton", button.Button, cg.Parented.template(StepAwarePower)
+)
+PowerSwitch = stepaware_power_ns.class_(
+    "PowerSwitch", switch.Switch, cg.Parented.template(StepAwarePower)
 )
 ShutdownButton = stepaware_power_ns.class_(
     "ShutdownButton", button.Button, cg.Parented.template(StepAwarePower)
@@ -324,6 +329,16 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(
             CONF_CHECKIN_INTERVAL, default={"name": "Check-in Interval"}
         ): _number_schema("min", "mdi:timer-sync-outline", 60, 0, 1440),
+        # Off (default) = PIR wakes in Deep sleep mode on battery keep the radio off.
+        cv.Optional(
+            CONF_MOTION_WAKE_WIFI, default={"name": "WiFi on Motion Wake"}
+        ): switch.switch_schema(
+            PowerSwitch,
+            block_inverted=True,
+            default_restore_mode="RESTORE_DEFAULT_OFF",
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:wifi-arrow-up-down",
+        ),
         cv.Optional(
             CONF_WAKE_REASON, default={"name": "Wake Reason"}
         ): text_sensor.text_sensor_schema(
@@ -448,6 +463,10 @@ async def to_code(config):
         await cg.register_parented(num, var)
         cg.add(num.setInitialValue(conf[CONF_INITIAL_VALUE]))
         cg.add(getattr(var, setter)(num))
+
+    sw = await switch.new_switch(config[CONF_MOTION_WAKE_WIFI])
+    await cg.register_parented(sw, var)
+    cg.add(var.setMotionWakeWifiSwitch(sw))
 
     ts = await text_sensor.new_text_sensor(config[CONF_WAKE_REASON])
     cg.add(var.setWakeReasonSensor(ts))

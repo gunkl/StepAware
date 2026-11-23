@@ -99,6 +99,7 @@ if they are configured in the YAML.
 | Idle Timeout | number (s) | 10–3600 | 180 | `stepaware_power`: idle time before sleep in WiFi sessions |
 | Motion Wake Idle | number (s) | 5–600 | 15 | `stepaware_power`: idle time before sleep after a motion wake (WiFi off) |
 | Check-in Interval | number (min) | 0–1440 (0 = no timer wake) | 60 | `stepaware_power`: timer wake while asleep |
+| WiFi on Motion Wake | switch | on / off | off | `stepaware_power`: PIR wakes from deep sleep bring WiFi up and report to HA |
 | Restart / Restart (Safe Mode) | button | | | native |
 | Clear LED Matrix | button | | | template, runs `stepaware_matrix.clear` |
 | Reset Battery Calibration | button (config) | | | template, runs `stepaware_battery.reset_calibration`: factor back to 1.0 until the next full charge. See [Battery calibration](#battery-calibration). |
@@ -220,7 +221,7 @@ Power Saving Mode is **Off** by default, so the device never sleeps until you se
 
 | Wake cause | WiFi | Session |
 |---|---|---|
-| PIR (GPIO1/GPIO4 HIGH) | Off | Warning, then sleep again after *Motion Wake Idle* |
+| PIR (GPIO1/GPIO4 HIGH) | Off (On with *WiFi on Motion Wake*) | Warning, then sleep again after *Motion Wake Idle*. With the switch on, it first waits for HA's check-in window or `wifi_timeout`, like a timer wake |
 | Button (GPIO0 LOW; wins over a PIR) | On | Interactive: sleeps after *Idle Timeout* |
 | Check-in timer | On | Reports, reads Stay Awake, sleeps once HA has had `checkin_min_awake` (10 s), or after `wifi_timeout` (30 s) if HA never connects |
 | Power-on / reset / OTA reboot / crash / brownout | On | Interactive, plus a 60 s boot grace period |

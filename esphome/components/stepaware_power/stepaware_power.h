@@ -30,6 +30,7 @@
 #include "esphome/components/number/number.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 
 #ifdef USE_OTA_STATE_LISTENER
@@ -94,6 +95,12 @@ class PowerNumber : public number::Number, public Parented<StepAwarePower> {
     float m_initialValue{0.0f};
 };
 
+/// "WiFi on Motion Wake" switch, restored from flash (switch restore_mode).
+class PowerSwitch : public switch_::Switch, public Parented<StepAwarePower> {
+ protected:
+    void write_state(bool state) override;
+};
+
 #ifdef USE_BUTTON
 /// "Recalibrate PIRs" button: power-cycles the PIR rail now.
 class RecalButton : public button::Button, public Parented<StepAwarePower> {
@@ -147,6 +154,7 @@ class StepAwarePower : public Component
     void setIdleTimeoutNumber(PowerNumber *n) { m_idleTimeout = n; }
     void setMotionWakeIdleNumber(PowerNumber *n) { m_motionWakeIdle = n; }
     void setCheckinIntervalNumber(PowerNumber *n) { m_checkinInterval = n; }
+    void setMotionWakeWifiSwitch(PowerSwitch *s) { m_motionWakeWifi = s; }
     void setWakeReasonSensor(text_sensor::TextSensor *s) { m_wakeReasonSensor = s; }
     void setDeepSleepCountSensor(sensor::Sensor *s) { m_deepSleepCountSensor = s; }
     void setSleepBlockedSensor(binary_sensor::BinarySensor *s) { m_sleepBlockedSensor = s; }
@@ -300,6 +308,7 @@ class StepAwarePower : public Component
     PowerNumber *m_idleTimeout{nullptr};
     PowerNumber *m_motionWakeIdle{nullptr};
     PowerNumber *m_checkinInterval{nullptr};
+    PowerSwitch *m_motionWakeWifi{nullptr};
     text_sensor::TextSensor *m_wakeReasonSensor{nullptr};
     sensor::Sensor *m_deepSleepCountSensor{nullptr};
     binary_sensor::BinarySensor *m_sleepBlockedSensor{nullptr};
