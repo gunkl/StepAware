@@ -21,11 +21,12 @@ Status markers used below:
 4. [Deep sleep and Stay Awake](#deep-sleep-and-stay-awake)
 5. [Dormant mode (switched off)](#dormant-mode-switched-off)
 6. [Building, flashing, OTA](#building-flashing-ota)
-7. [USB rescue](#usb-rescue)
-8. [Boot-time button resets](#boot-time-button-resets)
-9. [Optional packages](#optional-packages)
-10. [Crash diagnostics](#crash-diagnostics)
-11. [Old firmware feature map](#old-firmware-feature-map)
+7. [ESPHome Device Builder (Home Assistant)](#esphome-device-builder-home-assistant)
+8. [USB rescue](#usb-rescue)
+9. [Boot-time button resets](#boot-time-button-resets)
+10. [Optional packages](#optional-packages)
+11. [Crash diagnostics](#crash-diagnostics)
+12. [Old firmware feature map](#old-firmware-feature-map)
 
 ## Hardware and pin map
 
@@ -358,7 +359,9 @@ esphome logs stepaware.yaml --device 10.124.0.98           # API log stream
 
 - Secrets come from `esphome/secrets.yaml` (gitignored). Copy `secrets.yaml.example` and fill
   it in.
-- Build output goes to `esphome/.esphome/build/stepaware/.pioenvs/stepaware/`:
+- Build output goes to `esphome/.esphome/build/stepaware/build/`. (ESPHome 2026.6.x built
+  through PlatformIO into `.pioenvs/stepaware/`. Since 2026.11 it calls ESP-IDF directly, and
+  the toolchain lives in `~/.cache/esphome/idf/` instead of `~/.platformio`.)
   - `firmware.ota.bin`: for OTA
   - `firmware.factory.bin`: for a full USB flash at 0x0, bootloader and partition table
     included
@@ -369,6 +372,42 @@ esphome logs stepaware.yaml --device 10.124.0.98           # API log stream
 - The `test_*.yaml` files in `esphome/` are build-only checks for each component (names
   `stepaware-test-*`). **Never flash them to the device.**
 
+## ESPHome Device Builder (Home Assistant)
+
+The dev container does all development and testing. Home Assistant's ESPHome Device Builder
+builds the same config straight from GitHub, so the device shows in its dashboard with
+Logs, Install and Validate.
+
+**How the config is split:**
+
+| File | Role |
+|---|---|
+| `esphome/stepaware_base.yaml` | The whole device config. It has no paths relative to the top-level YAML, so it works as a local `!include` and as a remote package. |
+| `esphome/stepaware.yaml` | Container entry point. Includes the base, adds the local `components/` folder and `partitions.csv`. |
+| `esphome/ha/stepaware.yaml` | Device Builder entry point. Pulls the base and `components/` from `gunkl/StepAware@feature/esphome`. |
+
+Both entry files list the same external components; keep those lists the same. ESPHome
+resolves `partitions:` and local `external_components` paths relative to the top-level YAML,
+never inside a remote package, which is why the entry files hold them.
+
+**One-time setup in Home Assistant:**
+
+1. Copy `esphome/ha/stepaware.yaml` to `/config/esphome/stepaware.yaml`.
+2. Copy `esphome/partitions.csv` to `/config/esphome/stepaware-partitions.csv`. The table
+   never changes, because OTA never rewrites the table on the device.
+3. Add the keys from `secrets.yaml.example` to HA's `/config/esphome/secrets.yaml`. Use the
+   same `api_encryption_key` and `ota_password` as the device. The `!secret` tags in the
+   GitHub package resolve from HA's file.
+
+**Day to day:** test in the container, commit, push. The wrapper uses `refresh: 0s`, so the
+Device Builder fetches the branch on every Validate or Install. Nothing that isn't pushed
+reaches HA. The Device Builder builds with its own ESPHome version, which may differ from
+the container's.
+
+Checked on 2026-11-22 against a local git copy of the branch: the wrapper validates with the
+same config as `stepaware.yaml` (apart from the two paths), its secrets come from the HA-side
+file, and a new commit is picked up on the next build.
+
 ## USB rescue
 
 USB serial is the C3's built-in USB-Serial-JTAG. The container has no USB access, so run
@@ -376,7 +415,7 @@ esptool on Windows (`pip install esptool`):
 
 ```bash
 # copy the image out of the container
-docker cp stepaware-dev:/workspace/StepAware/esphome/.esphome/build/stepaware/.pioenvs/stepaware/firmware.factory.bin .
+docker cp stepaware-dev:/workspace/StepAware/esphome/.esphome/build/stepaware/build/firmware.factory.bin .
 
 esptool --chip esp32c3 --port COM5 write-flash 0x0 firmware.factory.bin
 ```
@@ -547,11 +586,27 @@ docker cp coredump.bin stepaware-dev:/tmp/coredump.bin
 Then decode it in the container, against the ELF **of the build that crashed**:
 
 ```bash
-/home/dev/.platformio/penv/bin/esp-coredump --chip esp32c3 info_corefile \
-  --gdb /home/dev/.platformio/packages/tool-riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb \
+~/.cache/esphome/idf/penvs/5.5.6/bin/esp-coredump --chip esp32c3 info_corefile \
+  --gdb ~/.cache/esphome/idf/tools/riscv32-esp-elf-gdb/17.1_20260402/riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb \
   --core /tmp/coredump.bin --core-format raw \
-  /workspace/StepAware/esphome/.esphome/build/stepaware/.pioenvs/stepaware/firmware.elf
+  /workspace/StepAware/esphome/.esphome/build/stepaware/build/firmware.elf
 ```
+
+- The version folders in these paths (`5.5.6`, `esp-14.2.0_…`) change with each ESPHome
+  release. To find the current ones, run
+  `find ~/.cache/esphome/idf -name esp-coredump -o -name 'riscv32-esp-elf-addr2line'`.
+- **gdb is a separate install.** ESPHome's direct ESP-IDF build doesn't download
+  `riscv32-esp-elf-gdb`, and `esp-coredump` needs it. It's installed into the `~/.cache`
+  volume, so it survives container rebuilds. To reinstall it, for example after an ESPHome
+  release moves to a new ESP-IDF version:
+
+  ```bash
+  I=~/.cache/esphome/idf; V=5.5.6   # the ESP-IDF version under $I/frameworks
+  IDF_TOOLS_PATH=$I $I/penvs/$V/bin/python $I/frameworks/$V/tools/idf_tools.py install riscv32-esp-elf-gdb
+  ```
+
+- Checked on 2026-11-22: gdb 17.1 loads the ESPHome `firmware.elf`, and StepAware's own code
+  resolves to file and line. Decoding a real core dump hasn't been tried yet.
 
 Keep a copy of `firmware.elf` for every image you flash. The next compile overwrites it.
 
@@ -561,7 +616,7 @@ Keep a copy of `firmware.elf` for every image you flash. The next compile overwr
 |---|---|
 | `tools/extract_coredump.py` | Yes. It reads the same offset and size (0x310000 / 0x10000). Its Python path is hard-coded for another machine, so the `esptool read-flash` line above is simpler. |
 | `analyze_coredump.py` | Same `esp_coredump info_corefile --core-format raw` call as above, but with hard-coded Windows paths and the old ELF path `.pio/build/esp32c3/firmware.elf`. Use the command above instead. |
-| `decode_coredump.py` | Still works as a fallback (raw scan of the dump plus addr2line). Change `ELF` to the ESPHome `firmware.elf` and `ADDR2LINE` to `/home/dev/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-addr2line`. |
+| `decode_coredump.py` | Still works as a fallback (raw scan of the dump plus addr2line). Change `ELF` to the ESPHome `firmware.elf` (`.esphome/build/stepaware/build/firmware.elf`) and `ADDR2LINE` to `~/.cache/esphome/idf/tools/riscv32-esp-elf/esp-14.2.0_20260121/riscv32-esp-elf/bin/riscv32-esp-elf-addr2line`. That's the current version folder; see the `find` command above. |
 
 The old `/api/coredump` HTTP download is gone with the web API. Over USB is the only way to
 read a dump. **(Core dump capture: not verified on hardware.)**

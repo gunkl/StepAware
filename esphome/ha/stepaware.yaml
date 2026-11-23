@@ -1,0 +1,36 @@
+# StepAware - wrapper for Home Assistant's ESPHome Device Builder.
+#
+# Put this file at /config/esphome/stepaware.yaml in Home Assistant, and copy
+# esphome/partitions.csv next to it as /config/esphome/stepaware-partitions.csv.
+# (ESPHome resolves partitions: relative to this file, never inside a remote package.
+# The table never changes, because OTA never rewrites the table on the device.)
+#
+# HA's secrets.yaml needs the same keys as esphome/secrets.yaml.example, with the same
+# api_encryption_key and ota_password as the device.
+#
+# Push to GitHub before building here: refresh: 0s pulls the branch on every build.
+# Keep the component list the same as in esphome/stepaware.yaml.
+
+packages:
+  stepaware:
+    url: https://github.com/gunkl/StepAware
+    ref: feature/esphome
+    files: [esphome/stepaware_base.yaml]
+    refresh: 0s
+
+esp32:
+  partitions: stepaware-partitions.csv
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/gunkl/StepAware
+      ref: feature/esphome
+      path: esphome/components
+    refresh: 0s
+    components:
+      - stepaware
+      - stepaware_matrix
+      - stepaware_battery
+      - stepaware_power
+      - stepaware_boot_reset
