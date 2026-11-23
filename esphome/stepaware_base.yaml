@@ -331,8 +331,20 @@ sensor:
     samples: 8
     update_interval: 60s
     accuracy_decimals: 2
+    # Applied in the sensor (not a filter) so the full-charge calibration sees battery volts.
+    divider_ratio: ${battery_divider_ratio}
+    # The divider and ADC carry a gain error. On USB, the charger holds the cell at its
+    # constant-voltage setpoint; when the reading stays flat there, that reading is learned as
+    # full_voltage and the correction applies from then on, to this sensor and so to the
+    # low / critical thresholds and the percentage. Stored in flash; 1.0 until the first
+    # full charge. See docs/ESPHOME.md "Battery calibration".
+    full_charge_calibration:
+      usb_sensor: usb_power
+      full_voltage: 4.20V
+      stable_time: 30min
+      factor:
+        name: "Battery Calibration"
     filters:
-      - multiply: ${battery_divider_ratio}
       - sliding_window_moving_average:
           window_size: 5
           send_every: 1
@@ -363,3 +375,8 @@ button:
     name: "Clear LED Matrix"
     on_press:
       - stepaware_matrix.clear: led_matrix
+  - platform: template
+    name: "Reset Battery Calibration"
+    entity_category: config
+    on_press:
+      - stepaware_battery.reset_calibration: battery_voltage

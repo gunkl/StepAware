@@ -14,6 +14,8 @@
 #include <hal/adc_ll.h>
 #include <soc/apb_saradc_struct.h>
 
+#include <cmath>
+
 namespace esphome::stepaware_battery {
 
 static const char *const TAG = "stepaware_battery";
@@ -39,6 +41,10 @@ static constexpr uint32_t RETRY_DELAY_US = 50;
 static constexpr float FALLBACK_FULL_SCALE_MV = 3300.0f;
 static constexpr float RAW_FULL_SCALE = 4095.0f;
 static constexpr uint32_t FAILURE_LOG_EVERY = 10;
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+// Flash key for the learned factor. Changing it forgets every device's calibration.
+static const char *const CAL_PREF_NAME = "stepaware_battery_cal";
+#endif
 
 void StepAwareBatterySensor::setup() {
     // GPIO5 as a plain analog input: no digital input buffer, no pulls.
@@ -76,6 +82,17 @@ void StepAwareBatterySensor::setup() {
         ESP_LOGW(TAG, "eFuse curve-fitting calibration unavailable (%s); using linear fallback",
                  esp_err_to_name(err));
     }
+
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    // The learned full-charge factor survives reboots and deep sleep (flash, not RTC).
+    m_calPref = global_preferences->make_preference<step_battery::CalibrationPersist>(
+        fnv1_hash(CAL_PREF_NAME), true);
+    step_battery::CalibrationPersist stored{};
+    if (m_calPref.load(&stored)) {
+        m_calibrator.restore(stored);
+    }
+    publishFactor();
+#endif
 }
 
 bool StepAwareBatterySensor::readRawOnce(uint16_t &raw) {
@@ -167,10 +184,75 @@ void StepAwareBatterySensor::update() {
     }
 
     float rawAvg = static_cast<float>(rawSum) / goodSamples;
-    float volts = rawToMillivolts(rawAvg) / 1000.0f;
-    ESP_LOGD(TAG, "raw=%.1f (%u/%u samples, %" PRIu32 " retries) -> %.3f V", rawAvg, goodSamples,
-             m_samples, failedConversions, volts);
+    float pinVolts = rawToMillivolts(rawAvg) / 1000.0f;
+    float measured = pinVolts * m_dividerRatio;
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    updateCalibration(measured);
+#endif
+    float volts = m_calibrator.apply(measured);
+    ESP_LOGD(TAG, "raw=%.1f (%u/%u samples, %" PRIu32 " retries) -> pin %.3f V, battery %.3f V"
+             " (x%.4f)", rawAvg, goodSamples, m_samples, failedConversions, pinVolts, volts,
+             m_calibrator.factor());
     this->publish_state(volts);
+}
+
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+void StepAwareBatterySensor::set_calibration(float fullV, uint32_t stableMs,
+                                             float maxSlopeVPerHour, float maxSpreadV) {
+    step_battery::CalibrationConfig cfg;
+    cfg.fullV = fullV;
+    cfg.stableMs = stableMs;
+    cfg.maxSlopeVPerHour = maxSlopeVPerHour;
+    cfg.maxSpreadV = maxSpreadV;
+    // Readings arrive once per update_interval; ask for 2/3 of the window's worth.
+    uint32_t interval = this->get_update_interval();
+    uint32_t expected = interval > 0 ? stableMs / interval + 1 : 6;
+    uint32_t minSamples = expected * 2 / 3;
+    cfg.minSamples = static_cast<uint8_t>(minSamples < 5 ? 5 : (minSamples > 60 ? 60 : minSamples));
+    m_calibrator.setConfig(cfg);
+}
+
+void StepAwareBatterySensor::updateCalibration(float measuredV) {
+    if (m_usbSensor == nullptr) {
+        return;
+    }
+    bool usb = m_usbSensor->has_state() && m_usbSensor->state;
+    step_battery::CalibrationEvent ev = m_calibrator.onReading(millis(), measuredV, usb);
+    if (ev == step_battery::CAL_UPDATED) {
+        ESP_LOGI(TAG, "Full-charge plateau at %.3f V measured -> calibration factor %.4f "
+                 "(session %u)", m_calibrator.sessionPlateauV(), m_calibrator.factor(),
+                 m_calibrator.sessions());
+        saveCalibration();
+        publishFactor();
+    } else if (ev == step_battery::CAL_REJECTED) {
+        ESP_LOGW(TAG, "Full-charge plateau found, but factor %.4f is outside %.2f-%.2f; "
+                 "check the divider_ratio and wiring. Calibration unchanged.",
+                 m_calibrator.lastRejectedFactor(), m_calibrator.getConfig().minFactor,
+                 m_calibrator.getConfig().maxFactor);
+    }
+}
+
+void StepAwareBatterySensor::saveCalibration() {
+    step_battery::CalibrationPersist p = m_calibrator.persist();
+    if (!m_calPref.save(&p) || !global_preferences->sync()) {
+        ESP_LOGE(TAG, "Calibration: flash write failed");
+    }
+}
+
+void StepAwareBatterySensor::publishFactor() {
+    if (m_factorSensor != nullptr) {
+        m_factorSensor->publish_state(m_calibrator.isCalibrated() ? m_calibrator.factor() : NAN);
+    }
+}
+#endif  // USE_STEPAWARE_BATTERY_CALIBRATION
+
+void StepAwareBatterySensor::resetCalibration() {
+    m_calibrator.reset();
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    saveCalibration();
+    publishFactor();
+    ESP_LOGI(TAG, "Calibration reset; factor 1.0 until the next full charge");
+#endif
 }
 
 void StepAwareBatterySensor::dump_config() {
@@ -178,8 +260,21 @@ void StepAwareBatterySensor::dump_config() {
     ESP_LOGCONFIG(TAG,
                   "  Channel: ADC2 CH0 (GPIO5), attenuation 12 dB\n"
                   "  Samples: %u\n"
-                  "  Calibration: %s",
-                  m_samples, m_caliHandle != nullptr ? "eFuse curve fitting" : "linear fallback");
+                  "  ADC calibration: %s\n"
+                  "  Divider ratio: %.3f",
+                  m_samples, m_caliHandle != nullptr ? "eFuse curve fitting" : "linear fallback",
+                  m_dividerRatio);
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    const step_battery::CalibrationConfig &cfg = m_calibrator.getConfig();
+    ESP_LOGCONFIG(TAG,
+                  "  Full-charge calibration: %s\n"
+                  "    Factor: %.4f (%u charge sessions)\n"
+                  "    Full voltage: %.2f V, flat for %" PRIu32 " s (slope <= %.3f V/h,"
+                  " spread <= %.3f V, >= %u readings)",
+                  m_calibrator.isCalibrated() ? "calibrated" : "not yet calibrated",
+                  m_calibrator.factor(), m_calibrator.sessions(), cfg.fullV, cfg.stableMs / 1000,
+                  cfg.maxSlopeVPerHour, cfg.maxSpreadV, cfg.minSamples);
+#endif
     LOG_UPDATE_INTERVAL(this);
 }
 

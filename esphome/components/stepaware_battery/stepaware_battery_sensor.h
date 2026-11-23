@@ -2,8 +2,16 @@
 
 #ifdef USE_ESP32_VARIANT_ESP32C3
 
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
+#include "esphome/core/defines.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/sensor/sensor.h"
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#endif
+
+#include "battery_calibration.h"
 
 #include <esp_adc/adc_cali.h>
 
@@ -21,7 +29,10 @@ namespace esphome::stepaware_battery {
  * arbiter, so a register-level oneshot conversion still works; a conversion pre-empted by the
  * WiFi power detector comes back with an invalid-data flag, which is checked here.
  *
- * Publishes the voltage at the pin, in volts. Any divider ratio is applied by YAML filters.
+ * Publishes battery volts: pin volts x divider_ratio x the full-charge calibration factor
+ * (battery_calibration.h; 1.0 until the first full charge, or when calibration is not
+ * configured). Everything downstream (low / critical thresholds, percentage) therefore sees the
+ * corrected voltage.
  */
 class StepAwareBatterySensor : public sensor::Sensor, public PollingComponent {
 public:
@@ -31,16 +42,47 @@ public:
     float get_setup_priority() const override;
 
     void set_samples(uint8_t samples) { m_samples = samples; }
+    void set_divider_ratio(float ratio) { m_dividerRatio = ratio; }
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    void set_usb_sensor(binary_sensor::BinarySensor *usb) { m_usbSensor = usb; }
+    void set_factor_sensor(sensor::Sensor *factor) { m_factorSensor = factor; }
+    void set_calibration(float fullV, uint32_t stableMs, float maxSlopeVPerHour,
+                         float maxSpreadV);
+#endif
+
+    /// Forget the learned factor (back to 1.0) and erase it from flash.
+    void resetCalibration();
 
 protected:
     /// One oneshot conversion. Returns false on hardware timeout or arbiter-invalidated data.
     bool readRawOnce(uint16_t &raw);
     /// Raw 12-bit count -> millivolts at the pin (eFuse curve fitting, or linear fallback).
     float rawToMillivolts(float raw) const;
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    /// Feed the uncorrected reading to the calibrator; persist and report a new factor.
+    void updateCalibration(float measuredV);
+    void saveCalibration();
+    void publishFactor();
+#endif
 
     adc_cali_handle_t m_caliHandle{nullptr};
     uint8_t m_samples{8};
     uint32_t m_failedUpdates{0};
+    float m_dividerRatio{1.0f};
+    step_battery::FullChargeCalibrator m_calibrator;
+#ifdef USE_STEPAWARE_BATTERY_CALIBRATION
+    binary_sensor::BinarySensor *m_usbSensor{nullptr};
+    sensor::Sensor *m_factorSensor{nullptr};
+    ESPPreferenceObject m_calPref;
+#endif
+};
+
+template<typename... Ts>
+class ResetCalibrationAction : public Action<Ts...>, public Parented<StepAwareBatterySensor> {
+public:
+    explicit ResetCalibrationAction(StepAwareBatterySensor *parent)
+        : Parented<StepAwareBatterySensor>(parent) {}
+    void play(const Ts &...x) override { this->parent_->resetCalibration(); }
 };
 
 }  // namespace esphome::stepaware_battery

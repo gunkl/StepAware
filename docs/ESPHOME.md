@@ -19,14 +19,15 @@ Status markers used below:
 2. [Components](#components)
 3. [Home Assistant entities](#home-assistant-entities)
 4. [Deep sleep and Stay Awake](#deep-sleep-and-stay-awake)
-5. [Dormant mode (switched off)](#dormant-mode-switched-off)
-6. [Building, flashing, OTA](#building-flashing-ota)
-7. [ESPHome Device Builder (Home Assistant)](#esphome-device-builder-home-assistant)
-8. [USB rescue](#usb-rescue)
-9. [Boot-time button resets](#boot-time-button-resets)
-10. [Optional packages](#optional-packages)
-11. [Crash diagnostics](#crash-diagnostics)
-12. [Old firmware feature map](#old-firmware-feature-map)
+5. [Battery calibration](#battery-calibration)
+6. [Dormant mode (switched off)](#dormant-mode-switched-off)
+7. [Building, flashing, OTA](#building-flashing-ota)
+8. [ESPHome Device Builder (Home Assistant)](#esphome-device-builder-home-assistant)
+9. [USB rescue](#usb-rescue)
+10. [Boot-time button resets](#boot-time-button-resets)
+11. [Optional packages](#optional-packages)
+12. [Crash diagnostics](#crash-diagnostics)
+13. [Old firmware feature map](#old-firmware-feature-map)
 
 ## Hardware and pin map
 
@@ -65,7 +66,7 @@ Local external components live in `esphome/components/`.
 |---|---|
 | `stepaware` | Core logic: operating modes (Off / Continuous / Motion), the motion warning state machine, the button, hazard LED patterns and direction detection. The decision logic is plain C++ in `components/stepaware/core/`, unit-tested natively (`pio test -e native_esphome`). It can optionally use a distance sensor (`distance:`). |
 | `stepaware_matrix` | HT16K33 8x8 matrix driver and the animations (motion alert, battery low, boot status, error, WiFi connected/disconnected). Has actions `stepaware_matrix.start_animation`, `.stop_animation`, `.clear`, `.standby`, `.set_brightness` and `.set_snake_progress`. `standby` (HT16K33 oscillator off) runs before every deep sleep. |
-| `stepaware_battery` | Reads the battery on GPIO5 (ADC2) with low-level register access, so it works while WiFi is on. ESPHome's `adc` times out on ADC2 when WiFi is active. |
+| `stepaware_battery` | Reads the battery on GPIO5 (ADC2) with low-level register access, so it works while WiFi is on. ESPHome's `adc` times out on ADC2 when WiFi is active. Applies the divider ratio and the learned [full-charge calibration](#battery-calibration). Has action `stepaware_battery.reset_calibration`. |
 | `stepaware_power` | Deep-sleep policy. It classifies the wake cause, decides whether WiFi starts on this boot, decides when it is safe to sleep, and arms all three GPIO wake sources and the GPIO20 PIR rail hold. ESPHome's `deep_sleep` can't do mixed-level multi-pin wake on the C3, so this component does it; the actual shutdown still goes through `deep_sleep`. It also owns [dormant mode](#dormant-mode-switched-off): the flag in flash, the boot re-entry and the critical-battery shutdown. |
 | `stepaware_grove_ultrasonic` | Sensor platform for the single-pin Grove Ultrasonic Ranger v2.0. Reports metres. |
 | `stepaware_boot_reset` | Hold the button at boot for a WiFi reset or a factory reset. See [Boot-time button resets](#boot-time-button-resets). |
@@ -100,6 +101,7 @@ if they are configured in the YAML.
 | Check-in Interval | number (min) | 0–1440 (0 = no timer wake) | 60 | `stepaware_power`: timer wake while asleep |
 | Restart / Restart (Safe Mode) | button | | | native |
 | Clear LED Matrix | button | | | template, runs `stepaware_matrix.clear` |
+| Reset Battery Calibration | button (config) | | | template, runs `stepaware_battery.reset_calibration`: factor back to 1.0 until the next full charge. See [Battery calibration](#battery-calibration). |
 | Recalibrate PIRs | button | | | `stepaware_power` `pir_recalibration`: power-cycles the PIR rail now (2 s off + 60 s warm-up) |
 | Shut Down | button | | | `stepaware_power` `dormant`: power-off icon for 1.5 s, then [dormant](#dormant-mode-switched-off) until the mode button is pressed. Refused during an OTA. |
 
@@ -112,8 +114,9 @@ if they are configured in the YAML.
 | USB Power | binary_sensor (plug) | GPIO6 |
 | Approaching / Leaving | binary_sensor (moving) | Direction detector |
 | State | text_sensor (diagnostic) | `Off`, `Continuous`, `Motion (warming up)`, `Motion (watching)`, `Motion (warning)`, `Rebooting`, `Shutting down` |
-| Battery Voltage | sensor (V) | 8-sample read ×2 divider, 5-point moving average, every 60 s **(verified: 3.80 V)** |
-| Battery | sensor (%) | Linear from 3.0 V (0 %) to 4.2 V (100 %) |
+| Battery Voltage | sensor (V) | 8-sample read × divider (`divider_ratio: 2.0`) × [calibration factor](#battery-calibration), 5-point moving average, every 60 s **(verified: 3.80 V, before calibration existed)** |
+| Battery Calibration | sensor (diagnostic) | The learned gain factor. Unknown until the first full charge on USB. Kept in flash. |
+| Battery | sensor (%) | Linear from 3.0 V (0 %) to 4.2 V (100 %) of the calibrated voltage |
 | Battery Low | binary_sensor (battery) | Below 3.4 V (clears above 3.5 V) after 3 plausible readings; false on USB. Triggers the matrix battery-low animation. |
 | Battery Critical | binary_sensor (battery) | Below 3.2 V for 3 consecutive plausible readings; false on USB. On battery this puts the device into [dormant](#dormant-mode-switched-off) (button-only wake, persisted), even when Power Saving Mode is Off (`critical_shutdown: true`, as in v0.6.x). |
 | Battery State | text_sensor | `Normal`, `Low`, `Critical`, `USB`, `Unknown` |
@@ -263,6 +266,58 @@ Try these in order:
    isn't 0.
 4. If it boot-loops or never reaches WiFi: `safe_mode` starts after 10 failed boots and comes
    up with WiFi and OTA only. Failing that, use the [USB rescue](#usb-rescue).
+
+## Battery calibration
+
+**Why.** GPIO5 sees the battery through a resistor divider and the ADC. The divider's tolerance
+and the ADC's gain error make the reading off by a fixed percentage: 1 % resistors alone allow
+about ±2 %, roughly ±80 mV at 4.2 V. The 3.4 V / 3.2 V thresholds compare against that reading,
+so without correction the cell could reach a lower true voltage than intended before the
+critical shutdown.
+
+**How.** On USB, the charger's constant-voltage phase holds the cell at a fixed voltage,
+nominally 4.20 V. `stepaware_battery` watches for a flat reading on USB:
+- **What counts as flat:** over the last `stable_time` (30 min), a least-squares slope of at
+  most 0.03 V/h and at most 40 mV between the lowest and highest reading.
+- **The correction:** factor = 4.20 V ÷ that reading. It's applied inside the sensor, so
+  *Battery Voltage*, the low / critical thresholds and *Battery* (%) all use corrected volts.
+- **Which plateau:** within one charge, the highest flat plateau wins. Before the
+  constant-voltage phase the reading is still rising, and after the charger stops the cell
+  relaxes below it.
+- **Repeated charges:** each charge that finds a plateau blends into the stored factor.
+  Charge 2 counts ½, charge 3 ⅓, and from charge 4 on each counts ¼.
+- **Plausibility:** a factor outside 0.90–1.10 is rejected and logged as a warning. That much
+  error means a wrong `divider_ratio` or a wiring fault, not tolerance.
+- **Storage:** the factor is in flash (NVS key `stepaware_battery_cal`). It survives reboots,
+  deep sleep and OTA. A factory reset erases it.
+
+**Limits.**
+- Only the gain error is corrected. An offset would need a second known voltage. After eFuse
+  calibration the ADC's offset is small next to the divider error.
+- The charger's setpoint has its own tolerance, typically ±0.5–1 %. If the charger has a short
+  constant-voltage phase, the window may catch the relaxed voltage after it stops instead,
+  which reads up to about 1 % low.
+- Until the first full charge, the factor is 1.0 and everything behaves as before.
+
+**Options** (`sensor: platform: stepaware_battery`):
+
+```yaml
+divider_ratio: 2.0            # battery V = pin V x this (replaces the old multiply filter)
+full_charge_calibration:
+  usb_sensor: usb_power       # binary_sensor; calibration only runs while on
+  full_voltage: 4.20V         # charger CV setpoint in true volts (4.35V for a LiHV cell)
+  stable_time: 30min          # flat window; stable_time / update_interval must fit 64 readings
+  max_slope_per_hour: 0.03V   # optional
+  max_spread: 0.04V           # optional
+  factor:
+    name: "Battery Calibration"
+```
+
+Action: `stepaware_battery.reset_calibration: battery_voltage`. The *Reset Battery Calibration*
+button runs it. Logs at INFO when a plateau is learned, and at WARN when one is rejected.
+
+**Not verified on hardware yet:** a real charge cycle (plateau detection, then the factor
+being stored and applied).
 
 ## Dormant mode (switched off)
 

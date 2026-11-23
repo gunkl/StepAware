@@ -89,11 +89,30 @@ sensor:
     samples: 8
     update_interval: 60s
     accuracy_decimals: 2
+    divider_ratio: 2.0
+    full_charge_calibration:
+      usb_sensor: usb_power
+      stable_time: 30min
+      factor:
+        name: "Battery Calibration"
     filters:
-      - multiply: 2.0
       - sliding_window_moving_average:
           window_size: 5
           send_every: 1
+
+  # Plain pin volts with a multiply filter: the no-calibration path still builds.
+  - platform: stepaware_battery
+    id: battery_voltage_plain
+    name: "Battery Voltage (plain)"
+    update_interval: 120s
+    filters:
+      - multiply: 2.0
+
+button:
+  - platform: template
+    name: "Reset Battery Calibration"
+    on_press:
+      - stepaware_battery.reset_calibration: battery_voltage
 
 stepaware_power:
   id: power
